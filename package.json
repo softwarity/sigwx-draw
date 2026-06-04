@@ -1,6 +1,6 @@
 {
   "name": "@softwarity/sigwx-draw",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Draw SIGWX (significant weather) charts on any map (grafts onto MapLibre or OpenLayers, Terra-Draw-style). Phenomenon-driven geometry whose metadata controls the rendering (jet barbs, scalloped CB, dashed turbulence, …).",
   "type": "module",
   "license": "MIT",
