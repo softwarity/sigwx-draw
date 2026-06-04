@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./out-tsc/app",
+    "baseUrl": "./",
+    "types": [],
+    "paths": {
+      "@softwarity/sigwx-draw": ["../dist/index"],
+      "@softwarity/sigwx-draw/core": ["../dist/core/index"]
+    }
+  },
+  "files": ["src/main.ts"],
+  "include": ["src/**/*.d.ts"]
+}

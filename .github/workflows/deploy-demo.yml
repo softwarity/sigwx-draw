@@ -1,0 +1,60 @@
+name: Deploy Demo to GitHub Pages
+run-name: ${{ github.actor }} deploy demo on ${{ github.repository }}
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Allow the workflow to deploy to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install library dependencies
+        run: npm ci
+
+      - name: Build library
+        run: npm run build # produces ../dist, consumed by the demo's path alias
+
+      - name: Install demo dependencies
+        run: npm ci
+        working-directory: demo
+
+      - name: Build demo for GitHub Pages
+        run: npx ng build --base-href /sigwx-draw/
+        working-directory: demo
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './demo/dist/browser'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

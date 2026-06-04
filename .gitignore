@@ -1,0 +1,11 @@
+node_modules
+dist
+*.tsbuildinfo
+.DS_Store
+.angular/
+docs/
+demo/dist
+demo/node_modules
+demo/.angular
+out-tsc
+coverage/

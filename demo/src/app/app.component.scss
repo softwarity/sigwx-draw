@@ -1,0 +1,88 @@
+.main-content {
+  min-height: 100vh;
+  padding: 24px;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.card-container {
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 2rem;
+  max-width: 1280px;
+  width: 100%;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.header-left { display: flex; align-items: center; gap: 16px; }
+.logo-link { display: flex; align-items: center; &:hover { text-decoration: none; } }
+.logo { height: 48px; width: auto; }
+
+.title-block {
+  h1 { font-size: 1.6rem; font-weight: 600; margin: 0; color: var(--text-primary); }
+  .badges { display: flex; gap: 8px; margin-top: 4px; img { height: 20px; } }
+}
+
+.nav-links { display: flex; gap: 12px; align-items: center; }
+
+.nav-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  transition: all 0.2s;
+
+  &:hover {
+    background-color: rgba(88, 166, 255, 0.1);
+    border-color: var(--accent-blue);
+    color: var(--text-primary);
+    text-decoration: none;
+  }
+
+  mat-icon { font-size: 18px; width: 18px; height: 18px; }
+  .github-icon { width: 18px; height: 18px; flex-shrink: 0; }
+}
+
+.description {
+  color: var(--text-secondary);
+  margin: 0 0 24px 0;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.card-footer {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 14px;
+
+  a { color: var(--text-muted); &:hover { color: var(--accent-blue); text-decoration: none; } }
+}
+
+.footer-logo { height: 20px; width: auto; }
+
+@media (max-width: 768px) {
+  .card-container { padding: 1.5rem; border-radius: 8px; }
+  .nav-links { gap: 8px; flex-wrap: wrap; }
+}
