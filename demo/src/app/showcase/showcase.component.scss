@@ -5,7 +5,8 @@
   align-items: center;
   gap: 16px;
   flex-wrap: wrap;
-  margin-bottom: 16px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border-color);
 }
 
 .seg {
@@ -25,6 +26,7 @@
 
     & + button { border-left: 1px solid var(--border-color); }
     &.active { background: var(--accent-blue); color: #0b1622; font-weight: 600; }
+    &:disabled { opacity: 0.4; cursor: not-allowed; }
   }
 }
 
@@ -95,6 +97,48 @@
 }
 
 .hint { color: var(--text-muted); font-size: 13px; margin: 10px 0 0; }
+
+/* Optional per-phenomenon style cards — a horizontally-scrolling strip. */
+.opt { color: var(--text-muted); font-weight: 400; }
+
+.pheno-configs {
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
+  overflow-x: auto;       // the strip owns the horizontal scrollbar
+  padding-bottom: 8px;    // room for the scrollbar under the cards
+  margin: 4px 0 8px;
+}
+
+.pheno-card {
+  flex: 0 0 380px;        // fixed width, laid out side by side
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-primary);
+
+  > header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+
+    .ic { display: inline-flex; color: var(--accent-blue); }
+  }
+
+  interactive-code {
+    display: block;
+    margin: 0;
+    font-size: 12px;
+  }
+}
 
 .ref {
   width: 100%;

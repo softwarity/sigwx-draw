@@ -26,6 +26,89 @@ export function coordsOf(geometry: Geometry): Pt[] {
   }
 }
 
+/** Ray-casting: is point `p` inside the polygon `ring` (lon/lat; open or closed)? */
+export function pointInRing(p: Pt, ring: Pt[]): boolean {
+  let inside = false;
+  const n = ring.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const a = ring[i]!;
+    const b = ring[j]!;
+    if (a[1] > p[1] !== b[1] > p[1] && p[0] < ((b[0] - a[0]) * (p[1] - a[1])) / (b[1] - a[1] || 1e-12) + a[0]) inside = !inside;
+  }
+  return inside;
+}
+
+/** Closest point on the ring's boundary to `p` (clamped per edge segment). */
+export function nearestOnRing(p: Pt, ring: Pt[]): Pt {
+  let best: Pt = ring[0] ?? p;
+  let bestD = Infinity;
+  const n = ring.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const a = ring[j]!;
+    const b = ring[i]!;
+    const vx = b[0] - a[0];
+    const vy = b[1] - a[1];
+    const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / (vx * vx + vy * vy || 1)));
+    const c: Pt = [a[0] + t * vx, a[1] + t * vy];
+    const d = (p[0] - c[0]) ** 2 + (p[1] - c[1]) ** 2;
+    if (d < bestD) {
+      bestD = d;
+      best = c;
+    }
+  }
+  return best;
+}
+
+/** Constrain `p` to inside the ring: `p` itself if already inside, else the nearest
+ *  boundary point. Used to keep a draggable anchor within its polygon. */
+export function clampInRing(p: Pt, ring: Pt[]): Pt {
+  if (ring.length < 3) return p;
+  return pointInRing(p, ring) ? p : nearestOnRing(p, ring);
+}
+
+/** Drop a closing duplicate vertex so a ring is a clean cyclic vertex list. */
+function openRing(ring: Pt[]): Pt[] {
+  const n = ring.length;
+  return n > 1 && ring[0]![0] === ring[n - 1]![0] && ring[0]![1] === ring[n - 1]![1] ? ring.slice(0, -1) : ring;
+}
+
+const ccw3 = (a: Pt, b: Pt, c: Pt): number => (c[1] - a[1]) * (b[0] - a[0]) - (b[1] - a[1]) * (c[0] - a[0]);
+
+/** Do segments p1p2 and p3p4 properly cross (excluding shared endpoints / collinear touch)? */
+export function segmentsCross(p1: Pt, p2: Pt, p3: Pt, p4: Pt): boolean {
+  const d1 = ccw3(p3, p4, p1);
+  const d2 = ccw3(p3, p4, p2);
+  const d3 = ccw3(p1, p2, p3);
+  const d4 = ccw3(p1, p2, p4);
+  return d1 > 0 !== d2 > 0 && d3 > 0 !== d4 > 0;
+}
+
+/** Is the ring a SIMPLE polygon — no two NON-adjacent edges cross? (Open or closed input.) */
+export function isSimpleRing(ring: Pt[]): boolean {
+  const r = openRing(ring);
+  const n = r.length;
+  if (n < 4) return true; // a triangle (or less) can't self-intersect
+  for (let i = 0; i < n; i++) {
+    const a1 = r[i]!;
+    const a2 = r[(i + 1) % n]!;
+    for (let j = i + 1; j < n; j++) {
+      if ((i + 1) % n === j || (j + 1) % n === i) continue; // adjacent edges share a vertex
+      if (segmentsCross(a1, a2, r[j]!, r[(j + 1) % n]!)) return false;
+    }
+  }
+  return true;
+}
+
+/** Reorder a ring's vertices by angle about its centroid → a guaranteed-simple (star) polygon.
+ *  Used to untangle a self-crossing freehand stroke without throwing its shape away. */
+export function radialSortRing(ring: Pt[]): Pt[] {
+  const r = openRing(ring);
+  const n = r.length || 1;
+  const cx = r.reduce((s, p) => s + p[0], 0) / n;
+  const cy = r.reduce((s, p) => s + p[1], 0) / n;
+  return [...r].sort((a, b) => Math.atan2(a[1] - cy, a[0] - cx) - Math.atan2(b[1] - cy, b[0] - cx));
+}
+
 /** cos(mean latitude) for the local frame; clamped away from 0 near the poles. */
 export function frameK(coords: Pt[]): number {
   if (!coords.length) return 1;

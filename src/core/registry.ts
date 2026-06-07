@@ -1,7 +1,7 @@
 /** The built-in phenomenon registry (v1 demonstrator: jet, CB, turbulence). */
 import { cb } from "./phenomena/cb.js";
-import { jetStream } from "./phenomena/jet-stream.js";
 import { turbulence } from "./phenomena/turbulence.js";
+import { jetStream } from "./phenomena/jet-stream.js";
 import { PhenomenonRegistry } from "./phenomenon.js";
 
 export { cb, jetStream, turbulence };

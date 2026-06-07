@@ -33,6 +33,11 @@ import type { Pt } from "../decorate/index.js";
 import type { DecorateFn, Metadata, PhenomenonDef, RenderFeature } from "../phenomenon.js";
 import { fl, num, textBoxProps } from "./util.js";
 
+/** High-level SIGWX (SWH) chart FL bounds — the default jet FL gauge clamp (FL250–600,
+ *  same chart as turbulence). Overridable per phenomenon via `flightLevel.{min,max}`. */
+const FL_MIN = 250;
+const FL_MAX = 600;
+
 interface Break {
   t: number;
   speed: number;
@@ -61,7 +66,7 @@ const decorate: DecorateFn = ({ geometry, metadata, style, resolution }) => {
   const planar = dense.map((c) => toPlanar(c, k));
   const total = polylineLength(planar);
   const reversed = metadata["reversed"] === true;
-  const stroke = style.decoration?.color ?? style.color;
+  const stroke = style.arrow?.color ?? style.color;
   const out: RenderFeature[] = [];
 
   // One "px unit" in geographic degrees → barbs are a constant SCREEN-size glyph
@@ -75,7 +80,7 @@ const decorate: DecorateFn = ({ geometry, metadata, style, resolution }) => {
   const showLabels = screenPx > 170;
 
   // Smoothed jet axis (bold).
-  out.push(lineFeature(dense, { layer: "edge", stroke: style.edge?.color ?? style.color, strokeWidth: style.edge?.width ?? 3 }));
+  out.push(lineFeature(dense, { layer: "edge", stroke: style.arrow?.color ?? style.color, strokeWidth: style.arrow?.width ?? 3 }));
 
   // Arrow at the downstream end (start when reversed).
   const arrowSize = Math.max(0.035, total * 0.035);
@@ -107,6 +112,17 @@ const decorate: DecorateFn = ({ geometry, metadata, style, resolution }) => {
   const gap = featherLen * 0.28;
   const cbLength = featherLen * 0.7; // change-bar tick length
   const cbGap = featherLen * 0.2; // spacing between the two parallel ticks
+  // Real along-shaft HALF-footprint of a barb cluster, matching windBarbFeatures'
+  // layout (pennants of width featherLen/2, then `gap` between feathers, ~1.1·gap
+  // breathing after the pennants). Used to anchor the FL label under the cluster
+  // MIDDLE — `clusterUnit` above over-estimates it, so the label drifted to the
+  // cluster's downstream end (e.g. onto the last 10-kt feather of 50+10×4+5).
+  const clusterMid = (speed: number): number => {
+    const { pennants, full, half } = barbCounts(speed);
+    const pw = featherLen * 0.5;
+    const c0 = pennants * pw + (pennants && full + half ? gap * 1.1 : 0);
+    return (c0 + Math.max(0, full + half - 1) * gap) / 2;
+  };
 
   // Per WAFC fig 11 (§3.5.8): a point's depiction follows the speed PROFILE.
   //  - speed 80 (the floor) → nothing (clean baseline);
@@ -114,33 +130,51 @@ const decorate: DecorateFn = ({ geometry, metadata, style, resolution }) => {
   //    EXACTLY ±20 KT → a change bar (two parallel ticks; a change bar means ±20);
   //  - otherwise (extremum, endpoint, or a non-±20 step), >80 → full feathers
   //    decoding the absolute speed.
+  // The max-wind point ALWAYS shows feathers (it decodes the peak speed and carries
+  // the FL label) — never a change bar, even on a tie/plateau (first of the ties).
+  const maxPt = pts.reduce((m, p) => (p.speed > m.speed ? p : m), pts[0]!);
+  // A change bar (`||`, meaning a ±20 KT step) sits at a point whose step FROM THE
+  // PREVIOUS point is exactly ±20, where the trend does NOT reverse (a peak/valley
+  // shows feathers), and whose FL is UNCHANGED from the previous (a FL change needs
+  // feathers + a FL label, not a bar). It MAY sit at the 80 floor (e.g. a −20 step
+  // down to 80). Everything else >80 draws feathers; the bare floor draws nothing.
+  const isCBar = (i: number): boolean => {
+    const p = pts[i]!;
+    if (p === maxPt) return false; // the peak/plateau-top is feathers + FL, not a bar
+    const pv = i > 0 ? pts[i - 1]! : null;
+    const nx = i < pts.length - 1 ? pts[i + 1]! : null;
+    if (!pv || !nx) return false; // need both neighbours; ends/last → feathers
+    if (Math.abs(p.speed - pv.speed) !== 20) return false; // exactly ±20 KT
+    const noReversal = pv.speed > p.speed ? nx.speed <= p.speed : nx.speed >= p.speed;
+    return noReversal && num(p.fl) === num(pv.fl);
+  };
   if (showBarbs) pts.forEach((p, i) => {
-    if (p.speed <= 80) return;
+    if (i === 0 || i === pts.length - 1) return; // jet extremities (ends) are never decorated — the line + arrowhead carry them
     const st = pointAtFraction(planar, p.t);
-    const prev = i > 0 ? pts[i - 1]!.speed : null;
-    const next = i < pts.length - 1 ? pts[i + 1]!.speed : null;
-    const monotonic = prev != null && next != null && ((prev < p.speed && p.speed < next) || (prev > p.speed && p.speed > next));
-    const isChangeBar = monotonic && prev != null && Math.abs(p.speed - prev) === 20;
-    if (isChangeBar) {
+    if (isCBar(i)) {
       out.push(...changeBarFeatures({ point: st.p, tangent: st.dir, k, length: cbLength, gap: cbGap, props: { layer: "decoration", stroke, strokeWidth: 3 } }));
-    } else {
-      const lat = toLonLat(st.p, k)[1];
-      out.push(
-        ...windBarbFeatures({
-          planar,
-          k,
-          startT: p.t,
-          speedKt: p.speed,
-          featherLen,
-          gap,
-          thickness,
-          endMargin,
-          side: featherSide(lat),
-          flowSign: reversed ? -1 : 1,
-          props: { layer: "decoration", stroke, fillColor: stroke },
-        }),
-      );
+      return;
     }
+    // The 80 floor draws nothing — UNLESS its FL differs from the previous point:
+    // a FL change must be shown (80 feathers + its FL label), not a bare baseline.
+    const flChange = i > 0 && num(p.fl) !== num(pts[i - 1]!.fl);
+    if (p.speed <= 80 && !flChange) return;
+    const lat = toLonLat(st.p, k)[1];
+    out.push(
+      ...windBarbFeatures({
+        planar,
+        k,
+        startT: p.t,
+        speedKt: p.speed,
+        featherLen,
+        gap,
+        thickness,
+        endMargin,
+        side: featherSide(lat),
+        flowSign: reversed ? -1 : 1,
+        props: { layer: "decoration", stroke, fillColor: stroke },
+      }),
+    );
   });
 
   // FL call-outs (WAFC §3.5.5 "at points along its length"): a boxed "FLxxx" at
@@ -148,12 +182,12 @@ const decorate: DecorateFn = ({ geometry, metadata, style, resolution }) => {
   // every point where the FL CHANGES. Constant FL → one label (at the max, fig 11);
   // varying FL → one per change. Attached below the line, rotated, no leader.
   const flNum = (v: number | undefined): string => String(Math.round(num(v))).padStart(3, "0");
-  const tb = textBoxProps(style);
+  const tb = { ...textBoxProps(style), textBorder: stroke };
   const flLabel = (p: Break, withExtent: boolean): void => {
     // Anchor under the MIDDLE of the barb cluster (the point sits at one end of it),
     // a touch below the line.
     const flowSign = reversed ? -1 : 1;
-    const half = clusterUnit(p.speed) * featherLen * 0.5;
+    const half = clusterMid(p.speed);
     const centerArc = Math.max(0, Math.min(total, p.t * total + flowSign * half));
     const st = pointAtFraction(planar, centerArc / total);
     const flow = scale(st.dir, flowSign);
@@ -162,8 +196,8 @@ const decorate: DecorateFn = ({ geometry, metadata, style, resolution }) => {
     const lines = [fl(p.fl)];
     if (withExtent && p.speed >= 120) {
       // Show the vertical extent ≥120; default to fl ± 40 until the gauge sets it.
-      const top = p.top != null ? p.top : Math.min(630, num(p.fl) + 40);
-      const base = p.base != null ? p.base : Math.max(0, num(p.fl) - 40);
+      const top = p.top != null ? p.top : Math.min(FL_MAX, num(p.fl) + 40);
+      const base = p.base != null ? p.base : Math.max(FL_MIN, num(p.fl) - 40);
       lines.push(`${flNum(Math.min(top, base))}/${flNum(Math.max(top, base))}`); // lower/upper
     }
     let ang = (Math.atan2(-flow[1], flow[0]) * 180) / Math.PI;
@@ -171,18 +205,20 @@ const decorate: DecorateFn = ({ geometry, metadata, style, resolution }) => {
     else if (ang < -90) ang += 180;
     out.push(pointFeature(toLonLat(anchor, k), { layer: "text-boxes", text: lines.join("\n"), rotation: ang, ...tb }));
   };
-  const maxPt = pts.reduce((m, p) => (p.speed > m.speed ? p : m), pts[0]!);
   if (showLabels) {
-    if (maxPt && maxPt.speed > 80) flLabel(maxPt, true);
-    // FL only at interior FEATHER points (extrema) where it changes — never at the
-    // start/end, nor on a change bar (a `||` means a ±20 KT speed step, not a FL).
+    // The max-wind FL label sits UNDER the peak's feathers — but the extremities are
+    // never decorated, so skip it when the peak is the start/end (else a label box +
+    // gauge would float at the bare tip). The interior FL-change labels below cover it.
+    const maxI = pts.indexOf(maxPt);
+    if (maxPt && maxPt.speed > 80 && maxI > 0 && maxI < pts.length - 1) flLabel(maxPt, true);
+    // FL only at interior FEATHER points where it changes — never at the start/end,
+    // nor on a change bar (a `||` means a ±20 KT speed step at constant FL). A point
+    // whose FL changed is NOT a change bar (isCBar requires same FL) → it shows
+    // feathers and gets its FL label here.
     pts.forEach((p, i) => {
-      if (i === 0 || i === pts.length - 1 || p === maxPt || p.speed <= 80) return;
-      const prev = pts[i - 1]!.speed;
-      const next = pts[i + 1]!.speed;
-      const monotonic = (prev < p.speed && p.speed < next) || (prev > p.speed && p.speed > next);
-      if (monotonic && Math.abs(p.speed - prev) === 20) return; // change bar → no FL
-      if (num(p.fl) !== num(pts[i - 1]!.fl)) flLabel(p, false);
+      if (i === 0 || i === pts.length - 1 || p === maxPt) return; // ends + max handled above
+      if (isCBar(i)) return; // change bar → no FL
+      if (num(p.fl) !== num(pts[i - 1]!.fl)) flLabel(p, false); // FL change (incl. an 80\\ point)
     });
   }
 
@@ -197,13 +233,13 @@ export const jetStream: PhenomenonDef = {
   // Toolbar glyph: a CURVED jet axis (arrow + a few feathers on the low-pressure
   // side) with FL300 below — the iconic sweeping jet stream.
   icon:
-    '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-    '<path d="M2.5 16 Q12 16 18 8"/>' +
-    '<path d="M18 8 L13.8 7.6 M18 8 L16.4 12"/>' +
-    '<line x1="5.2" y1="16" x2="3.6" y2="11" stroke-width="1.8"/>' +
-    '<line x1="7.6" y1="15.6" x2="6" y2="10.6" stroke-width="1.8"/>' +
-    '<line x1="9.8" y1="14" x2="8.4" y2="9.4" stroke-width="1.8"/>' +
-    '<text x="12" y="22.2" font-size="6.2" font-weight="700" text-anchor="middle" fill="currentColor" stroke="none" font-family="sans-serif">FL300</text>' +
+    '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M3 17 Q11.5 16.5 16.5 8"/>' + // curved axis
+    '<path d="M18.5 4.6 L18.2 9 L14.8 7 Z" fill="currentColor" stroke="none"/>' + // fine triangle tip, aligned to the curve's end tangent
+    '<path d="M5.5 16.5 L7.4 16.1 L2.8 13 Z" fill="currentColor" stroke="none"/>' + // 50-kt pennant, swept BACK toward the tail
+    '<path d="M9 15.6 L5 12.8" stroke-width="1.3"/>' + // full barbs, parallel, leaning back (up-left)
+    '<path d="M11.2 14.4 L7.2 11.6" stroke-width="1.3"/>' +
+    '<text x="14.5" y="20" font-size="5.3" font-weight="700" text-anchor="middle" fill="currentColor" stroke="none" font-family="sans-serif" transform="rotate(-25 14.5 20)">FL300</text>' +
     "</svg>",
   primitives: ["polyline"],
   draw: {
@@ -225,18 +261,18 @@ export const jetStream: PhenomenonDef = {
       ],
       itemSchema: [
         { type: "number", key: "speed", label: "Speed", unit: "kt", min: 80, max: 250, step: 5, default: 100 },
-        { type: "fl", key: "fl", label: "Flight level", default: 300 },
-        { type: "fl", key: "top", label: "Extent top", default: 340, visibleWhen: overFL },
-        { type: "fl", key: "base", label: "Extent base", default: 260, visibleWhen: overFL },
+        { type: "fl", key: "fl", label: "Flight level", default: 300, min: FL_MIN, max: FL_MAX },
+        { type: "fl", key: "top", label: "Extent top", default: 340, min: FL_MIN, max: FL_MAX, visibleWhen: overFL },
+        { type: "fl", key: "base", label: "Extent base", default: 260, min: FL_MIN, max: FL_MAX, visibleWhen: overFL },
       ],
     },
   ],
   decorate,
+  // A jet is just an arrow (axis + feathers + pennants + arrowhead) and FL text.
   style: {
     color: "#1f2328",
-    edge: { color: "#1f2328", width: 3 },
-    decoration: { color: "#1f2328", width: 2 },
-    textBox: { color: "#1f2328", size: 13, haloColor: "#ffffff", haloWidth: 2, background: "#ffffff", border: "#1f2328" },
+    arrow: { color: "#1f2328", width: 3 },
+    text: { color: "#1f2328", halo: "#ffffff", size: 13 },
   },
   summary: (m) => {
     const ps = breaks(m);

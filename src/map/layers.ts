@@ -11,6 +11,7 @@ export const SIGWX_LAYERS: LayerSpec[] = [
   { id: "leaders", kind: "line" },
   { id: "text-boxes", kind: "text" },
   { id: "handles", kind: "circle" },
+  { id: "controls", kind: "text" }, // editing affordances (the ✕ delete control) — top + hidden in snapshots
 ];
 
 export const OVERLAY_IDS: string[] = SIGWX_LAYERS.map((l) => l.id);
@@ -23,4 +24,4 @@ export const ANNOTATION_BUCKET = "annotations";
 /** Overlays a pointer hit may resolve against (selection / handle / pin drag).
  *  `decoration` is included so clicking a jet's barbs (not just the thin axis)
  *  selects it. */
-export const HIT_OVERLAYS = new Set(["handles", "edge", "decoration", "area-fill", "symbols", "text-boxes"]);
+export const HIT_OVERLAYS = new Set(["controls", "handles", "edge", "decoration", "area-fill", "symbols", "text-boxes"]);

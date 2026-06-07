@@ -20,6 +20,33 @@ export function centroid(coords: Position[]): Position {
   return [x / coords.length, y / coords.length];
 }
 
+/**
+ * Area-weighted polygon centroid (shoelace) — the TRUE geometric centre of a
+ * ring, robust to uneven vertex spacing (unlike {@link centroid}, the vertex
+ * mean, which a freehand outline's clustered points skew badly). Drops a closing
+ * duplicate vertex; falls back to the mean for a degenerate (zero-area) ring.
+ */
+export function ringCentroid(ring: Position[]): Position {
+  const closed =
+    ring.length > 1 && ring[0]![0] === ring[ring.length - 1]![0] && ring[0]![1] === ring[ring.length - 1]![1];
+  const pts = closed ? ring.slice(0, -1) : ring;
+  const n = pts.length;
+  if (n < 3) return centroid(ring);
+  let a = 0;
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0; i < n; i++) {
+    const [x0, y0] = pts[i]!;
+    const [x1, y1] = pts[(i + 1) % n]!;
+    const f = x0! * y1! - x1! * y0!;
+    a += f;
+    cx += (x0! + x1!) * f;
+    cy += (y0! + y1!) * f;
+  }
+  if (Math.abs(a) < 1e-9) return centroid(ring);
+  return [cx / (3 * a), cy / (3 * a)];
+}
+
 /** Concrete text-box paint props from a phenomenon style. */
 export function textBoxProps(style: PhenomenonStyle): {
   textColor: string;
@@ -29,11 +56,11 @@ export function textBoxProps(style: PhenomenonStyle): {
   textBorder: string;
 } {
   return {
-    textColor: style.textBox?.color ?? "#111111",
-    textSize: style.textBox?.size ?? 13,
-    textHalo: style.textBox?.haloColor ?? "#ffffff",
-    textBackground: style.textBox?.background ?? "#ffffff",
-    textBorder: style.textBox?.border ?? style.color,
+    textColor: style.text?.color ?? "#111111",
+    textSize: style.text?.size ?? 13,
+    textHalo: style.text?.halo ?? "#ffffff",
+    textBackground: style.text?.background ?? "#ffffff",
+    textBorder: style.color, // leader/box ink — decorates override with the resolved ink
   };
 }
 

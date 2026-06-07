@@ -34,6 +34,24 @@ export function catmullRom(points: Pt[], samplesPerSeg = 16): Pt[] {
   return out;
 }
 
+/** Catmull-Rom through a CLOSED ring (wraps around) → a smooth closed curve.
+ *  Accepts a ring that may repeat its first point at the end. */
+export function catmullRomClosed(points: Pt[], samplesPerSeg = 16): Pt[] {
+  let pts = points;
+  if (pts.length > 1 && pts[0]![0] === pts[pts.length - 1]![0] && pts[0]![1] === pts[pts.length - 1]![1]) {
+    pts = pts.slice(0, -1); // drop the duplicated closing vertex
+  }
+  const n = pts.length;
+  if (n < 3) return points.map((p) => [p[0], p[1]] as Pt);
+  const at = (i: number): Pt => pts[((i % n) + n) % n]!;
+  const out: Pt[] = [];
+  for (let i = 0; i < n; i++) {
+    for (let s = 0; s < samplesPerSeg; s++) out.push(catmull(at(i - 1), at(i), at(i + 1), at(i + 2), s / samplesPerSeg));
+  }
+  out.push(out[0]!); // close the smoothed ring
+  return out;
+}
+
 /** The dense coordinate list actually rendered for a path: smoothed or raw. The
  *  jet's decorate and the controller's slider placement both call this so a
  *  break point sits exactly on the drawn curve. */

@@ -6,7 +6,7 @@
 import { coordsOf, frameK, lineFeature, polygonFeature, polylineLength, scallopRing, toPlanar } from "../decorate/index.js";
 import { pointFeature } from "../decorate/index.js";
 import type { DecorateFn, PhenomenonDef, RenderFeature } from "../phenomenon.js";
-import { centroid, fl, str, textBoxProps } from "./util.js";
+import { fl, ringCentroid, str, textBoxProps } from "./util.js";
 import { regularPolygon } from "./util.js";
 
 const decorate: DecorateFn = ({ geometry, metadata, style }) => {
@@ -18,8 +18,8 @@ const decorate: DecorateFn = ({ geometry, metadata, style }) => {
   const scalloped = scallopRing(ring, { wavelength, amplitude: wavelength * 0.6 });
 
   const out: RenderFeature[] = [];
-  if (style.fill) {
-    out.push(polygonFeature(scalloped, { layer: "area-fill", fillColor: style.fill.color, fillOpacity: style.fill.opacity }));
+  if (style.area) {
+    out.push(polygonFeature(scalloped, { layer: "area-fill", fillColor: style.area.color ?? style.color, fillOpacity: style.area.opacity ?? 0.12 }));
   }
   out.push(
     lineFeature(scalloped, { layer: "edge", stroke: style.edge?.color ?? style.color, strokeWidth: style.edge?.width ?? 2 }),
@@ -28,7 +28,7 @@ const decorate: DecorateFn = ({ geometry, metadata, style }) => {
   const coverage = str(metadata["coverage"], "ISOL");
   const embedded = metadata["embedded"] === true;
   const label = `${embedded ? "EMBD " : ""}${coverage} CB`;
-  const c = centroid(ring);
+  const c = ringCentroid(ring);
   out.push(
     pointFeature(c, {
       layer: "annotations",
@@ -70,9 +70,9 @@ export const cb: PhenomenonDef = {
   decorate,
   style: {
     color: "#d1242f",
-    fill: { color: "#d1242f", opacity: 0.12 },
     edge: { color: "#d1242f", width: 2, decorator: "scallop" },
-    textBox: { color: "#d1242f", size: 13, haloColor: "#ffffff", haloWidth: 2, background: "#ffffff", border: "#d1242f" },
+    area: { color: "#d1242f", opacity: 0.12 },
+    text: { color: "#d1242f", halo: "#ffffff", size: 13 },
   },
   summary: (m) => `${m["embedded"] ? "EMBD " : ""}${str(m["coverage"], "ISOL")} CB ${fl(m["topFL"])}/${fl(m["baseFL"])}`,
 };

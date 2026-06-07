@@ -66,6 +66,8 @@ export interface RenderProps {
   labelId?: string;
   content?: string;
   leader?: boolean;
+  /** Draw an arrowhead at the anchor end of the call-out leader. */
+  arrow?: boolean;
   kind?: string;
 }
 
@@ -84,6 +86,9 @@ export interface DecorationInput {
   style: PhenomenonStyle;
   /** Optional map units/px hint for adaptive densification (omitted in tests). */
   resolution?: number;
+  /** Effective chart FL range (`phenomena[type].flightLevel`). `beyond[below-min, above-max]`
+   *  decides per bound whether an off-chart value renders as "XXX" or is clamped. */
+  flightLevel?: { min?: number; max?: number; beyond?: [FlMode, FlMode] } | undefined;
 }
 
 /**
@@ -109,12 +114,18 @@ export interface NumberField extends FieldBase {
   unit?: string;
   default?: number;
 }
+/** What happens when an FL is dragged past a chart bound: hard-stop (`clamp`), or allow
+ *  it off-chart and render the "XXX" sentinel. Used per bound as `[below-min, above-max]`. */
+export type FlMode = "clamp" | "xxx";
+
 /** A flight level (FLnnn), stored as an integer number of hundreds of feet. */
 export interface FlightLevelField extends FieldBase {
   type: "fl";
   default?: number;
-  /** Allow the "XXX" sentinel (extent beyond the chart's vertical bounds). */
-  beyond?: boolean;
+  /** FL gauge bounds — the on-map cursor clamps here (e.g. the SWH chart's FL250–600).
+   *  Overridable per phenomenon via `phenomena[type].flightLevel.{min,max}`. */
+  min?: number;
+  max?: number;
 }
 
 /**
@@ -200,6 +211,9 @@ export interface PhenomenonDef {
   style: PhenomenonStyle;
   /** Optional one-line human summary (label/tooltip). */
   summary?: (m: Metadata) => string;
+  /** Default off-chart behaviour for this phenomenon's FL bounds `[below-min, above-max]`
+   *  (areas → `["xxx","xxx"]`; the jet → `["clamp","clamp"]`). Overridable via config. */
+  flBeyond?: [FlMode, FlMode];
 }
 
 // ── Registry ─────────────────────────────────────────────────────────────────

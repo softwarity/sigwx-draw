@@ -1,7 +1,7 @@
 {
   "name": "@softwarity/sigwx-draw",
   "version": "0.0.2",
-  "description": "Draw SIGWX (significant weather) charts on any map (grafts onto MapLibre or OpenLayers, Terra-Draw-style). Phenomenon-driven geometry whose metadata controls the rendering (jet barbs, scalloped CB, dashed turbulence, …).",
+  "description": "Draw SIGWX (significant weather) charts on any map (grafts onto MapLibre, OpenLayers or Leaflet, Terra-Draw-style). Phenomenon-driven geometry whose metadata controls the rendering (jet barbs, scalloped CB, dashed turbulence, …).",
   "type": "module",
   "license": "MIT",
   "main": "./dist/index.js",
@@ -24,17 +24,23 @@
       "types": "./dist/map/openlayers-adapter.d.ts",
       "import": "./dist/map/openlayers-adapter.js"
     },
+    "./leaflet": {
+      "types": "./dist/map/leaflet-adapter.d.ts",
+      "import": "./dist/map/leaflet-adapter.js"
+    },
     "./form": {
       "types": "./dist/form/index.d.ts",
       "import": "./dist/form/index.js"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "sideEffects": false,
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:watch": "tsc -w -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "prepublishOnly": "npm run build && npm test"
@@ -43,13 +49,18 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@softwarity/draw-adapter": "^0.2.5",
     "@types/geojson": "^7946.0.14"
   },
   "peerDependencies": {
+    "leaflet": ">=1.9",
     "maplibre-gl": ">=5",
     "ol": ">=9"
   },
   "peerDependenciesMeta": {
+    "leaflet": {
+      "optional": true
+    },
     "maplibre-gl": {
       "optional": true
     },
@@ -58,7 +69,9 @@
     }
   },
   "devDependencies": {
+    "@types/leaflet": "^1.9.21",
     "jsdom": "^29.1.1",
+    "leaflet": "^1.9.4",
     "maplibre-gl": "^5.24.0",
     "ol": "^10.9.0",
     "playwright-core": "^1.60.0",

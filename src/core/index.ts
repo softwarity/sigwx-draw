@@ -7,11 +7,15 @@ export type { LatLng } from "./coord.js";
 export { formatLat, formatLon, formatLatLng } from "./coord.js";
 
 export type {
-  FillStyle,
   LineStyle,
-  PointStyle,
-  LabelStyle,
   TooltipStyle,
+  TextStyle,
+  EdgeStyle,
+  AreaStyle,
+  SymbolStyle,
+  JetStyle,
+  TurbulenceStyle,
+  CbStyle,
   PhenomenonStyle,
 } from "./style.js";
 export { mergePhenomenonStyle, rgba } from "./style.js";
@@ -27,6 +31,7 @@ export type {
   FieldSchema,
   NumberField,
   FlightLevelField,
+  FlMode,
   EnumField,
   BoolField,
   TextField,
@@ -46,6 +51,8 @@ export {
 export * from "./decorate/index.js";
 
 export { BUILTIN_PHENOMENA, defaultRegistry, jetStream, cb, turbulence } from "./registry.js";
+export { makeTurbulence, DEFAULT_TURBULENCE_SYMBOLS } from "./phenomena/turbulence.js";
+export type { TurbulenceSymbol } from "./phenomena/turbulence.js";
 
 export type { SigwxFeature, SigwxFeatureProps } from "./geojson.js";
 export { toFeatureCollection, fromFeatureCollection } from "./geojson.js";

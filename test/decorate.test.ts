@@ -4,18 +4,68 @@ import { describe, expect, it } from "vitest";
 import {
   barbCounts,
   cb,
+  clampInRing,
+  turbulence,
   defaultMetadata,
+  isSimpleRing,
   isVisible,
   jetStream,
+  pointInRing,
+  radialSortRing,
   scallopRing,
-  turbulence,
   validate,
   windBarbFeatures,
 } from "../src/core/index.js";
-import type { RenderFeature } from "../src/core/index.js";
+import type { Pt, RenderFeature } from "../src/core/index.js";
 
 const byLayer = (fs: RenderFeature[], layer: string) =>
   fs.filter((f) => f.properties.layer === layer);
+
+describe("clampInRing (movable anchor constraint)", () => {
+  const sq: Pt[] = [[0, 0], [4, 0], [4, 4], [0, 4]]; // a 4×4 square
+  it("leaves an inside point untouched", () => {
+    expect(pointInRing([2, 2], sq)).toBe(true);
+    expect(clampInRing([2, 2], sq)).toEqual([2, 2]);
+  });
+  it("clamps an outside point onto the nearest boundary edge", () => {
+    expect(pointInRing([6, 2], sq)).toBe(false);
+    expect(clampInRing([6, 2], sq)).toEqual([4, 2]); // projected onto the right edge
+  });
+  it("clamps to the nearest corner when outside past a vertex", () => {
+    expect(clampInRing([6, 6], sq)).toEqual([4, 4]);
+  });
+});
+
+describe("isSimpleRing (keep the CAT polygon simple)", () => {
+  it("accepts a simple square (open or closed)", () => {
+    expect(isSimpleRing([[0, 0], [4, 0], [4, 4], [0, 4]])).toBe(true);
+    expect(isSimpleRing([[0, 0], [4, 0], [4, 4], [0, 4], [0, 0]])).toBe(true);
+  });
+  it("rejects a self-crossing bow-tie", () => {
+    expect(isSimpleRing([[0, 0], [4, 4], [4, 0], [0, 4]])).toBe(false);
+  });
+  it("radialSortRing untangles a bow-tie into a simple polygon", () => {
+    const fixed = radialSortRing([[0, 0], [4, 4], [4, 0], [0, 4]]);
+    expect(isSimpleRing(fixed)).toBe(true);
+  });
+});
+
+describe("turbulence flightLevel.beyond (off-chart XXX vs clamp)", () => {
+  const sqGeom: Geometry = { type: "Polygon", coordinates: [[[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]] };
+  // topFL 700 > max, baseFL 200 < min → both off the FL250–600 chart.
+  const content = (fl: { min?: number; max?: number; beyond?: ["clamp" | "xxx", "clamp" | "xxx"] }) =>
+    String(
+      turbulence.decorate({ geometry: sqGeom, metadata: { symbol: "MOD", topFL: 700, baseFL: 200 }, style: turbulence.style, flightLevel: fl }).find((f) => f.properties.layer === "annotations")?.properties["content"] ?? "",
+    );
+  it("renders XXX off-chart by default (areas → ['xxx','xxx'])", () => {
+    expect(content({ min: 250, max: 600 })).toContain("XXX");
+  });
+  it("renders the raw FL (no XXX) when beyond is clamp", () => {
+    const c = content({ min: 250, max: 600, beyond: ["clamp", "clamp"] });
+    expect(c).not.toContain("XXX");
+    expect(c).toContain("700");
+  });
+});
 
 describe("barbCounts (wind-speed → feathers)", () => {
   it("50 kt → 1 pennant", () => {
@@ -99,8 +149,75 @@ describe("jet-depth visibleWhen (on the break-point item schema)", () => {
   });
 });
 
+describe("jetStream change bars (±20 step, FL-aware)", () => {
+  const line: Geometry = { type: "LineString", coordinates: [[0, 0], [1, 0], [2, 0], [3, 0]] };
+  const P = (t: number, speed: number, fl: number) => ({ t, speed, fl });
+  const md = (pts: { t: number; speed: number; fl: number }[]) => ({ points: pts });
+  const cbTicks = (pts: { t: number; speed: number; fl: number }[]) =>
+    byLayer(jetStream.decorate({ geometry: line, metadata: md(pts), style: jetStream.style }), "decoration")
+      .filter((f) => f.geometry.type === "LineString").length; // 2 ticks per change bar
+
+  it("draws a change bar for a −20 step DOWN to the 80 floor (o80 A100 B80 o80 → B80 ||)", () => {
+    expect(cbTicks([P(0, 80, 300), P(0.33, 100, 300), P(0.66, 80, 300), P(1, 80, 300)])).toBe(2);
+  });
+
+  it("suppresses the max-wind FL label when the peak is at an endpoint (extremities are undecorated)", () => {
+    // Peak 120 kt at the END (i=last). The barb loop never decorates ends, so the FL box
+    // must be suppressed too — constant FL means no interior FL-change label either ⇒ none.
+    const fs = jetStream.decorate({ geometry: line, metadata: md([P(0, 80, 300), P(0.5, 100, 300), P(1, 120, 300)]), style: jetStream.style });
+    expect(byLayer(fs, "text-boxes").length).toBe(0); // no label floating on the bare tip
+  });
+
+  it("a jet END (extremity) never draws feathers, even when its FL is edited to differ from its neighbour", () => {
+    const deco = (endFL: number): number =>
+      byLayer(jetStream.decorate({ geometry: line, metadata: md([P(0, 80, 300), P(0.5, 120, 300), P(1, 80, endFL)]), style: jetStream.style }), "decoration").length;
+    expect(deco(270)).toBe(deco(300)); // editing the end's FL must NOT sprout feathers on the extremity
+  });
+
+  it("a change bar reverts to feathers + FL label when its FL changes vs the previous point", () => {
+    const at = (bfl: number) => jetStream.decorate({
+      geometry: line, metadata: md([P(0, 80, 300), P(0.33, 105, 300), P(0.66, 85, bfl), P(1, 80, 300)]), style: jetStream.style,
+    });
+    // Same FL → B85 is a change bar.
+    expect(byLayer(at(300), "decoration").filter((f) => f.geometry.type === "LineString").length).toBe(2);
+    // FL changed → no change bar at B, and a FL310 label appears.
+    const changed = at(310);
+    expect(byLayer(changed, "decoration").filter((f) => f.geometry.type === "LineString").length).toBe(0);
+    expect(byLayer(changed, "text-boxes").some((f) => String(f.properties.text).includes("FL310"))).toBe(true);
+  });
+
+  it("a tied max-speed plateau shows feathers + FL — never a change bar carrying the FL (o80 A100 B100 o80)", () => {
+    const fs = jetStream.decorate({
+      geometry: line, metadata: md([P(0, 80, 300), P(0.33, 100, 300), P(0.66, 100, 300), P(1, 80, 300)]), style: jetStream.style,
+    });
+    expect(byLayer(fs, "decoration").filter((f) => f.geometry.type === "LineString").length).toBe(0); // no || at the plateau top
+    expect(byLayer(fs, "text-boxes").some((f) => String(f.properties.text).includes("FL300"))).toBe(true); // FL still shown (on the feathered max)
+  });
+
+  it("an 80-kt point whose FL differs from its neighbour shows feathers + a FL label (not a bare floor)", () => {
+    const dec = (bfl: number) => jetStream.decorate({
+      geometry: line, metadata: md([P(0, 80, 300), P(0.5, 100, 300), P(0.75, 80, bfl), P(1, 80, 300)]), style: jetStream.style,
+    });
+    const polys = (fs: ReturnType<typeof dec>) => byLayer(fs, "decoration").filter((f) => f.geometry.type === "Polygon").length;
+    // Same FL → the 80 point is a change bar; differing FL → it draws feathers (more polys) + its FL.
+    expect(polys(dec(310))).toBeGreaterThan(polys(dec(300)));
+    expect(byLayer(dec(310), "text-boxes").some((f) => String(f.properties.text).includes("FL310"))).toBe(true);
+    expect(byLayer(dec(300), "text-boxes").some((f) => String(f.properties.text).includes("FL310"))).toBe(false);
+  });
+});
+
 describe("cb / turbulence", () => {
   const poly: Geometry = { type: "Polygon", coordinates: [[[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]] };
+  it("anchors the call-out at the AREA centroid, robust to uneven vertices", () => {
+    // A square with extra points clustered on the bottom edge: the vertex mean skews
+    // down (y≈0.8), but the area centroid is the true centre (1,1) → the leader arrow
+    // then points at the zone's middle, not a skewed spot.
+    const skewed: Geometry = { type: "Polygon", coordinates: [[[0, 0], [0.5, 0], [1, 0], [1.5, 0], [2, 0], [2, 2], [0, 2], [0, 0]]] };
+    const ann = byLayer(turbulence.decorate({ geometry: skewed, metadata: { symbol: "MOD", topFL: 360, baseFL: 250 }, style: turbulence.style }), "annotations")[0]!;
+    const [x, y] = (ann.geometry as { coordinates: [number, number] }).coordinates;
+    expect(x).toBeCloseTo(1, 5);
+    expect(y).toBeCloseTo(1, 5); // NOT 0.8 (the density-skewed vertex mean)
+  });
   it("CB emits a scalloped fill + edge + call-out", () => {
     const fs = cb.decorate({ geometry: poly, metadata: { coverage: "OCNL", embedded: true, topFL: 350, baseFL: 100 }, style: cb.style });
     expect(byLayer(fs, "area-fill").length).toBe(1);
@@ -108,12 +225,43 @@ describe("cb / turbulence", () => {
     const labels = byLayer(fs, "annotations");
     expect(labels.some((f) => String(f.properties.content).includes("EMBD OCNL CB"))).toBe(true);
   });
-  it("turbulence emits a dashed edge + intensity symbol", () => {
-    const fs = turbulence.decorate({ geometry: poly, metadata: { intensity: "SEV", topFL: 350, baseFL: 200 }, style: turbulence.style });
+  it("turbulence shows the FL range, with XXX when a bound runs off the chart (base < min / top > max)", () => {
+    const fs = turbulence.decorate({ geometry: poly, metadata: { symbol: "SEV", topFL: 360, baseFL: 200 }, style: turbulence.style });
     const edge = byLayer(fs, "edge")[0]!;
     expect(edge.properties.dash).toBeDefined();
-    const sym = byLayer(fs, "symbols")[0]!;
-    expect(sym.properties.symbol).toBe("turb-sev");
+    const ann = byLayer(fs, "annotations")[0]!;
+    expect(ann.properties.symbol).toBe("SEV"); // the symbol code IS the sprite id, riding the call-out
+    expect(ann.properties.arrow).toBe(true); // leader arrow points back to the zone
+    expect(String(ann.properties.content)).toContain("FL360"); // top in range → FL360
+    expect(String(ann.properties.content)).toContain("XXX"); // base 200 < FL250 floor → XXX
+    expect(String(ann.properties.content)).not.toContain("FL200");
+  });
+
+  it("severe turbulence uses a DARKER ink than moderate (edge/fill/text all follow severity)", () => {
+    const dec = (symbol: string) => {
+      const fs = turbulence.decorate({ geometry: poly, metadata: { symbol, topFL: 360, baseFL: 300 }, style: turbulence.style });
+      return { fill: byLayer(fs, "area-fill"), edge: byLayer(fs, "edge"), ann: byLayer(fs, "annotations") };
+    };
+    const mod = dec("MOD");
+    const sev = dec("SEV");
+    // The severity ink drives the fill tint, the edge AND the FL text — all differ MOD↔SEV.
+    expect(sev.fill[0]!.properties.fillColor).not.toBe(mod.fill[0]!.properties.fillColor);
+    expect(sev.edge[0]!.properties.stroke).not.toBe(mod.edge[0]!.properties.stroke);
+    expect(sev.ann[0]!.properties.textColor).not.toBe(mod.ann[0]!.properties.textColor);
+  });
+
+  it("the `flightLevel` range moves the XXX threshold (off-chart sentinel follows the configured range)", () => {
+    const md = { symbol: "MOD", topFL: 650, baseFL: 150 };
+    const content = String(byLayer(turbulence.decorate({ geometry: poly, metadata: md, style: turbulence.style, flightLevel: { min: 100, max: 600 } }), "annotations")[0]!.properties.content);
+    expect(content).toContain("FL150"); // base 150 ≥ new floor 100 → real FL (not XXX)
+    expect(content).toContain("XXX"); // top 650 > new ceiling 600 → XXX
+  });
+
+  it("turbulence FL fields carry the SWH norm chart bounds (FL250–600), overridable via the flightLevel limit", () => {
+    const top = turbulence.schema.find((s) => s.key === "topFL");
+    const base = turbulence.schema.find((s) => s.key === "baseFL");
+    expect(top && top.type === "fl" ? [top.min, top.max] : null).toEqual([250, 600]);
+    expect(base && base.type === "fl" ? [base.min, base.max] : null).toEqual([250, 600]);
   });
 });
 

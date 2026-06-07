@@ -1,18 +1,9 @@
 <section class="playground">
   <h2>Playground</h2>
 
-  <div class="controls">
-    <div class="seg" role="group" aria-label="Map engine">
-      <button [class.active]="engine() === 'maplibre'" (click)="setEngine('maplibre')">MapLibre</button>
-      <button [class.active]="engine() === 'openlayers'" (click)="setEngine('openlayers')">OpenLayers</button>
-    </div>
-    <button class="ro" (click)="clear()" title="Remove every chart feature (sigwx.clear())">
-      Clear
-    </button>
-  </div>
-
   <div class="stage">
     <div class="stage-main">
+      <!-- Engine is chosen in the config panel (the `adapter` select); Clear is the toolbar's native ✕ on the map. -->
       <div #map class="map"></div>
     </div>
     <aside class="stage-style" (change)="onPanelChange($event)">
@@ -24,53 +15,52 @@ const map = new Map({ /* your basemap, controls, projection */ });
 
 const sigwx = new SigwxDraw({
   adapter: new ${adapter}({ map }),
-${tbOff}  toolbar: {                       // native control, auto-built from the registry
+${tbOff}  toolbar: {
     position: "${tbPosition}",
+    snapshot: {                          // 📷 capture button — defaults: native / download (Leaflet: disabled)
+${snapQ}      quality: "${snapQuality}",          // native | low | medium | high
+${snapClick}      onClick: "${snapClickVal}",         // download | clipboard — ⌘/Ctrl-click does the other
+      shutter: ${snapShutterVal},         // camera-flash feedback on capture
+    },
   },${/tbOff}
-  limits: {                          // per-phenomenon numeric bounds
-    jetStream: { speed: { min: ${spMin}, max: ${spMax} } },
-  },
   style: {
-${selection}    selection: {                     // highlight around the selected feature
-      color: "${selColor}", width: ${selWidth},
-    },${/selection}
-${handle}    handle: {                        // shape vertices (white dot, blue ring)
-      color: "${handleColor}", strokeColor: "${handleStroke}",
-    },${/handle}
-${slider}    slider: {                        // jet break points (orange, slide on the curve)
-      color: "${sliderColor}",
-    },${/slider}
-${control}    controlHandle: {                 // on-map controls (speed dial, FL gauge)
-      color: "${controlColor}",
+${selection}    selection: { color: "${selColor}", width: ${selWidth} },${/selection}
+${handle}    handle: { fill: "${handleFill}", stroke: "${handleStroke}" },${/handle}
+${control}    control: {
+      line:   { color: "${ctlLineColor}", width: ${ctlLineW} },
+      handle: { fill: "${ctlFill}", stroke: "${ctlStroke}" },
+      text:   { color: "${ctlTextColor}", halo: "${ctlHalo}" },
     },${/control}
-${tooltip}    tooltip: {                       // floating hover bubble
-      color: "${tipColor}", background: "${tipBg}", fontSize: ${tipSize},
-    },${/tooltip}
+${tooltip}    tooltip: { color: "${tipColor}", background: "${tipBg}", fontSize: ${tipSize} },${/tooltip}
   },
-});
-
-sigwx.on("change", (fc) => console.log(fc));   // GeoJSON FeatureCollection
-sigwx.addPhenomenon("jetStream");              // or "cb" / "turbulence"</textarea>
-        <code-binding key="adapter" type="select" options="MapLibreAdapter,OpenLayersAdapter" [value]="adapterName()"></code-binding>
+  phenomena: { … },                // see the cards below
+});</textarea>
+        <code-binding key="adapter" type="select" options="MapLibreAdapter,OpenLayersAdapter,LeafletAdapter" [value]="adapterName()" carousel></code-binding>
         <code-binding key="mapImport" type="readonly" [value]="mapImport()"></code-binding>
         <code-binding key="tbOff" type="comment" value="true"></code-binding>
-        <code-binding key="tbPosition" type="select" options="top,top-left,top-right,bottom,bottom-left,bottom-right,left,left-top,left-bottom,right,right-top,right-bottom" value="top" carousel></code-binding>
-        <code-binding key="spMin" type="number" value="80" min="40" max="160" step="10"></code-binding>
-        <code-binding key="spMax" type="number" value="250" min="160" max="350" step="10"></code-binding>
+        <code-binding key="tbPosition" type="select" options="top,top-left,top-right,bottom,bottom-left,bottom-right,left,left-top,left-bottom,right,right-top,right-bottom" value="bottom" carousel></code-binding>
+        <code-binding key="snapQ" type="comment" value="false"></code-binding>
+        <code-binding key="snapQuality" type="select" options="native,low,medium,high" value="native" carousel></code-binding>
+        <code-binding key="snapClick" type="comment" value="false"></code-binding>
+        <code-binding key="snapClickVal" type="select" options="clipboard,download" value="clipboard" carousel></code-binding>
+        <code-binding key="snapShutterVal" type="boolean" value="true"></code-binding>
         <code-binding key="selection" type="comment" value="false"></code-binding>
-        <code-binding key="selColor" type="color" value="#58a6ff"></code-binding>
-        <code-binding key="selWidth" type="number" value="8" min="1" max="14" step="1"></code-binding>
+        <code-binding key="selColor" type="color" value="#d29922"></code-binding>
+        <code-binding key="selWidth" type="number" value="5" min="1" max="14" step="1"></code-binding>
         <code-binding key="handle" type="comment" value="false"></code-binding>
-        <code-binding key="handleColor" type="color" value="#ffffff"></code-binding>
-        <code-binding key="handleStroke" type="color" value="#58a6ff"></code-binding>
-        <code-binding key="slider" type="comment" value="false"></code-binding>
-        <code-binding key="sliderColor" type="color" value="#f0883e"></code-binding>
+        <code-binding key="handleFill" type="color" value="#ffd33d"></code-binding>
+        <code-binding key="handleStroke" type="color" value="#cf222e"></code-binding>
         <code-binding key="control" type="comment" value="false"></code-binding>
-        <code-binding key="controlColor" type="color" value="#f0883e"></code-binding>
+        <code-binding key="ctlLineColor" type="color" value="#8250df"></code-binding>
+        <code-binding key="ctlLineW" type="number" value="3" min="1" max="10" step="1"></code-binding>
+        <code-binding key="ctlFill" type="color" value="#8250df"></code-binding>
+        <code-binding key="ctlStroke" type="color" value="#ffd33d"></code-binding>
+        <code-binding key="ctlTextColor" type="color" value="#8250df"></code-binding>
+        <code-binding key="ctlHalo" type="color" value="#fff8c5"></code-binding>
         <code-binding key="tooltip" type="comment" value="false"></code-binding>
-        <code-binding key="tipColor" type="color" value="#e6edf3"></code-binding>
-        <code-binding key="tipBg" type="color" value="#0b1622"></code-binding>
-        <code-binding key="tipSize" type="number" value="12" min="8" max="20" step="1"></code-binding>
+        <code-binding key="tipColor" type="color" value="#ffffff"></code-binding>
+        <code-binding key="tipBg" type="color" value="#24292f"></code-binding>
+        <code-binding key="tipSize" type="number" value="14" min="8" max="20" step="1"></code-binding>
       </interactive-code>
     </aside>
   </div>
@@ -82,19 +72,93 @@ sigwx.addPhenomenon("jetStream");              // or "cb" / "turbulence"</textar
     off the line to delete it; the blue end points are fixed at 80&nbsp;kt and reshape the curve.
   </p>
 
+  <h2 class="api">Per-phenomenon config <span class="opt">— optional</span></h2>
+  <p class="muted">
+    The chrome you tune on the right — selection, handles, sliders, the speed dial, the tooltip —
+    is <strong>global</strong>. Everything specific to one phenomenon lives under
+    <code>phenomena: &#123; &lt;type&gt;: &#123; speed?, flightLevel?, style? &#125; &#125;</code>:
+    its numeric bounds (jet <code>speed</code>, turbulence <code>flightLevel</code>) and its <strong>own</strong> visual tokens — the shape colour
+    (jet axis&nbsp;+&nbsp;arrow&nbsp;+&nbsp;feathers; turbulence dashed edge&nbsp;+&nbsp;fill), the FL text,
+    the severity glyph. One card each, scroll sideways for more. The blocks start
+    <strong>commented out</strong> with bold alternative values — un-comment one to apply it live.
+  </p>
+  <div class="pheno-configs">
+    <div class="pheno-card" (change)="onPhenoChange('jetStream', $event)">
+      <header><span class="ic" [innerHTML]="icon('jetStream')"></span> Jet stream</header>
+      <interactive-code language="typescript" show-copy>
+        <textarea>phenomena: {
+  jetStream: {
+${jLim}    speed: { min: ${jMin}, max: ${jMax} },${/jLim}
+${jFL}    flightLevel: { min: ${jFLMin}, max: ${jFLMax}, default: ${jFLDef} },${/jFL}
+${jOn}    style: {
+      arrow: { color: "${jColor}", width: ${jWidth} },
+      text: { color: "${jText}", halo: "${jHalo}" },
+    },${/jOn}
+  },
+},</textarea>
+        <code-binding key="jLim" type="comment" value="false"></code-binding>
+        <code-binding key="jMin" type="number" value="100" min="40" max="160" step="10"></code-binding>
+        <code-binding key="jMax" type="number" value="200" min="160" max="350" step="10"></code-binding>
+        <code-binding key="jFL" type="comment" value="false"></code-binding>
+        <code-binding key="jFLMin" type="number" value="200" min="100" max="300" step="10"></code-binding>
+        <code-binding key="jFLMax" type="number" value="520" min="350" max="600" step="10"></code-binding>
+        <code-binding key="jFLDef" type="number" value="290" min="200" max="560" step="10"></code-binding>
+        <code-binding key="jOn" type="comment" value="false"></code-binding>
+        <code-binding key="jColor" type="color" value="#0b69ff"></code-binding>
+        <code-binding key="jWidth" type="number" value="4" min="1" max="6" step="1"></code-binding>
+        <code-binding key="jText" type="color" value="#0b69ff"></code-binding>
+        <code-binding key="jHalo" type="color" value="#fff8c5"></code-binding>
+      </interactive-code>
+    </div>
+
+    <div class="pheno-card" (change)="onPhenoChange('turbulence', $event)">
+      <header><span class="ic" [innerHTML]="icon('turbulence')"></span> Turbulence</header>
+      <interactive-code language="typescript" show-copy>
+        <textarea>phenomena: {
+  turbulence: {
+${tLim}    // FL range + default [base, top] + per-bound off-chart mode ("clamp" | "xxx"):
+    flightLevel: { min: ${tMin}, max: ${tMax}, default: [${tBase}, ${tTop}], beyond: ["${tBeyLo}", "${tBeyHi}"] },${/tLim}
+${tOn}    style: {
+      mod: { color: "${tMod}" },   // MOD ink (lighter)
+      sev: { color: "${tSev}" },   // SEV ink (darker) — drives edge + fill + glyph + FL text
+      edge: { width: ${tEdgeW}, dash: [${tDashOn}, ${tDashGap}] },
+      area: { opacity: ${tAreaOp} },
+      text: { halo: "${tHalo}" },   // colour follows mod/sev; halo = readability
+    },${/tOn}
+  },
+},</textarea>
+        <code-binding key="tLim" type="comment" value="false"></code-binding>
+        <code-binding key="tMin" type="number" value="200" min="100" max="300" step="10"></code-binding>
+        <code-binding key="tMax" type="number" value="550" min="400" max="600" step="10"></code-binding>
+        <code-binding key="tBase" type="number" value="220" min="200" max="400" step="10"></code-binding>
+        <code-binding key="tTop" type="number" value="400" min="300" max="600" step="10"></code-binding>
+        <code-binding key="tBeyLo" type="select" options="clamp,xxx" value="clamp"></code-binding>
+        <code-binding key="tBeyHi" type="select" options="clamp,xxx" value="xxx"></code-binding>
+        <code-binding key="tOn" type="comment" value="false"></code-binding>
+        <code-binding key="tMod" type="color" value="#74c0fc"></code-binding>
+        <code-binding key="tSev" type="color" value="#1971c2"></code-binding>
+        <code-binding key="tEdgeW" type="number" value="4" min="1" max="8" step="0.5"></code-binding>
+        <code-binding key="tDashOn" type="number" value="6" min="1" max="12" step="1"></code-binding>
+        <code-binding key="tDashGap" type="number" value="3" min="0" max="12" step="1"></code-binding>
+        <code-binding key="tAreaOp" type="number" value="0.2" min="0" max="0.6" step="0.05"></code-binding>
+        <code-binding key="tHalo" type="color" value="#fff8c5"></code-binding>
+      </interactive-code>
+    </div>
+  </div>
+
   <h2 class="api">Every phenomenon is one call</h2>
   <p class="muted">
     The <strong>jet stream</strong> is the flagship — a smooth directional curve whose barbs,
     change bars and FL labels are all derived from the break-point metadata you edit on the map.
-    <strong>CB</strong> (scalloped area) and <strong>turbulence</strong> (dashed area) are also
-    supported. Each button calls <code>sigwx.addPhenomenon("…")</code> on the live map; listen for
+    <strong>CB</strong> (scalloped area) and <strong>turbulence</strong> (dashed area) are
+    also supported. Each button calls <code>sigwx.draw("…")</code> on the live map; listen for
     <code>change</code> to get the GeoJSON.
   </p>
   <div class="methods">
     @for (p of phenomena; track p.type) {
-      <button class="method" (click)="addPhenomenon(p.type)" [title]="p.desc">
+      <button class="method" (click)="draw(p.type)" [title]="p.desc">
         <span class="ic" [innerHTML]="icon(p.type)"></span>
-        <code>sigwx.addPhenomenon("{{ p.type }}")</code>
+        <code>sigwx.draw("{{ p.type }}")</code>
       </button>
     }
   </div>
@@ -112,8 +176,8 @@ sigwx.addPhenomenon("jetStream");              // or "cb" / "turbulence"</textar
     <tbody>
       <tr><td><code>adapter</code></td><td><code>MapAdapter</code></td><td>—</td><td><strong>Required.</strong> Wraps your map — <code>new MapLibreAdapter(&#123; map &#125;)</code> or <code>new OpenLayersAdapter(&#123; map &#125;)</code>.</td></tr>
       <tr><td><code>toolbar</code></td><td><code>boolean | ToolbarOptions</code></td><td>—</td><td>Render the turnkey native toolbar, auto-built from the registry. <code>true</code> for defaults, or <code>&#123; position, padding, gap, orientation, className &#125;</code>. Omit for none.</td></tr>
-      <tr><td><code>style</code></td><td><code>SigwxStyleInput</code></td><td><code>DEFAULT_STYLE</code></td><td>Partial style override, merged onto the defaults (see Style tokens).</td></tr>
-      <tr><td><code>limits</code></td><td><code>Record&lt;type, Record&lt;field, &#123; min?, max? &#125;&gt;&gt;</code></td><td><code>&#123;&#125;</code></td><td>Per-phenomenon numeric bounds, e.g. <code>&#123; jetStream: &#123; speed: &#123; min: 80, max: 250 &#125; &#125; &#125;</code>.</td></tr>
+      <tr><td><code>style</code></td><td><code>SigwxStyleInput</code></td><td><code>DEFAULT_STYLE</code></td><td><strong>Global chrome only</strong> (selection, handles, slider, control handles, tooltip), merged onto the defaults.</td></tr>
+      <tr><td><code>phenomena</code></td><td><code>Record&lt;type, &#123; speed?, flightLevel?, style? &#125;&gt;</code></td><td><code>&#123;&#125;</code></td><td>Per-phenomenon config: <code>speed</code> (jet dial range), <code>flightLevel</code> (turbulence/CB chart FL range; beyond it shows XXX), <code>style</code> (that phenomenon's visual tokens).</td></tr>
       <tr><td><code>registry</code></td><td><code>PhenomenonRegistry</code></td><td><code>defaultRegistry()</code></td><td>Override/extend the set of phenomena driving the toolbar &amp; rendering.</td></tr>
       <tr><td><code>symbolSprite</code></td><td><code>SymbolSprites</code></td><td>built-in</td><td>Replace the glyph atlas (sprite id → inline SVG) used by the symbol layer.</td></tr>
     </tbody>
@@ -125,11 +189,12 @@ sigwx.addPhenomenon("jetStream");              // or "cb" / "turbulence"</textar
     <tbody>
       <tr><td><code>on("change")</code></td><td><code>(fc: FeatureCollection) =&gt; void</code></td><td>Fires the full GeoJSON on every placement/edit — <strong>the common case</strong>.</td></tr>
       <tr><td><code>on("select")</code></td><td><code>(spec: FormSpec | null) =&gt; void</code></td><td>Fires when the selection changes — describes the selected feature (phenomenon, fields, list items).</td></tr>
-      <tr><td><code>addPhenomenon(type)</code></td><td><code>"jetStream" | "cb" | "turbulence"</code></td><td>Start a phenomenon (draw mode enters drawing; drop mode places + selects).</td></tr>
+      <tr><td><code>draw(type)</code></td><td><code>"jetStream" | "cb" | "turbulence"</code></td><td>Enter drawing for a phenomenon (draw mode starts drawing; drop mode places + selects).</td></tr>
       <tr><td><code>select(id|null)</code> / <code>delete(id)</code></td><td>—</td><td>Select a feature (or clear) / remove one feature.</td></tr>
       <tr><td><code>clear()</code></td><td>—</td><td>Remove every chart feature.</td></tr>
       <tr><td><code>save()</code> / <code>load(fc)</code></td><td><code>FeatureCollection</code> / —</td><td>Export the current chart / render an existing FeatureCollection.</td></tr>
-      <tr><td><code>setStyle(partial)</code></td><td>—</td><td>Restyle live (merged onto the current style).</td></tr>
+      <tr><td><code>setStyle(partial)</code></td><td>—</td><td>Restyle the global chrome live (merged onto the current style).</td></tr>
+      <tr><td><code>setPhenomenonStyle(type, style)</code></td><td>—</td><td>Restyle one phenomenon's own tokens live — the runtime counterpart of <code>phenomena[type].style</code>; pass <code>&#123;&#125;</code> to revert.</td></tr>
       <tr><td><code>ready()</code> / <code>destroy()</code></td><td><code>Promise</code> / —</td><td>Resolves once grafted / detaches (leaves the host map intact).</td></tr>
     </tbody>
   </table>
@@ -143,9 +208,13 @@ sigwx.addPhenomenon("jetStream");              // or "cb" / "turbulence"</textar
       <tr><td><code>slider</code></td><td><code>radius, color, strokeColor, strokeWidth</code></td><td>Jet break points that glide along the curve (orange), and their radial speed control.</td></tr>
       <tr><td><code>controlHandle</code></td><td><code>radius, color, strokeColor, strokeWidth</code></td><td>The on-map controls (speed dial &amp; vertical FL gauge handles), orange.</td></tr>
       <tr><td><code>tooltip</code></td><td><code>color, background, fontSize, padding, borderRadius, maxWidth</code></td><td>Floating hover bubble.</td></tr>
-      <tr><td><code>perPhenomenon</code></td><td><code>Record&lt;type, Partial&lt;PhenomenonStyle&gt;&gt;</code></td><td>Override a phenomenon's own visual tokens (jet axis/barb colour, CB fill, …).</td></tr>
     </tbody>
   </table>
+  <p class="muted">
+    A phenomenon's <strong>own</strong> tokens (axis/barb colour, CB fill, dashed edge, FL text,
+    severity glyph) are not here — set them per type via <code>phenomena[type].style</code> (option)
+    or <code>setPhenomenonStyle(type, …)</code> (runtime).
+  </p>
 
   <h2 class="api">Phenomenon-driven rendering</h2>
   <p class="muted">
@@ -162,8 +231,8 @@ sigwx.addPhenomenon("jetStream");              // or "cb" / "turbulence"</textar
     the rest keeps its current value.
   </p>
   <interactive-code language="typescript" show-copy>
-    <textarea>sigwx.setStyle({ selection: { color: "#f0883e" } });
-sigwx.setStyle({ perPhenomenon: { jetStream: { color: "#0b69ff" } } });</textarea>
+    <textarea>sigwx.setStyle({ selection: { color: "#f0883e" } });          // global chrome
+sigwx.setPhenomenonStyle("jetStream", { color: "#0b69ff" });   // one phenomenon's tokens</textarea>
   </interactive-code>
 
   <h2 class="api">Core only (no map)</h2>

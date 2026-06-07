@@ -19,9 +19,20 @@ export interface Projector {
 export interface AnnReq {
   featureId: string;
   labelId: string;
+  /** Box placement reference (the zone centroid) — also the pin origin, so the box is stable. */
   anchor: LatLng;
+  /** Where the leader/arrow POINTS (user-movable tip inside the zone); defaults to `anchor`. */
+  arrowAnchor?: LatLng;
   content: string;
   leader: boolean;
+  /** Draw an arrowhead at the anchor end of the leader (call-out pointing to a zone). */
+  arrow?: boolean;
+  /** Keep the box at least this many px from the anchor (clears an area's extent). */
+  avoidRadius?: number;
+  /** Optional sprite glyph shown just above the box (e.g. the turbulence severity). */
+  symbol?: string;
+  symbolColor?: string;
+  symbolSize?: number;
   textColor: string;
   textSize: number;
   textHalo: string;
@@ -37,6 +48,7 @@ export interface Pin {
 export interface Placed {
   boxes: RenderFeature[];
   leaders: RenderFeature[];
+  symbols: RenderFeature[];
 }
 
 interface Rect {
@@ -52,6 +64,8 @@ const DIRS: [number, number][] = [
 ];
 /** Gap (px) between the anchor and the box's near edge; escalates on collision. */
 const GAPS = [16, 34, 58, 92];
+/** Minimum VISIBLE leader length (px) past the box-end padding; shorter → hide it. */
+const LEADER_STUB = 12;
 
 function estimateBox(content: string, size: number): { w: number; h: number } {
   const lines = content.split("\n");
@@ -72,6 +86,7 @@ const key = (a: AnnReq): string => `${a.featureId}:${a.labelId}`;
 export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<string, Pin>): Placed {
   const boxes: RenderFeature[] = [];
   const leaders: RenderFeature[] = [];
+  const symbols: RenderFeature[] = [];
   const placedRects: Rect[] = [];
 
   // Pinned boxes first so they act as obstacles for the auto-placed ones.
@@ -80,6 +95,9 @@ export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<stri
   for (const req of ordered) {
     const anchorPx = proj.project(req.anchor);
     if (!anchorPx) continue;
+    // Box places from `anchor` (centroid, stable); the leader/arrow aims at `arrowAnchor`.
+    const arrowLL = req.arrowAnchor ?? req.anchor;
+    const arrowPx = proj.project(arrowLL) ?? anchorPx;
     const { w, h } = estimateBox(req.content, req.textSize);
     const pin = pins.get(key(req));
 
@@ -96,7 +114,7 @@ export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<stri
       outer: for (const gap of GAPS) {
         for (const [ux, uy] of DIRS) {
           const halfAlong = Math.abs(ux) * (w / 2) + Math.abs(uy) * (h / 2);
-          const d = gap + halfAlong;
+          const d = (req.avoidRadius ?? 0) + gap + halfAlong;
           const c: [number, number] = [anchorPx[0] + ux * d, anchorPx[1] + uy * d];
           const rect: Rect = { x: c[0] - w / 2, y: c[1] - h / 2, w, h };
           if (!placedRects.some((r) => overlaps(rect, r))) {
@@ -126,14 +144,55 @@ export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<stri
     };
     boxes.push({ type: "Feature", properties: props, geometry: { type: "Point", coordinates: [centerLL.lon, centerLL.lat] } });
 
-    // Leader: only when the box doesn't sit on top of its anchor.
-    if (req.leader && !contains(rect, anchorPx[0], anchorPx[1])) {
+    // Severity (or other) glyph sits just above the box — part of the call-out.
+    if (req.symbol) {
+      const symLL = proj.unproject([cx, cy - h / 2 - 12]);
+      if (symLL) {
+        symbols.push({
+          type: "Feature",
+          properties: { layer: "symbols", featureId: req.featureId, labelId: req.labelId, symbol: req.symbol, size: req.symbolSize ?? 1.1, symbolColor: req.symbolColor ?? req.textBorder },
+          geometry: { type: "Point", coordinates: [symLL.lon, symLL.lat] },
+        });
+      }
+    }
+
+    // Leader: attach at the TOP-centre of the box (just above the first text line, by the
+    // glyph), then PAD the box end toward the anchor so the line starts clear of the
+    // symbol/text instead of under them. Hidden when too short to show past that padding
+    // (box sits on/at the anchor → the symbol is right on the tip).
+    const calloutPx: [number, number] = [cx, cy - h / 2];
+    const leaderLen = Math.hypot(arrowPx[0] - calloutPx[0], arrowPx[1] - calloutPx[1]) || 1;
+    const ux = (arrowPx[0] - calloutPx[0]) / leaderLen;
+    const uy = (arrowPx[1] - calloutPx[1]) / leaderLen;
+    // Base gap (px), plus the glyph's vertical extent when the leader heads UP toward it
+    // (the symbol sits above the box, so only an upward leader runs through it).
+    const pad = req.symbol ? 8 + 18 * Math.max(0, -uy) : 6;
+    // The call-out's occupied zone = the box PLUS the glyph band above it. Hide the
+    // leader + arrow when the arrow anchor falls under that zone (symbol over the tip).
+    const occupied: Rect = req.symbol ? { x: rect.x, y: rect.y - 22, w: rect.w, h: rect.h + 22 } : rect;
+    if (req.leader && !contains(occupied, arrowPx[0], arrowPx[1]) && leaderLen >= pad + LEADER_STUB) {
+      const startPx: [number, number] = [calloutPx[0] + ux * pad, calloutPx[1] + uy * pad];
+      const startLL = proj.unproject(startPx) ?? centerLL;
       leaders.push({
         type: "Feature",
         properties: { layer: "leaders", featureId: req.featureId, stroke: req.textBorder, strokeWidth: 1 },
-        geometry: { type: "LineString", coordinates: [[req.anchor.lon, req.anchor.lat], [centerLL.lon, centerLL.lat]] },
+        geometry: { type: "LineString", coordinates: [[arrowLL.lon, arrowLL.lat], [startLL.lon, startLL.lat]] },
       });
+      // Arrowhead at the arrow anchor (pointing into the zone), as an open "V".
+      if (req.arrow) {
+        const L = 9;
+        const W = 5;
+        const wingA = proj.unproject([arrowPx[0] - L * ux + W * -uy, arrowPx[1] - L * uy + W * ux]);
+        const wingB = proj.unproject([arrowPx[0] - L * ux - W * -uy, arrowPx[1] - L * uy - W * ux]);
+        if (wingA && wingB) {
+          leaders.push({
+            type: "Feature",
+            properties: { layer: "leaders", featureId: req.featureId, stroke: req.textBorder, strokeWidth: 1.5 },
+            geometry: { type: "LineString", coordinates: [[wingA.lon, wingA.lat], [arrowLL.lon, arrowLL.lat], [wingB.lon, wingB.lat]] },
+          });
+        }
+      }
     }
   }
-  return { boxes, leaders };
+  return { boxes, leaders, symbols };
 }

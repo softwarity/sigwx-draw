@@ -80,6 +80,7 @@ export interface WindBarbOptions {
  */
 export function windBarbFeatures(opts: WindBarbOptions): RenderFeature[] {
   const { planar, k, startT, speedKt, featherLen, gap, props } = opts;
+  if (planar.length < 2) return []; // no shaft → nothing to decorate (honours the "[] for calm" contract)
   const { pennants, full, half } = barbCounts(speedKt);
   const side = opts.side ?? 1;
   const flowSign = opts.flowSign ?? 1;

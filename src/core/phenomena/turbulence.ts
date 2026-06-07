@@ -1,86 +1,143 @@
 /**
- * Turbulence / CAT — a dashed-bold polygon with an intensity glyph. Proves the
- * symbol/sprite path: the MOD/SEV intensity selects a registered glyph drawn by
- * the symbols layer (engine-agnostic via the adapter's sprite atlas).
+ * Turbulence — a dashed-bold polygon whose call-out carries a chosen symbol glyph
+ * (MOD / SEV by default; a host can extend the catalogue with more types). The
+ * symbol set is data-driven: each entry's `code` IS the sprite id, so the decorate
+ * just draws `sprite = metadata.symbol`. Click the glyph on the map to pick another
+ * (carousel for a small set, radial picker for a large one — handled by the map layer).
  */
-import { coordsOf, lineFeature, pointFeature, polygonFeature } from "../decorate/index.js";
+import { catmullRomClosed, coordsOf, lineFeature, pointFeature, polygonFeature } from "../decorate/index.js";
+import type { Pt } from "../decorate/index.js";
 import type { DecorateFn, PhenomenonDef, RenderFeature } from "../phenomenon.js";
-import { centroid, fl, str, textBoxProps } from "./util.js";
+import { fl, num, ringCentroid, str, textBoxProps } from "./util.js";
 import { regularPolygon } from "./util.js";
 
-const decorate: DecorateFn = ({ geometry, metadata, style }) => {
-  const ring = coordsOf(geometry);
-  if (ring.length < 3) return [];
-  const intensity = str(metadata["intensity"], "MOD");
-  const out: RenderFeature[] = [];
+/** One entry of the turbulence symbol catalogue: a `code` (also the sprite id) + label. */
+export interface TurbulenceSymbol {
+  code: string;
+  label: string;
+}
 
-  if (style.fill) {
-    out.push(polygonFeature(ring, { layer: "area-fill", fillColor: style.fill.color, fillOpacity: style.fill.opacity }));
-  }
-  // Dashed bold outline (the `dash` prop tells the adapters to draw it dashed).
-  out.push(
-    lineFeature(ring, {
-      layer: "edge",
-      stroke: style.edge?.color ?? style.color,
-      strokeWidth: style.edge?.width ?? 3,
-      dash: style.edge?.dash ?? [3, 2],
-    }),
-  );
+/** The two charted intensities (BoM charts MOD & SEV); a host can append more types. */
+export const DEFAULT_TURBULENCE_SYMBOLS: TurbulenceSymbol[] = [
+  { code: "MOD", label: "MOD — moderate" },
+  { code: "SEV", label: "SEV — severe" },
+];
 
-  const c = centroid(ring);
-  // Intensity glyph (sprite id selected by intensity).
-  out.push(
-    pointFeature(c, {
-      layer: "symbols",
-      symbol: intensity === "SEV" ? "turb-sev" : "turb-mod",
-      size: style.symbol?.size ?? 1,
-      symbolColor: style.symbol?.color ?? style.color,
-    }),
-  );
-  // Intensity + FL call-out (placed with anti-collision + leader).
-  out.push(
-    pointFeature(c, {
-      layer: "annotations",
-      labelId: "turb",
-      content: `${intensity}\n${fl(metadata["topFL"])}/${fl(metadata["baseFL"])}`,
-      leader: true,
-      ...textBoxProps(style),
-    }),
-  );
-  return out;
-};
+/** High-level SIGWX (SWH) chart bounds — the default FL gauge clamp range.
+ *  FL250–FL600 per the current norm (was FL250–FL630 before January 2024). */
+const FL_MIN = 250;
+const FL_MAX = 600;
 
-export const turbulence: PhenomenonDef = {
-  type: "turbulence",
-  label: "Turbulence / CAT",
-  primitives: ["polygon"],
-  draw: {
-    closed: true,
-    minVertices: 3,
-    interaction: { primitive: "polygon", mode: "draw" },
-    defaultGeometry: (c, span) => regularPolygon(c, span),
-  },
-  schema: [
-    {
-      type: "enum",
-      key: "intensity",
-      label: "Intensity",
-      default: "MOD",
-      options: [
-        { value: "MOD", label: "MOD — moderate" },
-        { value: "SEV", label: "SEV — severe" },
-      ],
+/**
+ * Build the turbulence phenomenon for a given symbol catalogue. `symbols[0]` is the
+ * default (e.g. MOD). The `symbol` metadata field stores the chosen `code`, which
+ * doubles as the sprite id — so each catalogue glyph must be registered under its code.
+ */
+export function makeTurbulence(symbols: TurbulenceSymbol[] = DEFAULT_TURBULENCE_SYMBOLS): PhenomenonDef {
+  const first = symbols[0]?.code ?? "MOD";
+
+  const decorate: DecorateFn = ({ geometry, metadata, style, flightLevel }) => {
+    const ring = coordsOf(geometry);
+    if (ring.length < 3) return [];
+    const smooth = catmullRomClosed(ring as Pt[], 16); // soft "balloon" outline, not angular
+    const out: RenderFeature[] = [];
+
+    // Chart vertical bounds (FL250–600 by default; overridable via `flightLevel`).
+    // base BELOW min, or top ABOVE max → "XXX" (the off-chart sentinel, per WAFC).
+    const flMin = num(flightLevel?.min, FL_MIN);
+    const flMax = num(flightLevel?.max, FL_MAX);
+    const flx = (v: unknown, isBase: boolean): string => {
+      const n = num(v);
+      const off = isBase ? n < flMin : n > flMax;
+      const xxx = (flightLevel?.beyond?.[isBase ? 0 : 1] ?? "xxx") === "xxx"; // areas default to XXX off-chart
+      return off && xxx ? "XXX" : fl(n);
+    };
+
+    const sym = str(metadata["symbol"], first); // chosen intensity/type code (= sprite id)
+    // Per-severity ink: SEV is a DARKER grey than MOD (WAFC shading contrast). It drives
+    // the edge, the fill tint, the glyph AND the FL text — so the whole call-out reads as
+    // MOD vs SEV. The `text` style carries only a halo (its colour IS the severity ink).
+    const ink = (sym === "SEV" ? style.sev : style.mod)?.color ?? style.color;
+    if (style.area) {
+      out.push(polygonFeature(smooth, { layer: "area-fill", fillColor: style.area.color ?? ink, fillOpacity: style.area.opacity ?? 0.18 }));
+    }
+    // Dashed boundary (the `dash` prop tells the adapters to draw it dashed).
+    out.push(
+      lineFeature(smooth, {
+        layer: "edge",
+        stroke: style.edge?.color ?? ink,
+        strokeWidth: style.edge?.width ?? 3,
+        dash: style.edge?.dash ?? [3, 2],
+      }),
+    );
+
+    // WAFC Washington "direct" call-out: arrow back to the zone, box with the chosen
+    // glyph ABOVE the FL range (one bound may be XXX). Click the glyph on the map to
+    // pick another from the catalogue.
+    out.push(
+      pointFeature(ringCentroid(ring), {
+        layer: "annotations",
+        labelId: "turb",
+        content: `${flx(metadata["topFL"], false)}\n${flx(metadata["baseFL"], true)}`,
+        leader: true,
+        arrow: true,
+        symbol: sym, // the code IS the sprite id
+        symbolColor: style.symbol?.color ?? ink,
+        ...textBoxProps(style),
+        textColor: ink, // FL text follows the severity (no fixed text.color)
+        textBorder: ink, // leader + box ink
+      }),
+    );
+    return out;
+  };
+
+  return {
+    type: "turbulence",
+    label: "Turbulence",
+    // Toolbar glyph: a dashed irregular "bubble" (the area) with a small boxed "1"
+    // at its centre (the placed symbol).
+    icon:
+      '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M12 1.3 C17.8 0.9 23.2 3.6 22.6 10.9 C22.2 17.6 17.7 22.2 11.8 21.8 C5.5 21.4 1.3 16.7 1.9 10.1 C2.4 4.1 6.2 1.7 12 1.3 Z" stroke-dasharray="2.8 2.3"/>' +
+      // The standard MOD turbulence glyph (an inverted V with feet) at the centre.
+      '<path d="M8 14 H10.5 L12 9 L13.5 14 H16"/>' +
+      "</svg>",
+    primitives: ["polygon"],
+    draw: {
+      closed: true,
+      minVertices: 3,
+      // Freehand: draw the outline like inflating a balloon — closed + smoothed.
+      interaction: { primitive: "polygon", freehand: true, smooth: true, mode: "draw" },
+      defaultGeometry: (c, span) => regularPolygon(c, span),
     },
-    { type: "fl", key: "topFL", label: "Top", default: 350 },
-    { type: "fl", key: "baseFL", label: "Base", default: 200 },
-  ],
-  decorate,
-  style: {
-    color: "#9a6700",
-    fill: { color: "#d4a72c", opacity: 0.1 },
-    edge: { color: "#9a6700", width: 3, decorator: "dashed", dash: [3, 2] },
-    symbol: { sprite: "turb-mod", size: 1, color: "#9a6700" },
-    textBox: { color: "#9a6700", size: 13, haloColor: "#ffffff", haloWidth: 2, background: "#ffffff", border: "#9a6700" },
-  },
-  summary: (m) => `${str(m["intensity"], "MOD")} TURB ${fl(m["topFL"])}/${fl(m["baseFL"])}`,
-};
+    schema: [
+      {
+        type: "enum",
+        key: "symbol",
+        label: "Symbol",
+        default: first,
+        options: symbols.map((s) => ({ value: s.code, label: s.label })),
+      },
+      // base BEFORE top so `flightLevel.default: [base, top]` maps in order ([min-side, max-side]).
+      { type: "fl", key: "baseFL", label: "Base", default: 250, min: FL_MIN, max: FL_MAX },
+      { type: "fl", key: "topFL", label: "Top", default: 360, min: FL_MIN, max: FL_MAX },
+    ],
+    decorate,
+    // Grey shading per the WAFC norm — MOD light grey, SEV darker grey (the ink drives
+    // edge + fill + glyph + FL text; `text` carries only a halo). See `decorate`.
+    style: {
+      color: "#5f6368",
+      mod: { color: "#6e7681" }, // medium grey (visible)
+      sev: { color: "#2a2e33" }, // dark grey — darker than MOD (severity contrast)
+      edge: { width: 3, dash: [3, 2], decorator: "dashed" },
+      area: { opacity: 0.18 },
+      symbol: { sprite: first, size: 1 },
+      text: { halo: "#ffffff", size: 13 },
+    },
+    summary: (m) => `${str(m["symbol"], first)} TURB ${fl(m["topFL"])}/${fl(m["baseFL"])}`,
+    flBeyond: ["xxx", "xxx"], // an area's base/top may extend off-chart → "XXX"
+  };
+}
+
+/** Default turbulence phenomenon (MOD / SEV catalogue). */
+export const turbulence: PhenomenonDef = makeTurbulence();

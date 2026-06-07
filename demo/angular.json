@@ -22,6 +22,7 @@
             "styles": [
               "node_modules/maplibre-gl/dist/maplibre-gl.css",
               "node_modules/ol/ol.css",
+              "node_modules/leaflet/dist/leaflet.css",
               "node_modules/@softwarity/interactive-code/themes/catppuccin.css",
               "src/styles.scss"
             ],

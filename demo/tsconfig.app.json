@@ -6,7 +6,20 @@
     "types": [],
     "paths": {
       "@softwarity/sigwx-draw": ["../dist/index"],
-      "@softwarity/sigwx-draw/core": ["../dist/core/index"]
+      "@softwarity/sigwx-draw/core": ["../dist/core/index"],
+      "@softwarity/sigwx-draw/maplibre": ["../dist/map/maplibre-adapter"],
+      "@softwarity/sigwx-draw/openlayers": ["../dist/map/openlayers-adapter"],
+      "@softwarity/sigwx-draw/leaflet": ["../dist/map/leaflet-adapter"],
+      "@softwarity/sigwx-draw/form": ["../dist/form/index"],
+      "@softwarity/draw-adapter": ["../../draw-adapter/dist/index", "./node_modules/@softwarity/draw-adapter/dist/index"],
+      "@softwarity/draw-adapter/maplibre": ["../../draw-adapter/dist/maplibre", "./node_modules/@softwarity/draw-adapter/dist/maplibre"],
+      "@softwarity/draw-adapter/openlayers": ["../../draw-adapter/dist/openlayers", "./node_modules/@softwarity/draw-adapter/dist/openlayers"],
+      "@softwarity/draw-adapter/leaflet": ["../../draw-adapter/dist/leaflet", "./node_modules/@softwarity/draw-adapter/dist/leaflet"],
+      "leaflet": ["./node_modules/@types/leaflet", "./node_modules/leaflet"],
+      "leaflet/*": ["./node_modules/leaflet/*"],
+      "ol": ["./node_modules/ol"],
+      "ol/*": ["./node_modules/ol/*"],
+      "maplibre-gl": ["./node_modules/maplibre-gl"]
     }
   },
   "files": ["src/main.ts"],

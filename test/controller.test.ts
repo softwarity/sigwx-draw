@@ -9,6 +9,7 @@ import { SigwxDraw } from "../src/map/index.js";
 class MockAdapter implements MapAdapter {
   overlays = new Map<string, FeatureCollection>();
   cb: ((ev: PointerEvent) => void) | undefined;
+  panEnabled = true;
   ready(): Promise<void> {
     return Promise.resolve();
   }
@@ -36,7 +37,9 @@ class MockAdapter implements MapAdapter {
     return { lon: px[0] / 50, lat: -px[1] / 50 };
   }
   onViewChange(): void {}
-  setPanEnabled(): void {}
+  setPanEnabled(enabled: boolean): void {
+    this.panEnabled = enabled;
+  }
   setDoubleClickZoom(): void {}
   setCursor(): void {}
   onPointer(cb: (ev: PointerEvent) => void): void {
@@ -57,9 +60,14 @@ const lastId = (sigwx: SigwxDraw): string => {
   return fc.features[fc.features.length - 1]!.properties!["id"] as string;
 };
 
+const lastMeta = (sigwx: SigwxDraw): Record<string, unknown> => {
+  const fc = sigwx.save();
+  return fc.features[fc.features.length - 1]!.properties!["metadata"] as Record<string, unknown>;
+};
+
 /** Freehand draw (jet): press, drag through the points, release. */
 function stroke(sigwx: SigwxDraw, a: MockAdapter, type: string, pts: [number, number][]): string {
-  sigwx.addPhenomenon(type);
+  sigwx.draw(type);
   a.ev("down", pts[0]![0], pts[0]![1]);
   for (const [lon, lat] of pts.slice(1)) a.ev("move", lon, lat);
   const last = pts[pts.length - 1]!;
@@ -69,7 +77,7 @@ function stroke(sigwx: SigwxDraw, a: MockAdapter, type: string, pts: [number, nu
 
 /** Click-laid polygon (CB/turbulence): click each point, then double-click. */
 function clickDraw(sigwx: SigwxDraw, a: MockAdapter, type: string, pts: [number, number][]): string {
-  sigwx.addPhenomenon(type);
+  sigwx.draw(type);
   for (const [lon, lat] of pts) a.ev("click", lon, lat);
   const last = pts[pts.length - 1]!;
   a.ev("dblclick", last[0], last[1]);
@@ -103,12 +111,49 @@ describe("SigwxDraw controller (draw mode)", () => {
     expect(adapter.count("decoration")).toBeGreaterThan(before);
   });
 
+  it("pressing a control handle with no selected sub-item leaves pan ENABLED (no stuck-pan)", () => {
+    const id = stroke(sigwx, adapter, "jetStream", JET); // feature selected, but no sub-item
+    adapter.panEnabled = true;
+    // `speed` control requires a selected sub-item → the branch arms NO drag; pan must stay on.
+    adapter.ev("down", 1, 1, { overlay: "handles", props: { featureId: id, hClass: "control", role: "speed" } });
+    expect(adapter.panEnabled).toBe(true);
+    adapter.ev("up", 1, 1);
+    expect(adapter.panEnabled).toBe(true);
+  });
+
+  it("phenomena.turbulence.flightLevel.default sets the area's [base, top]", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, phenomena: { turbulence: { flightLevel: { default: [300, 420] } } } });
+    await s.ready();
+    stroke(s, a, "turbulence", [[0, 0], [2, 0], [2, 2], [0, 2]]);
+    const md = lastMeta(s);
+    expect(md["baseFL"]).toBe(300);
+    expect(md["topFL"]).toBe(420);
+  });
+
+  it("phenomena.jetStream.flightLevel.default sets every break point's core FL", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, phenomena: { jetStream: { flightLevel: { default: 320 } } } });
+    await s.ready();
+    stroke(s, a, "jetStream", JET);
+    const pts = lastMeta(s)["points"] as { fl: number }[];
+    expect(pts.every((p) => p.fl === 320)).toBe(true);
+  });
+
+  it("the ✕ delete control (controls overlay) removes the selected feature", () => {
+    const id = stroke(sigwx, adapter, "jetStream", JET);
+    expect(sigwx.save().features).toHaveLength(1);
+    // A press on the ✕ (rendered in the `controls` overlay) deletes the feature.
+    adapter.ev("down", 1, 1, { overlay: "controls", props: { featureId: id } });
+    expect(sigwx.save().features).toHaveLength(0);
+  });
+
   it("draws a CB polygon: scalloped fill + edge + call-out + leader", () => {
     clickDraw(sigwx, adapter, "cb", POLY);
     expect(adapter.count("area-fill")).toBe(1);
     expect(adapter.count("edge")).toBe(1);
-    expect(adapter.count("text-boxes")).toBe(1); // placed call-out
-    expect(adapter.count("leaders")).toBe(1); // leader to the anchor
+    expect(adapter.count("text-boxes")).toBeGreaterThan(0); // placed call-out (+ FL-gauge labels while selected)
+    expect(adapter.count("leaders")).toBeGreaterThan(0); // leader to the anchor (+ gauge axis)
   });
 
   it("emits a form spec with a list section for the jet", () => {
@@ -130,7 +175,7 @@ describe("SigwxDraw controller (draw mode)", () => {
 
   it("applies configurable speed limits to the break-point form fields", async () => {
     const a = new MockAdapter();
-    const s = new SigwxDraw({ adapter: a, limits: { jetStream: { speed: { min: 100, max: 200 } } } });
+    const s = new SigwxDraw({ adapter: a, phenomena: { jetStream: { speed: { min: 100, max: 200 } } } });
     await s.ready();
     let spec: { list?: { itemFields?: { key: string; min?: number; max?: number }[] } } | null = null;
     s.on("select", (x) => (spec = x as never));
@@ -158,5 +203,64 @@ describe("SigwxDraw controller (draw mode)", () => {
     expect(adapter.count("handles")).toBe(0);
     adapter.ev("click", 2, 2, { overlay: "edge", props: { featureId: id } });
     expect(adapter.count("handles")).toBeGreaterThan(0);
+  });
+
+  it("dragging the zone body (edge/fill) moves the whole zone", () => {
+    const id = stroke(sigwx, adapter, "turbulence", [[0, 0], [4, 0], [4, 4], [0, 4]]);
+    const before = JSON.stringify(sigwx.save().features[0]!.geometry);
+    adapter.ev("down", 2, 2, { overlay: "area-fill", props: { featureId: id } });
+    adapter.ev("move", 5, 5);
+    adapter.ev("up", 5, 5);
+    expect(JSON.stringify(sigwx.save().features[0]!.geometry)).not.toEqual(before); // zone translated
+  });
+
+  it("dragging the call-out symbol repositions the indicator (call-out), NOT the zone", () => {
+    const id = stroke(sigwx, adapter, "turbulence", [[0, 0], [4, 0], [4, 4], [0, 4]]);
+    const geom = () => JSON.stringify(sigwx.save().features[0]!.geometry);
+    const box = () => JSON.stringify(adapter.overlays.get("text-boxes")?.features.map((f) => f.geometry));
+    const geom0 = geom(), box0 = box();
+    adapter.ev("down", 1, 1, { overlay: "symbols", props: { featureId: id, labelId: "turb" } });
+    adapter.ev("move", 10, 10);
+    adapter.ev("up", 10, 10);
+    expect(geom()).toEqual(geom0); // the zone itself does NOT move
+    expect(box()).not.toEqual(box0); // the call-out (indicator) is repositioned
+  });
+
+  it("clicking the turbulence symbol (no drag) cycles its enum", () => {
+    stroke(sigwx, adapter, "turbulence", [[0, 0], [4, 0], [4, 4], [0, 4]]);
+    const id = lastId(sigwx);
+    const sym0 = (sigwx.save().features[0]!.properties!["metadata"] as Record<string, unknown>)["symbol"];
+    adapter.ev("down", 1, 1, { overlay: "symbols", props: { featureId: id } });
+    adapter.ev("up", 1, 1); // no move → a click cycles MOD → SEV
+    const sym1 = (sigwx.save().features[0]!.properties!["metadata"] as Record<string, unknown>)["symbol"];
+    expect(sym0).toBe("MOD");
+    expect(sym1).toBe("SEV");
+  });
+
+  it("turbulence FL gauge: base drags to the off-chart (XXX) notch below the floor; flightLevel moves it live", () => {
+    const id = stroke(sigwx, adapter, "turbulence", [[0, 0], [4, 0], [4, 4], [0, 4]]);
+    const baseFL = (): unknown => (sigwx.save().features[0]!.properties!["metadata"] as Record<string, unknown>)["baseFL"];
+    const dragBaseDown = (): void => {
+      adapter.ev("down", 1, 1, { overlay: "handles", props: { featureId: id, hClass: "control", role: "mBase" } });
+      adapter.ev("move", 1, -99999); // far DOWN (low lat → high screen-y → low FL), past the floor
+      adapter.ev("up", 1, -99999);
+    };
+    dragBaseDown();
+    expect(baseFL()).toBe(245); // norm floor 250 − 5 = the off-chart notch (shown XXX)
+    sigwx.setPhenomenonFlightLevel("turbulence", { min: 100 }); // lower the floor live
+    dragBaseDown();
+    expect(baseFL()).toBe(95); // notch follows the new floor (100 − 5)
+  });
+
+  it("turbulenceTypes extends the symbol catalogue (MOD/SEV + added), keeping MOD the default", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, turbulenceTypes: [{ code: "MTW", label: "Mountain wave", svg: "<svg/>" }] });
+    await s.ready();
+    let spec: { fields?: { key: string; options?: { value: unknown }[]; default?: unknown }[] } | null = null;
+    s.on("select", (x) => (spec = x as never));
+    stroke(s, a, "turbulence", [[0, 0], [4, 0], [4, 4], [0, 4]]); // freehand balloon
+    const sym = spec!.fields?.find((f) => f.key === "symbol");
+    const codes = sym?.options?.map((o) => String(o.value));
+    expect(codes).toEqual(["MOD", "SEV", "MTW"]); // completes, not replaces; default MOD first
   });
 });

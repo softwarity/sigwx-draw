@@ -36,6 +36,9 @@ jobs:
       - name: Install library dependencies
         run: npm ci
 
+      - name: Run tests (gate the deploy)
+        run: npm test # a failing test stops the deploy
+
       - name: Build library
         run: npm run build # produces ../dist, consumed by the demo's path alias
 

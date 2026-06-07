@@ -6,31 +6,11 @@
  * style ({@link import('../map/style.js').SigwxStyle}) is assembled from these.
  */
 
-export interface FillStyle {
-  color: string;
-  /** 0–1. */
-  opacity: number;
-}
-
 export interface LineStyle {
   color: string;
   width: number;
   /** Dash pattern (alternating on/off lengths). Omit for a solid line. */
   dash?: number[];
-}
-
-export interface PointStyle {
-  radius: number;
-  color: string;
-  strokeColor: string;
-  strokeWidth: number;
-}
-
-export interface LabelStyle {
-  color: string;
-  size: number;
-  haloColor: string;
-  haloWidth: number;
 }
 
 /** Floating HTML tooltip shown on hover. */
@@ -43,24 +23,58 @@ export interface TooltipStyle {
   maxWidth: string;
 }
 
+// ── Shared sub-styles ────────────────────────────────────────────────────────
+/** Label text — colour + halo (an outline that keeps the text legible over the map). */
+export interface TextStyle { color?: string; halo?: string; size?: number; background?: string }
+/** Area boundary. `decorator` only *selects* the treatment (solid/dashed); a scalloped
+ *  edge is real geometry from `core/decorate`, so "scallop" just draws solid over it. */
+export interface EdgeStyle { color?: string; width?: number; dash?: number[]; decorator?: "scallop" | "dashed" | "plain" }
+/** Area fill — colour (defaults to the resolved ink) + opacity. */
+export interface AreaStyle { color?: string; opacity?: number }
+/** Symbols-layer glyph. */
+export interface SymbolStyle { sprite: string; size?: number; color?: string }
+
+// ── Per-phenomenon styles (each phenomenon exposes ONLY what it draws) ─────────
+/** Jet stream — an arrow (axis + feathers + pennants + arrowhead) and FL text. */
+export interface JetStyle {
+  color: string;
+  arrow?: { color?: string; width?: number };
+  text?: TextStyle;
+}
+/** Turbulence — per-severity ink (MOD lighter / SEV darker) that drives the edge, the
+ *  fill tint, the glyph AND the FL text; a dashed edge; a fill; and a haloed FL text. */
+export interface TurbulenceStyle {
+  color: string;
+  mod?: { color?: string };
+  sev?: { color?: string };
+  edge?: EdgeStyle;
+  area?: AreaStyle;
+  symbol?: SymbolStyle;
+  text?: TextStyle;
+}
+/** Cumulonimbus — a scalloped edge, a fill, and a coverage/FL label. */
+export interface CbStyle {
+  color: string;
+  edge?: EdgeStyle;
+  area?: AreaStyle;
+  symbol?: SymbolStyle;
+  text?: TextStyle;
+}
+
 /**
- * Style for one phenomenon. The `edge.decorator` only *selects* how the edge is
- * drawn (solid / dashed); the scalloped edge itself is real geometry produced by
- * `core/decorate`, so a "scallop" decorator is just drawn solid over that ring.
+ * The superset of every phenomenon's style fields — what {@link DecorateFn} receives
+ * and {@link mergePhenomenonStyle} operates on. Each specific style ({@link JetStyle},
+ * {@link TurbulenceStyle}, {@link CbStyle}) is a subset, hence assignable to this.
  */
 export interface PhenomenonStyle {
-  /** Base hue (fronts: cold=blue, warm=red, …). Used as a fallback for sub-styles. */
   color: string;
-  /** Area fill (CB / turbulence / icing polygons). Omit for line/point phenomena. */
-  fill?: FillStyle;
-  /** Edge stroke + how it is treated. */
-  edge?: LineStyle & { decorator?: "scallop" | "dashed" | "plain" };
-  /** Stroke for derived decorations (barbs, arrowheads, triangles). */
-  decoration?: LineStyle;
-  /** Glyph reference for the symbols layer (volcano, TC, turbulence, icing, H/L). */
-  symbol?: { sprite: string; size: number; color?: string };
-  /** Text-box label (FL boxes, wind speed, names). */
-  textBox?: LabelStyle & { background: string; border: string };
+  arrow?: { color?: string; width?: number };
+  mod?: { color?: string };
+  sev?: { color?: string };
+  edge?: EdgeStyle;
+  area?: AreaStyle;
+  symbol?: SymbolStyle;
+  text?: TextStyle;
 }
 
 /** Merge a partial phenomenon style onto a resolved base (one level of nesting). */
@@ -70,20 +84,22 @@ export function mergePhenomenonStyle(
 ): PhenomenonStyle {
   if (!over) return base;
   const out: PhenomenonStyle = { color: over.color ?? base.color };
-  const fill = { ...base.fill, ...over.fill };
-  if (fill.color !== undefined) out.fill = fill as unknown as NonNullable<PhenomenonStyle["fill"]>;
+  const arrow = { ...base.arrow, ...over.arrow };
+  if (arrow.color !== undefined || arrow.width !== undefined) out.arrow = arrow;
+  const mod = { ...base.mod, ...over.mod };
+  if (mod.color !== undefined) out.mod = mod;
+  const sev = { ...base.sev, ...over.sev };
+  if (sev.color !== undefined) out.sev = sev;
   const edge = { ...base.edge, ...over.edge };
-  if (edge.color !== undefined) {
-    out.edge = (edge.dash ? { ...edge, dash: [...edge.dash] } : edge) as unknown as NonNullable<PhenomenonStyle["edge"]>;
+  if (edge.color !== undefined || edge.width !== undefined || edge.dash !== undefined || edge.decorator !== undefined) {
+    out.edge = edge.dash ? { ...edge, dash: [...edge.dash] } : edge;
   }
-  const deco = { ...base.decoration, ...over.decoration };
-  if (deco.color !== undefined) {
-    out.decoration = (deco.dash ? { ...deco, dash: [...deco.dash] } : deco) as unknown as NonNullable<PhenomenonStyle["decoration"]>;
-  }
+  const area = { ...base.area, ...over.area };
+  if (area.color !== undefined || area.opacity !== undefined) out.area = area;
   const sym = { ...base.symbol, ...over.symbol };
-  if (sym.sprite !== undefined) out.symbol = sym as unknown as NonNullable<PhenomenonStyle["symbol"]>;
-  const tb = { ...base.textBox, ...over.textBox };
-  if (tb.color !== undefined) out.textBox = tb as unknown as NonNullable<PhenomenonStyle["textBox"]>;
+  if (sym.sprite !== undefined) out.symbol = { ...sym, sprite: sym.sprite };
+  const text = { ...base.text, ...over.text };
+  if (text.color !== undefined || text.halo !== undefined || text.size !== undefined || text.background !== undefined) out.text = text;
   return out;
 }
 

@@ -15,11 +15,17 @@ import type { Feature, FeatureCollection, Geometry, Position } from "geojson";
 
 import {
   catmullRom,
+  catmullRomClosed,
+  clampInRing,
   coordsOf,
+  isSimpleRing,
+  radialSortRing,
   defaultMetadata,
   defaultRegistry,
+  DEFAULT_TURBULENCE_SYMBOLS,
   fromFeatureCollection,
   frameK,
+  makeTurbulence,
   interactionOf,
   isVisible,
   mergePhenomenonStyle,
@@ -33,8 +39,11 @@ import {
   validate,
 } from "../core/index.js";
 import type {
+  CbStyle,
   FieldSchema,
+  FlMode,
   InteractionSpec,
+  JetStyle,
   ListField,
   Metadata,
   PhenomenonDef,
@@ -42,13 +51,16 @@ import type {
   Pt,
   RenderFeature,
   SigwxFeature,
+  TurbulenceStyle,
 } from "../core/index.js";
-import type { MapAdapter, PointerEvent, SymbolSprites, ToolbarItem, ToolbarOptions } from "./adapter.js";
+import type { MapAdapter, PointerEvent, SnapshotOptions, SymbolSprites, ToolbarItem, ToolbarOptions } from "./adapter.js";
 import { ANNOTATION_BUCKET, OVERLAY_IDS } from "./layers.js";
 import { placeAnnotations } from "./placement.js";
 import type { AnnReq, Pin } from "./placement.js";
 import { DEFAULT_STYLE, mergeStyle } from "./style.js";
 import type { SigwxStyle, SigwxStyleInput } from "./style.js";
+import { decorate } from "./style-features.js";
+import { DEFAULT_SPRITES } from "./symbols.js";
 
 /** A schema field with its `visibleWhen` evaluated for the current metadata. */
 export type ResolvedField = FieldSchema & { visible: boolean };
@@ -74,24 +86,93 @@ export interface FormSpec {
 }
 
 /**
- * Per-phenomenon numeric overrides, e.g. `{ jetStream: { speed: { min: 80, max: 250 } } }`.
- * Patches the matching number fields (top-level or list-item) so the form, the
- * validation and the on-map controls all share one configurable bound.
+ * Per-phenomenon configuration, keyed by phenomenon type. Groups everything that
+ * customises one phenomenon. Each phenomenon names its own bounds directly (no
+ * `limits` wrapper):
+ * - `speed`: the jet wind-speed dial range.
+ * - `flightLevel`: the chart FL range (turbulence/CB) — the on-map gauge clamps
+ *   here, and a top/base beyond it shows the off-chart "XXX" sentinel.
+ * - `style`: overrides the phenomenon's own visual tokens (shape ink, FL text,
+ *   severity glyph…), merged onto its `def.style`.
  */
-export type PhenomenonLimits = Record<string, Record<string, { min?: number; max?: number }>>;
+/** Numeric range for an on-map control (jet speed dial, turbulence FL gauge). */
+export interface NumRange {
+  min?: number;
+  max?: number;
+}
+
+/** Per-phenomenon FL config: chart bounds, default value(s) and off-chart behaviour.
+ *  `D` = the default's shape: `number` for the jet (core FL), `[number, number]` for an
+ *  area (`[base, top]`). `beyond` is per bound `[below-min, above-max]` — `"clamp"` hard-stops,
+ *  `"xxx"` lets it off-chart and renders the "XXX" sentinel. */
+export interface FlightLevelConfig<D = number | [number, number]> {
+  min?: number;
+  max?: number;
+  default?: D;
+  beyond?: [FlMode, FlMode];
+}
+
+/** Generic (any-phenomenon) config — used as the fallback for unknown phenomenon types. */
+export interface PhenomenonConfig {
+  speed?: NumRange;
+  flightLevel?: FlightLevelConfig;
+  style?: Partial<PhenomenonStyle>;
+}
+
+/**
+ * The `phenomena` option, typed PER PHENOMENON so the compiler accepts only each one's
+ * OWN style (jet → arrow/text, turbulence → mod/sev/edge/area/text, CB → edge/area/text)
+ * and its own on-map controls. Unknown types fall back to the generic {@link PhenomenonConfig}.
+ */
+export interface PhenomenaConfig {
+  jetStream?: { speed?: NumRange; flightLevel?: FlightLevelConfig<number>; style?: Partial<JetStyle> };
+  turbulence?: { flightLevel?: FlightLevelConfig<[number, number]>; style?: Partial<TurbulenceStyle> };
+  cb?: { style?: Partial<CbStyle> };
+  [type: string]: PhenomenonConfig | undefined;
+}
+
+/**
+ * A turbulence symbol/type added to the catalogue: a `code` (stored in the feature's
+ * `symbol` metadata AND used as the sprite id), a `label`, and the inline `svg` glyph
+ * (use `currentColor` to keep it tintable). These COMPLETE the default MOD/SEV set.
+ */
+export interface TurbulenceType {
+  code: string;
+  label: string;
+  svg: string;
+}
 
 export interface SigwxDrawOptions {
   adapter: MapAdapter;
   registry?: PhenomenonRegistry;
+  /** Global chrome only (selection, handles, slider, control handles, tooltip). */
   style?: SigwxStyleInput;
   toolbar?: boolean | ToolbarOptions;
   symbolSprite?: SymbolSprites;
-  /** Override field min/max per phenomenon (e.g. jet speed bounds). */
-  limits?: PhenomenonLimits;
+  /** Per-phenomenon config (typed per phenomenon), e.g. `{ jetStream: { speed, style }, turbulence: { flightLevel, style } }`. */
+  phenomena?: PhenomenaConfig;
+  /** Extra turbulence symbols/types, added to the default MOD/SEV catalogue. */
+  turbulenceTypes?: TurbulenceType[];
 }
 
 const fc = (features: Feature[]): FeatureCollection => ({ type: "FeatureCollection", features });
-const SHORT: Record<string, string> = { jetStream: "Jet", cb: "CB", turbulence: "Turb" };
+/** "Clear all" toolbar icon (a ✕) — `ToolbarItem` is svg-only since draw-adapter 0.2.x. */
+const CLEAR_ICON =
+  '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+/** Editing-chrome overlays hidden during a snapshot, so the PNG shows the clean chart
+ *  (no selection highlight / edit + control handles). The chart decoration stays. */
+const SNAPSHOT_HIDE = ["selection", "handles", "controls"];
+
+/** Is keyboard focus in an editable element (input/textarea/select/contenteditable),
+ *  traversing open shadow roots (e.g. the metadata-form web component)? Used so the
+ *  window-level Backspace/Delete handler never steals a keystroke from text entry. */
+function isEditableTarget(): boolean {
+  if (typeof document === "undefined") return false;
+  let el: Element | null = document.activeElement;
+  while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+  if (!el) return false;
+  return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || (el as HTMLElement).isContentEditable;
+}
 /** On-map speed dial (speedometer): fixed radius + angular sweep (deg, screen y-down). */
 const SPEED_R = 52;
 const SPEED_A0 = 150; // min-speed angle (down-left)
@@ -124,7 +205,9 @@ function listFieldOf(def: PhenomenonDef): ListField | undefined {
 export class SigwxDraw {
   private readonly adapter: MapAdapter;
   private readonly registry: PhenomenonRegistry;
-  private readonly limits: PhenomenonLimits = {};
+  private readonly phenomena: Record<string, PhenomenonConfig | undefined> = {};
+  /** Host-added turbulence symbols/types (beyond the default MOD/SEV), by code. */
+  private turbTypes: TurbulenceType[] = [];
   private readonly readyPromise: Promise<void>;
   private readonly doc = new Map<string, SigwxFeature>();
   private order: string[] = [];
@@ -139,7 +222,11 @@ export class SigwxDraw {
     | { kind: "slider"; featureId: string; index: number }
     | { kind: "speed"; featureId: string; index: number }
     | { kind: "level"; featureId: string; index: number; field: "fl" | "top" | "base" }
-    | { kind: "callout"; featureId: string; labelId: string }
+    | { kind: "metaLevel"; featureId: string; field: string }
+    | { kind: "toggle"; featureId: string; field: string; options: string[] }
+    | { kind: "callout"; featureId: string; labelId: string; grab: [number, number]; toggle?: { field: string; options: string[] } }
+    | { kind: "anchor"; featureId: string }
+    | { kind: "translate"; featureId: string; lastPx: [number, number] }
     | null = null;
   private didDrag = false;
   /** FL the vertical gauge is centred on (the selected point's FL at selection time),
@@ -151,6 +238,10 @@ export class SigwxDraw {
   private style: SigwxStyle;
   private readonly resolved = new Map<string, PhenomenonStyle>();
   private readonly pins = new Map<string, Pin>();
+  /** User-moved leader anchor (arrow tip), lon/lat per feature — re-clamped into the ring each render. */
+  private readonly anchorPins = new Map<string, [number, number]>();
+  /** Where each feature's call-out box was last placed (lon/lat) — so the area FL gauge follows it. */
+  private readonly placedAt = new Map<string, [number, number]>();
   private lastAnnReqs: AnnReq[] = [];
   private idSeq = 0;
   private destroyed = false;
@@ -164,12 +255,17 @@ export class SigwxDraw {
   constructor(opts: SigwxDrawOptions) {
     this.adapter = opts.adapter;
     this.registry = opts.registry ?? defaultRegistry();
-    this.limits = opts.limits ?? {};
+    this.phenomena = opts.phenomena ?? {};
     this.style = mergeStyle(DEFAULT_STYLE, opts.style);
-    this.adapter.setStyle(this.style);
 
     this.readyPromise = this.adapter.ready().then(async () => {
-      if (opts.symbolSprite) await this.adapter.registerSymbols(opts.symbolSprite);
+      // The generic adapter does NOT auto-register sprites — register the SIGWX
+      // defaults (MOD/SEV turbulence glyphs); the host's overrides win.
+      await this.adapter.registerSymbols({ ...DEFAULT_SPRITES, ...(opts.symbolSprite ?? {}) });
+      if (opts.turbulenceTypes?.length) {
+        this.turbTypes = [...opts.turbulenceTypes];
+        await this.applyTurbulenceCatalog();
+      }
       this.adapter.onPointer((ev) => this.onPointer(ev));
       // Re-render on pan/zoom so screen-sized decorations (wind barbs) and the
       // call-out placement both refresh.
@@ -190,11 +286,12 @@ export class SigwxDraw {
   // ── public API ─────────────────────────────────────────────────────────────
 
   /**
-   * Begin a phenomenon. In `drop` mode a default geometry is created and selected
-   * immediately (returns its id). In `draw` mode the map enters drawing and the
-   * feature is created on finalize (returns `""`; listen to `select`/`change`).
+   * Enter drawing for a phenomenon. In `draw` mode (the default) the map starts
+   * drawing and the feature is created on finalize (returns `""`; listen to
+   * `select`/`change`). In `drop` mode a default geometry is created and selected
+   * immediately (returns its id).
    */
-  addPhenomenon(type: string): string {
+  draw(type: string): string {
     const def = this.registry.get(type);
     const it = interactionOf(def);
     if (it.mode === "drop") return this.dropFeature(def);
@@ -213,6 +310,13 @@ export class SigwxDraw {
   select(id: string | null): void {
     this.selectedId = id != null && this.doc.has(id) ? id : null;
     this.selectedSub = null;
+    // Centre the FL gauge of an AREA on its top/base midpoint (so the slider sits
+    // level with the call-out, not hanging below).
+    const f = this.selectedId ? this.doc.get(this.selectedId) : undefined;
+    const m = f?.properties.metadata;
+    if (m && typeof m["topFL"] === "number" && typeof m["baseFL"] === "number") {
+      this.flRef = ((m["topFL"] as number) + (m["baseFL"] as number)) / 2;
+    }
     this.syncDblClickZoom();
     this.renderAll();
     this.emitSelect();
@@ -353,7 +457,7 @@ export class SigwxDraw {
     if (g.type === "LineString") {
       g.coordinates.splice(best + 1, 0, at);
     } else if (g.type === "Polygon") {
-      const uniq = planar.length === verts.length ? verts.slice() : verts.slice();
+      const uniq = verts.slice();
       uniq.splice(best + 1, 0, at);
       uniq.push(uniq[0]!);
       g.coordinates[0] = uniq;
@@ -367,7 +471,11 @@ export class SigwxDraw {
     if (!f) return;
     const list = ((f.properties.metadata[listKey] as Metadata[] | undefined) ?? []).filter((_, i) => i !== index);
     f.properties.metadata = { ...f.properties.metadata, [listKey]: list };
-    if (this.selectedSub === index) this.selectedSub = null;
+    // Keep the selected sub-item pointing at the SAME entry: clear it if it was removed,
+    // shift it down if an earlier entry was removed (else it dangles past the new end).
+    if (this.selectedSub != null && index <= this.selectedSub) {
+      this.selectedSub = this.selectedSub === index ? null : this.selectedSub - 1;
+    }
     this.afterEdit(id);
   }
 
@@ -375,6 +483,7 @@ export class SigwxDraw {
     if (!this.doc.delete(id)) return;
     this.order = this.order.filter((x) => x !== id);
     for (const k of [...this.pins.keys()]) if (k.startsWith(`${id}:`)) this.pins.delete(k);
+    this.anchorPins.delete(id);
     if (this.selectedId === id) {
       this.selectedId = null;
       this.selectedSub = null;
@@ -435,7 +544,61 @@ export class SigwxDraw {
   setStyle(input: SigwxStyleInput): void {
     this.style = mergeStyle(this.style, input);
     this.resolved.clear();
-    this.adapter.setStyle(this.style);
+    this.renderAll(); // re-decorates the handles with the new style (was adapter.setStyle)
+  }
+
+  /**
+   * Restyle one phenomenon's own visual tokens live (shape ink, FL text, severity
+   * glyph…) — the runtime counterpart of the `phenomena[type].style` option. The
+   * passed style replaces that phenomenon's override (merged onto its `def.style`);
+   * pass `{}` to revert to the default look.
+   */
+  setPhenomenonStyle(type: string, style: Partial<PhenomenonStyle>): void {
+    this.phenomena[type] = { ...this.phenomena[type], style };
+    this.resolved.delete(type);
+    this.renderAll();
+  }
+
+  /**
+   * Set a phenomenon's chart FL range live (the turbulence/CB gauge) — the runtime
+   * counterpart of `phenomena[type].flightLevel`. The on-map cursors re-clamp and the
+   * XXX threshold moves at once; pass `{}` to revert to the def defaults.
+   */
+  setPhenomenonFlightLevel(type: string, flightLevel: FlightLevelConfig): void {
+    this.phenomena[type] = { ...this.phenomena[type], flightLevel };
+    this.renderAll();
+    if (this.selectedId && this.doc.get(this.selectedId)?.properties.phenomenon === type) this.emitSelect();
+  }
+
+  /** Capture the map as a PNG (the same as the toolbar's snapshot button). The editing
+   *  chrome is hidden by default for a clean chart; pass `opts` to override (`hideOverlays`,
+   *  `target: "download" | "clipboard" | "blob"`, `scale`, `filename`). The Blob is returned. */
+  snapshot(opts?: SnapshotOptions): Promise<Blob> {
+    return this.adapter.snapshot({ hideOverlays: SNAPSHOT_HIDE, ...opts });
+  }
+
+  /**
+   * Add turbulence symbols/types to the catalogue (beyond the default MOD/SEV) —
+   * each `{ code, label, svg }`. The glyph is registered as the sprite `code`; the
+   * turbulence phenomenon's `symbol` enum gains the new options. Click the glyph on
+   * the map to pick among them. Re-call to add more (merged by `code`).
+   */
+  async addTurbulenceTypes(types: TurbulenceType[]): Promise<void> {
+    const byCode = new Map(this.turbTypes.map((t) => [t.code, t]));
+    for (const t of types) byCode.set(t.code, t);
+    this.turbTypes = [...byCode.values()];
+    await this.applyTurbulenceCatalog();
+    if (this.selectedId) this.emitSelect();
+  }
+
+  /** Register the added glyphs and rebuild the turbulence def for the full catalogue. */
+  private async applyTurbulenceCatalog(): Promise<void> {
+    const sprites: SymbolSprites = {};
+    for (const t of this.turbTypes) sprites[t.code] = t.svg;
+    if (Object.keys(sprites).length) await this.adapter.registerSymbols(sprites);
+    const symbols = [...DEFAULT_TURBULENCE_SYMBOLS, ...this.turbTypes.map((t) => ({ code: t.code, label: t.label }))];
+    this.registry.register(makeTurbulence(symbols));
+    this.resolved.delete("turbulence");
     this.renderAll();
   }
 
@@ -486,7 +649,9 @@ export class SigwxDraw {
   /** Commit a drawn geometry as a new feature, select it, leave drawing mode. */
   private commit(type: string, geometry: Geometry): void {
     const id = `f${this.idSeq++}`;
-    this.doc.set(id, { type: "Feature", geometry, properties: { id, phenomenon: type, metadata: defaultMetadata(this.registry.get(type)) } });
+    const metadata = defaultMetadata(this.registry.get(type));
+    this.applyFlDefault(type, metadata); // override FL defaults from `phenomena[type].flightLevel.default`
+    this.doc.set(id, { type: "Feature", geometry, properties: { id, phenomenon: type, metadata } });
     this.order.push(id);
     this.drawing = null;
     this.drawCursor = null;
@@ -526,13 +691,24 @@ export class SigwxDraw {
     this.stroking = false;
     this.adapter.setPanEnabled(true);
     const span = this.adapter.getViewSpan();
-    const simplified = simplify(d.coords.map((c) => [c[0]!, c[1]!]), span * 0.012);
-    if (simplified.length < 2) {
+    let simplified = simplify(d.coords.map((c) => [c[0]!, c[1]!]), span * 0.012);
+    const it = interactionOf(this.registry.get(d.type));
+    const min = it.primitive === "polygon" ? 3 : 2;
+    if (simplified.length < min) {
       this.cancelDrawing();
       this.renderAll();
       return;
     }
-    this.commit(d.type, { type: "LineString", coordinates: simplified });
+    // Keep a freehand AREA a SIMPLE polygon: untangle a self-crossing stroke by ordering
+    // its vertices radially (a clean "balloon" is already radial, so it stays unchanged).
+    if (it.primitive === "polygon" && !isSimpleRing(simplified)) simplified = radialSortRing(simplified);
+    // A freehand AREA closes the stroke into a polygon (draw the outline like
+    // "inflating a balloon"); a freehand line stays open.
+    const geometry: Geometry =
+      it.primitive === "polygon"
+        ? { type: "Polygon", coordinates: [[...simplified, simplified[0]!]] }
+        : { type: "LineString", coordinates: simplified };
+    this.commit(d.type, geometry);
   }
 
   private cancelDrawing(): void {
@@ -560,7 +736,7 @@ export class SigwxDraw {
   private styleOf(type: string): PhenomenonStyle {
     let s = this.resolved.get(type);
     if (!s) {
-      s = mergePhenomenonStyle(this.registry.get(type).style, this.style.perPhenomenon[type]);
+      s = mergePhenomenonStyle(this.registry.get(type).style, this.phenomena[type]?.style);
       this.resolved.set(type, s);
     }
     return s;
@@ -586,17 +762,32 @@ export class SigwxDraw {
     const buckets: Record<string, Feature[]> = {};
     for (const id of OVERLAY_IDS) buckets[id] = [];
     const annReqs: AnnReq[] = [];
+    let selAnchor: [number, number] | null = null; // selected zone's arrow tip — drawn AFTER placement
     const resolution = this.resolution();
 
     for (const id of this.order) {
       const f = this.doc.get(id);
       if (!f) continue;
       const def = this.registry.get(f.properties.phenomenon);
-      const features: RenderFeature[] = def.decorate({ geometry: f.geometry, metadata: f.properties.metadata, style: this.styleOf(f.properties.phenomenon), resolution });
+      const features: RenderFeature[] = def.decorate({ geometry: f.geometry, metadata: f.properties.metadata, style: this.styleOf(f.properties.phenomenon), resolution, flightLevel: this.flResolved(f.properties.phenomenon) });
       for (const feat of features) {
         feat.properties.featureId = id;
-        if (feat.properties.layer === ANNOTATION_BUCKET) annReqs.push(toAnnReq(id, feat));
-        else (buckets[feat.properties.layer] ??= []).push(feat);
+        if (feat.properties.layer === ANNOTATION_BUCKET) {
+          const req = toAnnReq(id, feat);
+          // The leader's arrow tip is user-movable, constrained INSIDE the zone (and
+          // re-clamped each render so a reshape keeps it valid). The box stays put — only
+          // the arrow re-aims. A draggable handle sits on the tip while the zone is selected.
+          if (f.geometry.type === "Polygon" && req.leader) {
+            const ring = coordsOf(f.geometry);
+            const a = clampInRing(this.anchorPins.get(id) ?? [req.anchor.lon, req.anchor.lat], ring);
+            req.arrowAnchor = { lon: a[0], lat: a[1] };
+            if (id === this.selectedId) selAnchor = a; // handle drawn after placement (only if the leader shows)
+          }
+          // Push an area's call-out OUTSIDE the zone (unless the zone is very large).
+          const r = this.areaAvoidRadius(f.geometry, req.anchor);
+          if (r) req.avoidRadius = r;
+          annReqs.push(req);
+        } else (buckets[feat.properties.layer] ??= []).push(feat);
       }
     }
 
@@ -607,8 +798,92 @@ export class SigwxDraw {
     const placed = placeAnnotations(annReqs, this.adapter, this.pins);
     buckets["text-boxes"]!.push(...placed.boxes);
     buckets["leaders"]!.push(...placed.leaders);
+    buckets["symbols"]!.push(...placed.symbols);
+    // Arrow-tip handle — only while its leader is VISIBLE, so it vanishes WITH the arrow
+    // when the call-out sits over the tip (no lone handle without an arrow).
+    if (selAnchor && placed.leaders.some((l) => l.properties["featureId"] === this.selectedId)) {
+      buckets["handles"]!.push({ type: "Feature", properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: "anchor" }, geometry: { type: "Point", coordinates: selAnchor } });
+    }
 
-    for (const id of OVERLAY_IDS) this.adapter.setOverlay(id, fc(buckets[id]!));
+    // Remember where each call-out box landed (lon/lat) so the area FL gauge can
+    // sit right next to it (the slider "follows the logo + FL").
+    this.placedAt.clear();
+    for (const box of placed.boxes) {
+      const id = box.properties.featureId;
+      if (!id || box.geometry.type !== "Point") continue;
+      this.placedAt.set(id, box.geometry.coordinates as [number, number]);
+      // A liseré (thin rule) between the two FL lines of an area call-out (top/base).
+      const def = this.registry.get(this.doc.get(id)!.properties.phenomenon);
+      if (def.schema.some((s) => s.key === "topFL") && def.schema.some((s) => s.key === "baseFL")) {
+        const c = this.adapter.project({ lon: box.geometry.coordinates[0]!, lat: box.geometry.coordinates[1]! });
+        if (c) {
+          const l1 = this.adapter.unproject([c[0] - 17, c[1]]);
+          const l2 = this.adapter.unproject([c[0] + 17, c[1]]);
+          if (l1 && l2) buckets["leaders"]!.push({ type: "Feature", properties: { layer: "leaders", featureId: id, stroke: String(box.properties.textBorder ?? "#111"), strokeWidth: 1 }, geometry: { type: "LineString", coordinates: [[l1.lon, l1.lat], [l2.lon, l2.lat]] } });
+        }
+      }
+    }
+    if (this.selectedId) this.renderAreaGauge(buckets);
+
+    // `decorate` bakes the resolved style into the `handles` props (the generic
+    // adapter is dumb); every other overlay is passed through unchanged.
+    for (const id of OVERLAY_IDS) this.adapter.setOverlay(id, decorate(id, fc(buckets[id]!), this.style));
+  }
+
+  /** FL gauge (top/base) for a selected AREA phenomenon (turbulence/CB), placed
+   *  beside its call-out box — a connecting line between the two draggable levels. */
+  private renderAreaGauge(buckets: Record<string, Feature[]>): void {
+    const f = this.doc.get(this.selectedId!);
+    if (!f) return;
+    const def = this.registry.get(f.properties.phenomenon);
+    if (listFieldOf(def)) return; // jet handles its own gauge
+    if (!def.schema.some((s) => s.key === "topFL") || !def.schema.some((s) => s.key === "baseFL")) return;
+    const at = this.placedAt.get(this.selectedId!);
+    if (!at) return;
+    const bc = this.adapter.project({ lon: at[0], lat: at[1] });
+    if (!bc) return;
+    const m = f.properties.metadata;
+    const top = typeof m["topFL"] === "number" ? (m["topFL"] as number) : 350;
+    const base = typeof m["baseFL"] === "number" ? (m["baseFL"] as number) : 200;
+    const gx = bc[0] + 30; // just right of the call-out box
+    const un = (x: number, y: number): Position | null => {
+      const u = this.adapter.unproject([x, y]);
+      return u ? [u.lon, u.lat] : null;
+    };
+    const yOf = (lvl: number): number => bc[1] - (lvl - this.flRef) * FL_PX;
+    // Same look as the jet FL gauge: a thin axis + a translucent band between top/base.
+    const aTop = un(gx, yOf(top) - 12);
+    const aBot = un(gx, yOf(base) + 12);
+    if (aTop && aBot) buckets["leaders"]!.push({ type: "Feature", properties: { layer: "leaders", stroke: this.style.control.line.color, strokeWidth: this.style.control.line.width }, geometry: { type: "LineString", coordinates: [aTop, aBot] } });
+    const bt = un(gx, yOf(top));
+    const bb = un(gx, yOf(base));
+    if (bt && bb) buckets["selection"]!.push({ type: "Feature", properties: { layer: "selection", stroke: this.style.control.line.color, strokeWidth: 9 }, geometry: { type: "LineString", coordinates: [bt, bb] } });
+    const mk = (lvl: number, role: string, label: string): void => {
+      const hp = un(gx, yOf(lvl));
+      const lp = un(gx + 24, yOf(lvl));
+      if (hp) buckets["handles"]!.push({ type: "Feature", properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role }, geometry: { type: "Point", coordinates: hp } });
+      if (lp) buckets["text-boxes"]!.push({ type: "Feature", properties: { layer: "text-boxes", text: label, textColor: this.style.control.text.color, textSize: 12, textHalo: this.style.control.text.halo }, geometry: { type: "Point", coordinates: lp } });
+    };
+    // Off-chart bounds → "XXX" (per WAFC), matching the call-out box labels.
+    const baseMin = this.numLimit(def, "baseFL").min;
+    const topMax = this.numLimit(def, "topFL").max;
+    const lbl = (v: number, off: boolean): string => (off ? "XXX" : String(Math.round(v)).padStart(3, "0"));
+    mk(top, "mTop", lbl(top, top > topMax));
+    mk(base, "mBase", lbl(base, base < baseMin));
+  }
+
+  /** Screen radius from a call-out anchor to the farthest polygon vertex (capped) so
+   *  the box clears the zone; 0 for non-areas. Very large zones stay near (capped). */
+  private areaAvoidRadius(geometry: Geometry, anchor: { lon: number; lat: number }): number {
+    if (geometry.type !== "Polygon") return 0;
+    const a = this.adapter.project(anchor);
+    if (!a) return 0;
+    let r = 0;
+    for (const p of geometry.coordinates[0] ?? []) {
+      const px = this.adapter.project({ lon: p[0]!, lat: p[1]! });
+      if (px) r = Math.max(r, Math.hypot(px[0] - a[0], px[1] - a[1]));
+    }
+    return Math.min(r + 8, 130);
   }
 
   private renderPreview(buckets: Record<string, Feature[]>): void {
@@ -644,12 +919,30 @@ export class SigwxDraw {
     const selGeom: Geometry =
       it.smooth && f.geometry.type === "LineString"
         ? { type: "LineString", coordinates: catmullRom(f.geometry.coordinates as Pt[], 16) }
-        : outline(f.geometry);
+        : it.smooth && f.geometry.type === "Polygon"
+          ? { type: "LineString", coordinates: catmullRomClosed(f.geometry.coordinates[0] as Pt[], 16) }
+          : outline(f.geometry);
     buckets["selection"]!.push({
       type: "Feature",
-      properties: { layer: "selection", featureId: this.selectedId, stroke: this.style.selection.color, strokeWidth: this.style.selection.width },
+      properties: { layer: "selection", featureId: this.selectedId, stroke: this.style.selection.color, strokeWidth: this.style.selection.width, ...(this.style.selection.dash ? { dash: [...this.style.selection.dash] } : {}) },
       geometry: selGeom,
     });
+    // On-map delete affordance: a red ✕ just off the feature's top-right corner. Click it
+    // (or press Backspace/Delete) to remove the feature. `labelId:"__delete"` is the marker
+    // the pointer handler intercepts (see onDown).
+    const sx = coordsOf(f.geometry)
+      .map((c) => this.adapter.project({ lon: c[0]!, lat: c[1]! }))
+      .filter((p): p is [number, number] => !!p);
+    if (sx.length) {
+      const corner = this.adapter.unproject([Math.max(...sx.map((p) => p[0])) + 14, Math.min(...sx.map((p) => p[1])) - 14]);
+      if (corner) {
+        buckets["controls"]!.push({
+          type: "Feature",
+          properties: { layer: "controls", featureId: this.selectedId, text: "×", textColor: "#f85149", textSize: 20, textHalo: "#ffffff" },
+          geometry: { type: "Point", coordinates: [corner.lon, corner.lat] },
+        });
+      }
+    }
     vertices(f.geometry).forEach((v, i) => {
       buckets["handles"]!.push({
         type: "Feature",
@@ -705,14 +998,14 @@ export class SigwxDraw {
               const u = this.adapter.unproject([c[0] + Math.cos(deg) * SPEED_R, c[1] + Math.sin(deg) * SPEED_R]);
               if (u) arc.push([u.lon, u.lat]);
             }
-            if (arc.length) buckets["leaders"]!.push({ type: "Feature", properties: { layer: "leaders", stroke: this.style.slider.color, strokeWidth: 1.5 }, geometry: { type: "LineString", coordinates: arc } });
+            if (arc.length) buckets["leaders"]!.push({ type: "Feature", properties: { layer: "leaders", stroke: this.style.control.line.color, strokeWidth: this.style.control.line.width }, geometry: { type: "LineString", coordinates: arc } });
             const ha = (angleForSpeed(speed, spMin, spMax) * Math.PI) / 180;
             const h = this.adapter.unproject([c[0] + Math.cos(ha) * SPEED_R, c[1] + Math.sin(ha) * SPEED_R]);
             if (h) buckets["handles"]!.push({ type: "Feature", properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: "speed" }, geometry: { type: "Point", coordinates: [h.lon, h.lat] } });
             // Live speed readout near the handle while dragging the dial.
             if (this.dragTarget?.kind === "speed") {
               const lbl = this.adapter.unproject([c[0] + Math.cos(ha) * (SPEED_R + 22), c[1] + Math.sin(ha) * (SPEED_R + 22)]);
-              if (lbl) buckets["text-boxes"]!.push({ type: "Feature", properties: { layer: "text-boxes", text: `${Math.round(speed)}KT`, textColor: "#5a3000", textSize: 13, textBackground: "#ffffff", textBorder: this.style.slider.color }, geometry: { type: "Point", coordinates: [lbl.lon, lbl.lat] } });
+              if (lbl) buckets["text-boxes"]!.push({ type: "Feature", properties: { layer: "text-boxes", text: `${Math.round(speed)}KT`, textColor: this.style.control.text.color, textSize: 13, textHalo: this.style.control.text.halo, textBackground: "#ffffff", textBorder: this.style.control.line.color }, geometry: { type: "Point", coordinates: [lbl.lon, lbl.lat] } });
             }
           }
 
@@ -731,25 +1024,25 @@ export class SigwxDraw {
           // Extent handles appear at ≥120 kt; if top/base aren't set yet, seed
           // sensible defaults (fl ± 40) so they're draggable — the drag persists them.
           const showExt = speed >= 120;
-          const topV = showExt ? (typeof item["top"] === "number" ? (item["top"] as number) : Math.min(630, flv + 40)) : null;
+          const topV = showExt ? (typeof item["top"] === "number" ? (item["top"] as number) : Math.min(600, flv + 40)) : null;
           const baseV = showExt ? (typeof item["base"] === "number" ? (item["base"] as number) : Math.max(0, flv - 40)) : null;
           // Axis connector.
           const ys = showExt ? [yOf(flv), yOf(topV!), yOf(baseV!)] : [yOf(flv)];
           const aTop = un(gx, Math.min(...ys) - 12);
           const aBot = un(gx, Math.max(...ys) + 12);
-          if (aTop && aBot) buckets["leaders"]!.push({ type: "Feature", properties: { layer: "leaders", stroke: this.style.slider.color, strokeWidth: 1.5 }, geometry: { type: "LineString", coordinates: [aTop, aBot] } });
+          if (aTop && aBot) buckets["leaders"]!.push({ type: "Feature", properties: { layer: "leaders", stroke: this.style.control.line.color, strokeWidth: this.style.control.line.width }, geometry: { type: "LineString", coordinates: [aTop, aBot] } });
           // Extent band (translucent thick) between top and base.
           if (showExt) {
             const bt = un(gx, yOf(topV!));
             const bb = un(gx, yOf(baseV!));
-            if (bt && bb) buckets["selection"]!.push({ type: "Feature", properties: { layer: "selection", stroke: this.style.slider.color, strokeWidth: 9 }, geometry: { type: "LineString", coordinates: [bt, bb] } });
+            if (bt && bb) buckets["selection"]!.push({ type: "Feature", properties: { layer: "selection", stroke: this.style.control.line.color, strokeWidth: 9 }, geometry: { type: "LineString", coordinates: [bt, bb] } });
           }
           // Handles + value labels (orange control handles; role identifies the field).
           const lvlHandle = (lvl: number, field: string, label: string): void => {
             const hp = un(gx, yOf(lvl));
             const lp = un(gx + 28, yOf(lvl)); // value label clear to the right of the handle
             if (hp) buckets["handles"]!.push({ type: "Feature", properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: field }, geometry: { type: "Point", coordinates: hp } });
-            if (lp) buckets["text-boxes"]!.push({ type: "Feature", properties: { layer: "text-boxes", text: label, textColor: "#5a3000", textSize: 12, textHalo: "#ffffff" }, geometry: { type: "Point", coordinates: lp } });
+            if (lp) buckets["text-boxes"]!.push({ type: "Feature", properties: { layer: "text-boxes", text: label, textColor: this.style.control.text.color, textSize: 12, textHalo: this.style.control.text.halo }, geometry: { type: "Point", coordinates: lp } });
           };
           lvlHandle(flv, "fl", `FL${String(Math.round(flv)).padStart(3, "0")}`);
           if (showExt) {
@@ -796,6 +1089,7 @@ export class SigwxDraw {
         });
       }
     }
+
   }
 
   /** The dense planar path (smoothed if needed) used for slider placement. */
@@ -809,14 +1103,22 @@ export class SigwxDraw {
   // ── pointer & keyboard ─────────────────────────────────────────────────────
 
   private onKey(e: KeyboardEvent): void {
-    if (this.mode !== "drawing") return;
-    if (e.key === "Enter") {
+    if (this.mode === "drawing") {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        this.finalizeDrawing();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        this.cancelDrawing();
+        this.renderAll();
+      }
+      return;
+    }
+    // Delete the SELECTED feature with Backspace (the Mac "delete" key) or Delete — but
+    // never while typing in a field (the listener is on window).
+    if ((e.key === "Backspace" || e.key === "Delete") && this.selectedId && !isEditableTarget()) {
       e.preventDefault();
-      this.finalizeDrawing();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      this.cancelDrawing();
-      this.renderAll();
+      this.delete(this.selectedId);
     }
   }
 
@@ -856,6 +1158,15 @@ export class SigwxDraw {
     }
   }
 
+  /** Screen offset between the grab point and the call-out box centre at mousedown, so a
+   *  call-out drag keeps the grabbed spot under the cursor instead of snapping its centre. */
+  private calloutGrab(featureId: string, at: { lon: number; lat: number }): [number, number] {
+    const boxLL = this.placedAt.get(featureId);
+    const boxPx = boxLL ? this.adapter.project({ lon: boxLL[0], lat: boxLL[1] }) : null;
+    const cur = this.adapter.project(at);
+    return boxPx && cur ? [cur[0] - boxPx[0], cur[1] - boxPx[1]] : [0, 0];
+  }
+
   private onDown(ev: PointerEvent): void {
     if (this.mode === "drawing") {
       if (this.isFreehand() && this.drawing) {
@@ -882,14 +1193,51 @@ export class SigwxDraw {
         this.dragTarget = { kind: "speed", featureId, index: this.selectedSub };
       } else if (hClass === "control" && (role === "fl" || role === "top" || role === "base") && this.selectedSub != null) {
         this.dragTarget = { kind: "level", featureId, index: this.selectedSub, field: role };
+      } else if (hClass === "control" && (role === "mTop" || role === "mBase")) {
+        this.dragTarget = { kind: "metaLevel", featureId, field: role === "mTop" ? "topFL" : "baseFL" };
+      } else if (hClass === "control" && role === "anchor") {
+        this.dragTarget = { kind: "anchor", featureId };
+      } else if (hClass === "toggle") {
+        const ef = this.registry.get(this.doc.get(featureId)!.properties.phenomenon).schema.find((s) => s.key === role);
+        const options = ef && ef.type === "enum" ? ef.options.map((o) => String(o.value)) : [];
+        this.dragTarget = { kind: "toggle", featureId, field: role, options };
       }
+      // Only seize the pointer if a drag was actually armed — a control handle hit with
+      // no selected sub-item arms nothing, and must NOT leave pan disabled (onUp returns
+      // early on a null dragTarget, so pan would stay stuck off).
+      if (this.dragTarget) {
+        this.didDrag = false;
+        this.adapter.setPanEnabled(false);
+      }
+    } else if (hit.overlay === "symbols" && typeof featureId === "string") {
+      // The call-out glyph: DRAG it to reposition the call-out (the indicator —
+      // the leader keeps pointing at the zone); CLICK it (no drag) to cycle its
+      // symbol enum (e.g. MOD ↔ SEV).
+      const f = this.doc.get(featureId);
+      const ef = f && this.registry.get(f.properties.phenomenon).schema.find((s) => s.type === "enum");
+      const toggle = ef && ef.type === "enum" ? { field: ef.key, options: ef.options.map((o) => String(o.value)) } : undefined;
+      this.dragTarget = { kind: "callout", featureId, labelId: String(hit.props["labelId"] ?? "l"), grab: this.calloutGrab(featureId, ev.lngLat), ...(toggle ? { toggle } : {}) };
       this.didDrag = false;
       this.adapter.setPanEnabled(false);
+    } else if (hit.overlay === "controls" && typeof featureId === "string") {
+      // The ✕ delete control (see renderSelection) → remove the feature, don't arm a drag.
+      this.delete(featureId);
+      return;
     } else if (hit.overlay === "text-boxes" && typeof featureId === "string") {
-      const labelId = String(hit.props["labelId"] ?? "l");
-      this.dragTarget = { kind: "callout", featureId, labelId };
+      // The call-out label → reposition the call-out (the indicator).
+      this.dragTarget = { kind: "callout", featureId, labelId: String(hit.props["labelId"] ?? "l"), grab: this.calloutGrab(featureId, ev.lngLat) };
       this.didDrag = false;
       this.adapter.setPanEnabled(false);
+    } else if ((hit.overlay === "edge" || hit.overlay === "area-fill") && typeof featureId === "string") {
+      // Grab the body of an area (its dashed edge or fill) → move the whole zone.
+      // Vertices sit on top (handles overlay) so they still win for reshaping.
+      const f = this.doc.get(featureId);
+      if (f && f.geometry.type === "Polygon") {
+        if (featureId !== this.selectedId) this.select(featureId);
+        this.dragTarget = { kind: "translate", featureId, lastPx: this.adapter.project(ev.lngLat) ?? [0, 0] };
+        this.didDrag = false;
+        this.adapter.setPanEnabled(false);
+      }
     }
   }
 
@@ -914,7 +1262,16 @@ export class SigwxDraw {
     const f = this.doc.get(t.featureId);
     if (!f) return;
     if (t.kind === "vertex") {
-      setVertex(f.geometry, t.index, [ev.lngLat.lon, ev.lngLat.lat]);
+      if (f.geometry.type === "Polygon") {
+        // Constrain the zone to a SIMPLE polygon: apply the move, but undo it if it makes
+        // an edge cross another (the vertex then "sticks" at the edge of validity).
+        const v = f.geometry.coordinates[0]?.[t.index];
+        const prev = v ? ([...v] as Position) : null;
+        setVertex(f.geometry, t.index, [ev.lngLat.lon, ev.lngLat.lat]);
+        if (prev && !isSimpleRing(coordsOf(f.geometry))) setVertex(f.geometry, t.index, prev);
+      } else {
+        setVertex(f.geometry, t.index, [ev.lngLat.lon, ev.lngLat.lat]);
+      }
     } else if (t.kind === "slider") {
       const def = this.registry.get(f.properties.phenomenon);
       const lf = listFieldOf(def);
@@ -998,7 +1355,8 @@ export class SigwxDraw {
           const c = this.adapter.project({ lon: ptLL[0]!, lat: ptLL[1]! });
           const cur = this.adapter.project(ev.lngLat);
           if (c && cur) {
-            let level = Math.max(0, Math.min(630, Math.round((this.flRef + (c[1] - cur[1]) / FL_PX) / 5) * 5));
+            const { lo, hi } = this.flGaugeRange(f.properties.phenomenon, t.field);
+            let level = Math.max(lo, Math.min(hi, Math.round((this.flRef + (c[1] - cur[1]) / FL_PX) / 5) * 5));
             // The core FL is always inside the ≥80 layer → keep top ≥ FL ≥ base.
             const flCore = typeof item["fl"] === "number" ? (item["fl"] as number) : 300;
             if (t.field === "fl") {
@@ -1013,11 +1371,41 @@ export class SigwxDraw {
           }
         }
       }
+    } else if (t.kind === "metaLevel") {
+      // Area FL gauge sits at the call-out → map screen y relative to that box.
+      const at = this.placedAt.get(t.featureId);
+      const bc = at ? this.adapter.project({ lon: at[0], lat: at[1] }) : null;
+      const cur = this.adapter.project(ev.lngLat);
+      if (bc && cur) {
+        // Clamp to the field's chart bounds; a 5-FL "XXX" notch past a bound is allowed only
+        // when that side's `beyond` is "xxx" (areas default to xxx, so base→min−5, top→max+5).
+        const { lo, hi } = this.flGaugeRange(f.properties.phenomenon, t.field);
+        let level = Math.max(lo, Math.min(hi, Math.round((this.flRef + (bc[1] - cur[1]) / FL_PX) / 5) * 5));
+        const m = f.properties.metadata;
+        if (t.field === "topFL") level = Math.max(level, typeof m["baseFL"] === "number" ? (m["baseFL"] as number) : lo);
+        else level = Math.min(level, typeof m["topFL"] === "number" ? (m["topFL"] as number) : hi);
+        m[t.field] = level;
+      }
     } else if (t.kind === "callout") {
       const req = this.lastAnnReqs.find((r) => r.featureId === t.featureId && r.labelId === t.labelId);
       const anchorPx = req ? this.adapter.project(req.anchor) : null;
       const cursorPx = this.adapter.project(ev.lngLat);
-      if (anchorPx && cursorPx) this.pins.set(`${t.featureId}:${t.labelId}`, { dx: cursorPx[0] - anchorPx[0], dy: cursorPx[1] - anchorPx[1] });
+      // Place the box centre at (cursor − grab) so the grabbed spot stays under the cursor
+      // (no first-move jump), then express that as the pin offset from the anchor.
+      if (anchorPx && cursorPx) this.pins.set(`${t.featureId}:${t.labelId}`, { dx: cursorPx[0] - t.grab[0] - anchorPx[0], dy: cursorPx[1] - t.grab[1] - anchorPx[1] });
+    } else if (t.kind === "anchor") {
+      // Move the leader's anchor (the arrow tip), kept inside the zone (clamped to the ring).
+      this.anchorPins.set(t.featureId, clampInRing([ev.lngLat.lon, ev.lngLat.lat], coordsOf(f.geometry)));
+    } else if (t.kind === "translate") {
+      // Move every vertex by the cursor's SCREEN delta (project → +px → unproject)
+      // so the shape stays rigid on screen — in mercator AND globe (a lon/lat delta
+      // would distort it under the globe's curvature). Call-out + FL gauge re-place
+      // from the new geometry, so they follow along.
+      const cur = this.adapter.project(ev.lngLat);
+      if (cur) {
+        this.translateScreen(f.geometry, cur[0] - t.lastPx[0], cur[1] - t.lastPx[1]);
+        t.lastPx = cur;
+      }
     }
     this.didDrag = true;
     this.scheduleRender();
@@ -1033,6 +1421,10 @@ export class SigwxDraw {
     if (!t) return;
     this.dragTarget = null;
     this.adapter.setPanEnabled(true);
+    // Reset the drag flag on EVERY release (a trailing "click" isn't guaranteed — e.g.
+    // the pointer leaving the map, or a future adapter — else the next click is swallowed).
+    const dragged = this.didDrag;
+    this.didDrag = false;
     // A data point dragged off the line and released is deleted.
     if (t.kind === "slider" && this.willDelete) {
       const f = this.doc.get(t.featureId);
@@ -1046,10 +1438,53 @@ export class SigwxDraw {
     }
     this.dragFree = null;
     this.willDelete = false;
-    if (this.didDrag) {
+    // A glyph clicked (not dragged) cycles its enum value (e.g. MOD ↔ SEV). The
+    // symbol arms a `callout` (drag = reposition the call-out) that carries the
+    // toggle for the click case; a handle "toggle" carries it directly.
+    const toggle = t.kind === "toggle" ? { field: t.field, options: t.options } : t.kind === "callout" ? t.toggle : undefined;
+    if (toggle && !dragged && toggle.options.length) {
+      const f = this.doc.get(t.featureId);
+      if (f) {
+        const cur = String(f.properties.metadata[toggle.field] ?? toggle.options[0]);
+        const i = toggle.options.indexOf(cur);
+        f.properties.metadata[toggle.field] = toggle.options[(i + 1) % toggle.options.length]!;
+        this.renderAll();
+        this.emitChange();
+        if (this.selectedId) this.emitMetadata();
+        return;
+      }
+    }
+    if (dragged) {
       this.renderAll();
       this.emitChange();
       if (this.selectedId) this.emitMetadata();
+    }
+  }
+
+  /** Shift every vertex by a SCREEN delta (project → +px → unproject) — rigid on screen. */
+  private translateScreen(geom: Geometry, dx: number, dy: number): void {
+    const shift = (p: Position): void => {
+      const px = this.adapter.project({ lon: p[0]!, lat: p[1]! });
+      if (!px) return;
+      const ll = this.adapter.unproject([px[0] + dx, px[1] + dy]);
+      if (ll) {
+        p[0] = ll.lon;
+        p[1] = ll.lat;
+      }
+    };
+    if (geom.type === "Point") shift(geom.coordinates);
+    else if (geom.type === "LineString") geom.coordinates.forEach(shift);
+    else if (geom.type === "Polygon") {
+      for (const ring of geom.coordinates) {
+        // A closed ring repeats its first vertex as the last (often the SAME array
+        // reference) — shift each unique vertex once, then re-close, so the closing
+        // point isn't double-shifted (which made one vertex drift chaotically).
+        const n = ring.length;
+        const closed = n > 1 && samePoint(ring[0]!, ring[n - 1]!);
+        const count = closed ? n - 1 : n;
+        for (let i = 0; i < count; i++) shift(ring[i]!);
+        if (closed) ring[n - 1] = [ring[0]![0]!, ring[0]![1]!];
+      }
     }
   }
 
@@ -1086,11 +1521,13 @@ export class SigwxDraw {
 
   /** Apply per-phenomenon limit overrides to a schema's number fields (recurses into lists). */
   private withLimits(type: string, schema: FieldSchema[]): FieldSchema[] {
-    const ov = this.limits[type];
-    if (!ov) return schema;
+    const cfg = this.phenomena[type];
+    if (!cfg) return schema;
     return schema.map((s) => {
-      if (s.type === "number" && ov[s.key]) {
-        const o = ov[s.key]!;
+      // `flightLevel` bounds every FL field (turbulence top+base share one range);
+      // `speed` bounds the wind-speed field. Both flat on the config — no wrapper.
+      const o = s.type === "fl" ? cfg.flightLevel : s.key === "speed" ? cfg.speed : undefined;
+      if (o) {
         return { ...s, ...(o.min != null ? { min: o.min } : {}), ...(o.max != null ? { max: o.max } : {}) };
       }
       if (s.type === "list") return { ...s, itemSchema: this.withLimits(type, s.itemSchema) };
@@ -1103,8 +1540,52 @@ export class SigwxDraw {
     for (const s of this.withLimits(def.type, def.schema)) {
       const f = s.key === key ? s : s.type === "list" ? s.itemSchema.find((x) => x.key === key) : undefined;
       if (f && f.type === "number") return { min: f.min ?? 80, max: f.max ?? 250 };
+      if (f && f.type === "fl") return { min: f.min ?? 250, max: f.max ?? 600 };
     }
     return { min: 80, max: 250 };
+  }
+
+  /** Off-chart behaviour for a phenomenon's FL bound (config beyond overrides the def default). */
+  private flBeyond(type: string, side: 0 | 1): FlMode {
+    const c = this.phenomena[type]?.flightLevel?.beyond;
+    if (c) return c[side];
+    return this.registry.get(type).flBeyond?.[side] ?? "clamp";
+  }
+
+  /** Effective FL config handed to a phenomenon's decorate (chart bounds + resolved beyond). */
+  private flResolved(type: string): { min?: number; max?: number; beyond: [FlMode, FlMode] } {
+    const c = this.phenomena[type]?.flightLevel;
+    return {
+      ...(c?.min != null ? { min: c.min } : {}),
+      ...(c?.max != null ? { max: c.max } : {}),
+      beyond: [this.flBeyond(type, 0), this.flBeyond(type, 1)],
+    };
+  }
+
+  /** FL gauge clamp range for a field: its bounds, widened by a 5-FL "XXX" notch on a side
+   *  whose `beyond` is "xxx" (a `base` field uses below-min, a `top` field above-max). */
+  private flGaugeRange(type: string, field: string): { lo: number; hi: number } {
+    const lim = this.numLimit(this.registry.get(type), field);
+    const lo = /base/i.test(field) && this.flBeyond(type, 0) === "xxx" ? lim.min - 5 : lim.min;
+    const hi = /top/i.test(field) && this.flBeyond(type, 1) === "xxx" ? lim.max + 5 : lim.max;
+    return { lo, hi };
+  }
+
+  /** Apply `flightLevel.default` to a freshly-built metadata: by order onto the top-level FL
+   *  fields (`[base, top]`), or onto every break point's core FL for a list-based jet. */
+  private applyFlDefault(type: string, metadata: Metadata): void {
+    const d = this.phenomena[type]?.flightLevel?.default;
+    if (d == null) return;
+    const arr = Array.isArray(d) ? d : [d];
+    let i = 0;
+    for (const s of this.registry.get(type).schema) {
+      if (s.type === "fl" && arr[i] != null) metadata[s.key] = arr[i++]!;
+      else if (s.type === "list") {
+        const core = s.itemSchema.find((x) => x.type === "fl");
+        const items = metadata[s.key];
+        if (core && arr[0] != null && Array.isArray(items)) for (const it of items) (it as Metadata)[core.key] = arr[0];
+      }
+    }
   }
 
   private buildFormSpec(id: string): FormSpec | null {
@@ -1169,15 +1650,25 @@ export class SigwxDraw {
     const items: ToolbarItem[] = defs.map((def) => ({
       id: def.type,
       title: def.label,
-      label: SHORT[def.type] ?? def.label,
       ...(def.icon ? { svg: def.icon } : {}),
       toggle: true,
-      onClick: () => this.addPhenomenon(def.type),
+      onClick: () => this.draw(def.type),
     }));
     if (options.clear !== false) {
-      items.push({ id: "clear", title: "Clear all", label: "✕", onClick: () => this.clear() });
+      items.push({ id: "clear", title: "Clear all", svg: CLEAR_ICON, onClick: () => this.clear() });
     }
-    this.adapter.addToolbar(items, options);
+    // `items` are ALREADY filtered/ordered by `options.tools` above — don't let the adapter
+    // re-apply that filter (it would also drop the clear + snapshot chrome buttons, whose
+    // ids aren't in `tools`). Pass the toolbar options WITHOUT `tools`.
+    const adapterOpts: ToolbarOptions = { ...options };
+    delete adapterOpts.tools;
+    // Hide the editing chrome for a clean capture, unless the host's own `snapshot` object
+    // already sets `hideOverlays` (theirs wins). Skip when the button is hidden.
+    const snap = adapterOpts.snapshot;
+    if (snap !== "none" && snap !== false && snap !== null) {
+      adapterOpts.snapshot = { hideOverlays: SNAPSHOT_HIDE, ...(typeof snap === "object" ? snap : {}) };
+    }
+    this.adapter.addToolbar(items, adapterOpts);
   }
 }
 
@@ -1200,6 +1691,9 @@ function toAnnReq(featureId: string, feat: RenderFeature): AnnReq {
     anchor: { lon: c[0]!, lat: c[1]! },
     content: p.content ?? p.text ?? "",
     leader: p.leader !== false,
+    ...(p.arrow ? { arrow: true } : {}),
+    ...(p.symbol ? { symbol: p.symbol } : {}),
+    ...(p.symbolColor ? { symbolColor: p.symbolColor } : {}),
     textColor: p.textColor ?? "#111",
     textSize: p.textSize ?? 13,
     textHalo: p.textHalo ?? "#fff",
