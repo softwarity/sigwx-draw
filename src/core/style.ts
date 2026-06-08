@@ -28,7 +28,7 @@ export interface TooltipStyle {
 export interface TextStyle { color?: string; halo?: string; size?: number; background?: string }
 /** Area boundary. `decorator` only *selects* the treatment (solid/dashed); a scalloped
  *  edge is real geometry from `core/decorate`, so "scallop" just draws solid over it. */
-export interface EdgeStyle { color?: string; width?: number; dash?: number[]; decorator?: "scallop" | "dashed" | "plain" }
+export interface EdgeStyle { color?: string; width?: number; dash?: number[]; decorator?: "scallop" | "dashed" | "plain"; scallopSide?: "out" | "in" }
 /** Area fill — colour (defaults to the resolved ink) + opacity. */
 export interface AreaStyle { color?: string; opacity?: number }
 /** Symbols-layer glyph. */

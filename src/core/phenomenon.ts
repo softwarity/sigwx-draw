@@ -68,6 +68,11 @@ export interface RenderProps {
   leader?: boolean;
   /** Draw an arrowhead at the anchor end of the call-out leader. */
   arrow?: boolean;
+  /** Schema enum key to cycle when the call-out BOX is tapped (on-map carousel) — used when
+   *  the coverage/type lives in the box text itself (CB) rather than a separate glyph. */
+  cycleField?: string;
+  /** Leader style: "lightning" → a zigzag bolt attaching under the box (convective/CB). */
+  leaderStyle?: string;
   kind?: string;
 }
 
@@ -89,6 +94,8 @@ export interface DecorationInput {
   /** Effective chart FL range (`phenomena[type].flightLevel`). `beyond[below-min, above-max]`
    *  decides per bound whether an off-chart value renders as "XXX" or is clamped. */
   flightLevel?: { min?: number; max?: number; beyond?: [FlMode, FlMode] } | undefined;
+  /** CB-only: `false` → a plain straight leader; `true`/undefined → the lightning-bolt leader. */
+  leaderThunderbolt?: boolean | undefined;
 }
 
 /**

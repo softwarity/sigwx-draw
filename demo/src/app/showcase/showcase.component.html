@@ -17,23 +17,28 @@ const sigwx = new SigwxDraw({
   adapter: new ${adapter}({ map }),
 ${tbOff}  toolbar: {
     position: "${tbPosition}",
-    snapshot: {                          // 📷 capture button — defaults: native / download (Leaflet: disabled)
-${snapQ}      quality: "${snapQuality}",          // native | low | medium | high
-${snapClick}      onClick: "${snapClickVal}",         // download | clipboard — ⌘/Ctrl-click does the other
-      shutter: ${snapShutterVal},         // camera-flash feedback on capture
+    // 📷 capture button — defaults: native / download (Leaflet: disabled)
+    snapshot: {
+      // native | low | medium | high
+${snapQ}      quality: "${snapQuality}",
+      // download | clipboard — ⌘/Ctrl-click does the other
+${snapClick}      onClick: "${snapClickVal}",
+      // camera-flash feedback on capture
+      shutter: ${snapShutterVal},
     },
   },${/tbOff}
   style: {
-${selection}    selection: { color: "${selColor}", width: ${selWidth} },${/selection}
-${handle}    handle: { fill: "${handleFill}", stroke: "${handleStroke}" },${/handle}
+${selection}    selection: { color: "${selColor}", width: ${selWidth} },
+${handle}    handle: { fill: "${handleFill}", stroke: "${handleStroke}" },
 ${control}    control: {
       line:   { color: "${ctlLineColor}", width: ${ctlLineW} },
       handle: { fill: "${ctlFill}", stroke: "${ctlStroke}" },
       text:   { color: "${ctlTextColor}", halo: "${ctlHalo}" },
     },${/control}
-${tooltip}    tooltip: { color: "${tipColor}", background: "${tipBg}", fontSize: ${tipSize} },${/tooltip}
+${tooltip}    tooltip: { color: "${tipColor}", background: "${tipBg}", fontSize: ${tipSize} },
   },
-  phenomena: { … },                // see the cards below
+  // see the cards below
+  phenomena: { … },
 });</textarea>
         <code-binding key="adapter" type="select" options="MapLibreAdapter,OpenLayersAdapter,LeafletAdapter" [value]="adapterName()" carousel></code-binding>
         <code-binding key="mapImport" type="readonly" [value]="mapImport()"></code-binding>
@@ -88,8 +93,11 @@ ${tooltip}    tooltip: { color: "${tipColor}", background: "${tipBg}", fontSize:
       <interactive-code language="typescript" show-copy>
         <textarea>phenomena: {
   jetStream: {
-${jLim}    speed: { min: ${jMin}, max: ${jMax} },${/jLim}
-${jFL}    flightLevel: { min: ${jFLMin}, max: ${jFLMax}, default: ${jFLDef} },${/jFL}
+${jLim}    speed: { min: ${jMin}, max: ${jMax} },
+${jFL}    flightLevel: {
+      min: ${jFLMin}, max: ${jFLMax},
+      default: ${jFLDef},
+    },${/jFL}
 ${jOn}    style: {
       arrow: { color: "${jColor}", width: ${jWidth} },
       text: { color: "${jText}", halo: "${jHalo}" },
@@ -116,14 +124,21 @@ ${jOn}    style: {
       <interactive-code language="typescript" show-copy>
         <textarea>phenomena: {
   turbulence: {
-${tLim}    // FL range + default [base, top] + per-bound off-chart mode ("clamp" | "xxx"):
-    flightLevel: { min: ${tMin}, max: ${tMax}, default: [${tBase}, ${tTop}], beyond: ["${tBeyLo}", "${tBeyHi}"] },${/tLim}
+    // FL range + default [base, top] + per-bound off-chart mode ("clamp" | "xxx")
+${tLim}    flightLevel: {
+      min: ${tMin}, max: ${tMax},
+      default: [${tBase}, ${tTop}],
+      beyond: ["${tBeyLo}", "${tBeyHi}"],
+    },${/tLim}
 ${tOn}    style: {
-      mod: { color: "${tMod}" },   // MOD ink (lighter)
-      sev: { color: "${tSev}" },   // SEV ink (darker) — drives edge + fill + glyph + FL text
+      // MOD ink (lighter)
+      mod: { color: "${tMod}" },
+      // SEV ink (darker) — drives edge + fill + glyph + FL text
+      sev: { color: "${tSev}" },
       edge: { width: ${tEdgeW}, dash: [${tDashOn}, ${tDashGap}] },
       area: { opacity: ${tAreaOp} },
-      text: { halo: "${tHalo}" },   // colour follows mod/sev; halo = readability
+      // colour follows mod/sev; halo = readability
+      text: { halo: "${tHalo}" },
     },${/tOn}
   },
 },</textarea>
@@ -142,6 +157,42 @@ ${tOn}    style: {
         <code-binding key="tDashGap" type="number" value="3" min="0" max="12" step="1"></code-binding>
         <code-binding key="tAreaOp" type="number" value="0.2" min="0" max="0.6" step="0.05"></code-binding>
         <code-binding key="tHalo" type="color" value="#fff8c5"></code-binding>
+      </interactive-code>
+    </div>
+
+    <div class="pheno-card" (change)="onPhenoChange('cb', $event)">
+      <header><span class="ic" [innerHTML]="icon('cb')"></span> Cumulonimbus (CB)</header>
+      <interactive-code language="typescript" show-copy>
+        <textarea>phenomena: {
+  cb: {
+    // Extra coverage amounts → appended to the OCNL/FRQ carousel:
+${cExtra}    extraCoverages: ["ISOL EMBD", "OCNL EMBD"],
+    // ⚡ lightning leader (false → plain straight)
+    leaderThunderbolt: ${cBolt},
+    // FL range + default [base, top] + per-bound off-chart mode ("clamp" | "xxx")
+${cFL}    flightLevel: {
+      min: ${cMin}, max: ${cMax},
+      default: [${cBase}, ${cTop}],
+      beyond: ["${cBeyLo}", "${cBeyHi}"],
+    },${/cFL}
+${cOn}    style: {
+      edge: { color: "${cEdge}" },
+      area: { opacity: ${cAreaOp} },
+    },${/cOn}
+  },
+},</textarea>
+        <code-binding key="cBolt" type="boolean" value="true"></code-binding>
+        <code-binding key="cExtra" type="comment" value="false"></code-binding>
+        <code-binding key="cFL" type="comment" value="false"></code-binding>
+        <code-binding key="cMin" type="number" value="200" min="100" max="300" step="10"></code-binding>
+        <code-binding key="cMax" type="number" value="550" min="400" max="630" step="10"></code-binding>
+        <code-binding key="cBase" type="number" value="220" min="200" max="400" step="10"></code-binding>
+        <code-binding key="cTop" type="number" value="380" min="300" max="600" step="10"></code-binding>
+        <code-binding key="cBeyLo" type="select" options="clamp,xxx" value="xxx"></code-binding>
+        <code-binding key="cBeyHi" type="select" options="clamp,xxx" value="xxx"></code-binding>
+        <code-binding key="cOn" type="comment" value="false"></code-binding>
+        <code-binding key="cEdge" type="color" value="#e8590c"></code-binding>
+        <code-binding key="cAreaOp" type="number" value="0.18" min="0" max="0.5" step="0.02"></code-binding>
       </interactive-code>
     </div>
   </div>

@@ -17,14 +17,9 @@ export interface ScallopOptions {
   amplitude: number;
   /** Points sampled per bump (higher = rounder). Default 6. */
   samplesPerBump?: number;
-}
-
-function signedArea(planar: Pt[]): number {
-  let a = 0;
-  for (let i = 0; i + 1 < planar.length; i++) {
-    a += planar[i]![0] * planar[i + 1]![1] - planar[i + 1]![0] * planar[i]![1];
-  }
-  return a / 2;
+  /** Flip the bumps to point INWARD (into the area) instead of outward (the default).
+   *  Outward is the cloud-edge convention; inward suits an interior ring (a hole). */
+  invert?: boolean;
 }
 
 /** Right-hand perpendicular (90° CW) of a unit vector. */
@@ -45,12 +40,16 @@ export function scallopRing(ring: Position[], opts: ScallopOptions): Position[] 
 
   const k = frameK(pts);
   const planar = pts.map((c) => toPlanar(c, k));
-  // Exterior ring (CCW, area > 0) ⇒ outward is to the right; flip for CW.
-  const outSign = signedArea(planar) > 0 ? 1 : -1;
+  // Bumps point AWAY from the ring's centroid → reliably OUTWARD whatever the draw winding
+  // (freehand is CW or CCW unpredictably, so a signed-area test isn't enough — the user sees
+  // it flip with their stroke direction). `invert` flips them inward (e.g. a hole). Per-edge,
+  // so each bump faces out — fine for the convex-ish areas SIGWX draws.
+  const n = planar.length;
+  const cx = planar.reduce((s, p) => s + p[0], 0) / n;
+  const cy = planar.reduce((s, p) => s + p[1], 0) / n;
   const S = Math.max(2, opts.samplesPerBump ?? 6);
 
   const out: Pt[] = [];
-  const n = planar.length;
   for (let i = 0; i < n; i++) {
     const a = planar[i]!;
     const b = planar[(i + 1) % n]!;
@@ -58,7 +57,10 @@ export function scallopRing(ring: Position[], opts: ScallopOptions): Position[] 
     const segLen = len(seg);
     if (segLen === 0) continue;
     const dir = unit(seg);
-    const outward = scale(perpRight(dir), outSign * opts.amplitude);
+    const mid: Pt = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    let nrm = perpRight(dir);
+    if (nrm[0] * (mid[0] - cx) + nrm[1] * (mid[1] - cy) < 0) nrm = [-nrm[0], -nrm[1]]; // face away from centroid
+    const outward = scale(nrm, (opts.invert ? -1 : 1) * opts.amplitude);
     const nBumps = Math.max(1, Math.round(segLen / opts.wavelength));
     for (let bump = 0; bump < nBumps; bump++) {
       for (let s = 1; s <= S; s++) {

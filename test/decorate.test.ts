@@ -218,12 +218,24 @@ describe("cb / turbulence", () => {
     expect(x).toBeCloseTo(1, 5);
     expect(y).toBeCloseTo(1, 5); // NOT 0.8 (the density-skewed vertex mean)
   });
-  it("CB emits a scalloped fill + edge + call-out", () => {
-    const fs = cb.decorate({ geometry: poly, metadata: { coverage: "OCNL", embedded: true, topFL: 350, baseFL: 100 }, style: cb.style });
+  it("CB emits a scalloped fill + edge + a single call-out box (coverage / CB / top / base, tap to cycle)", () => {
+    const fs = cb.decorate({ geometry: poly, metadata: { coverage: "OCNL", topFL: 350, baseFL: 100 }, style: cb.style });
     expect(byLayer(fs, "area-fill").length).toBe(1);
     expect(byLayer(fs, "edge").length).toBe(1);
-    const labels = byLayer(fs, "annotations");
-    expect(labels.some((f) => String(f.properties.content).includes("EMBD OCNL CB"))).toBe(true);
+    const ann = byLayer(fs, "annotations")[0]!;
+    expect(ann.properties.arrow).toBe(true);
+    expect(ann.properties.cycleField).toBe("coverage"); // tap the box → cycle the coverage enum
+    const content = String(ann.properties.content);
+    expect(content).toContain("OCNL"); // coverage — in the box itself now
+    expect(content).toContain("CB");
+    expect(content).toContain("FL350"); // top in range
+    expect(content).toContain("XXX"); // base 100 < FL250 floor → XXX
+    expect(ann.properties.textColor).toBe("#1f2328"); // black & white panel (the scallop stays red)
+  });
+  it("CB stacks a multi-word coverage onto its own lines (EMBD → one line more)", () => {
+    const fs = cb.decorate({ geometry: poly, metadata: { coverage: "OCNL EMBD", topFL: 350, baseFL: 300 }, style: cb.style });
+    const content = String(byLayer(fs, "annotations")[0]!.properties.content);
+    expect(content).toContain("OCNL\nEMBD\nCB"); // the space splits → "EMBD" on its own line, above CB
   });
   it("turbulence shows the FL range, with XXX when a bound runs off the chart (base < min / top > max)", () => {
     const fs = turbulence.decorate({ geometry: poly, metadata: { symbol: "SEV", topFL: 360, baseFL: 200 }, style: turbulence.style });
@@ -268,7 +280,7 @@ describe("cb / turbulence", () => {
 describe("metadata defaults & validation", () => {
   it("builds defaults from the schema", () => {
     const m = defaultMetadata(cb);
-    expect(m).toMatchObject({ coverage: "ISOL", embedded: false, topFL: 350, baseFL: 100 });
+    expect(m).toMatchObject({ coverage: "OCNL", baseFL: 250, topFL: 400 });
   });
   it("flags an invalid enum value", () => {
     const errors = validate(cb, { coverage: "BOGUS" });

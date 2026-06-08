@@ -27,6 +27,11 @@ export interface AnnReq {
   leader: boolean;
   /** Draw an arrowhead at the anchor end of the leader (call-out pointing to a zone). */
   arrow?: boolean;
+  /** Schema enum key cycled when the box is TAPPED (on-map carousel) — when the type lives
+   *  in the box text (CB) rather than a separate glyph. Carried onto the text-box feature. */
+  cycleField?: string;
+  /** "lightning" → a zigzag bolt leader attaching UNDER the box (convective/CB). */
+  leaderStyle?: string;
   /** Keep the box at least this many px from the anchor (clears an area's extent). */
   avoidRadius?: number;
   /** Optional sprite glyph shown just above the box (e.g. the turbulence severity). */
@@ -82,6 +87,32 @@ function contains(r: Rect, x: number, y: number): boolean {
 }
 
 const key = (a: AnnReq): string => `${a.featureId}:${a.labelId}`;
+
+/** A lightning-bolt (⚡, a "Z") polyline from `a` to `b` (planar px) — the CB convective leader.
+ *  THREE segments: forward along the axis to mid-way, then a diagonal that BACKTRACKS by ~1/12 of
+ *  the length to the LEFT (a square "Z" kink), then forward again to the tip. Returns lon/lat. */
+function lightningPath(a: [number, number], b: [number, number], proj: Projector): [number, number][] {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
+  const lx = uy; // LEFT perpendicular of the a→b travel (screen y-down)
+  const ly = -ux;
+  const k = len / 12; // backtrack + sideways = 1/12 of the length → "le N forme un carré"
+  const mx = a[0] + dx * 0.5; // mid-way
+  const my = a[1] + dy * 0.5;
+  const h = k / 2;
+  // P1 forward-right of mid, P2 back-left of mid → the diagonal P1→P2 goes back + left.
+  const P1: [number, number] = [mx + (ux - lx) * h, my + (uy - ly) * h];
+  const P2: [number, number] = [mx - (ux - lx) * h, my - (uy - ly) * h];
+  const out: [number, number][] = [];
+  for (const q of [a, P1, P2, b] as [number, number][]) {
+    const ll = proj.unproject(q);
+    if (ll) out.push([ll.lon, ll.lat]);
+  }
+  return out;
+}
 
 export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<string, Pin>): Placed {
   const boxes: RenderFeature[] = [];
@@ -141,6 +172,7 @@ export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<stri
       textHalo: req.textHalo,
       textBackground: req.textBackground,
       textBorder: req.textBorder,
+      ...(req.cycleField ? { cycleField: req.cycleField } : {}),
     };
     boxes.push({ type: "Feature", properties: props, geometry: { type: "Point", coordinates: [centerLL.lon, centerLL.lat] } });
 
@@ -160,7 +192,12 @@ export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<stri
     // glyph), then PAD the box end toward the anchor so the line starts clear of the
     // symbol/text instead of under them. Hidden when too short to show past that padding
     // (box sits on/at the anchor → the symbol is right on the tip).
-    const calloutPx: [number, number] = [cx, cy - h / 2];
+    // A "lightning" leader (CB) attaches at the box CENTRE (≈ just under the "CB" line) and
+    // zigzags; the default attaches at the top-centre (by the glyph) in a straight line.
+    const bolt = req.leaderStyle === "lightning";
+    // CB's box has no top glyph → attach the leader at its CENTRE (≈ under "CB"). A glyph
+    // (turbulence) sits above the box → attach at the top. Both lightning AND plain straight obey this.
+    const calloutPx: [number, number] = [cx, req.symbol ? cy - h / 2 : cy];
     const leaderLen = Math.hypot(arrowPx[0] - calloutPx[0], arrowPx[1] - calloutPx[1]) || 1;
     const ux = (arrowPx[0] - calloutPx[0]) / leaderLen;
     const uy = (arrowPx[1] - calloutPx[1]) / leaderLen;
@@ -176,7 +213,7 @@ export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<stri
       leaders.push({
         type: "Feature",
         properties: { layer: "leaders", featureId: req.featureId, stroke: req.textBorder, strokeWidth: 1 },
-        geometry: { type: "LineString", coordinates: [[arrowLL.lon, arrowLL.lat], [startLL.lon, startLL.lat]] },
+        geometry: { type: "LineString", coordinates: bolt ? lightningPath(startPx, arrowPx, proj) : [[arrowLL.lon, arrowLL.lat], [startLL.lon, startLL.lat]] },
       });
       // Arrowhead at the arrow anchor (pointing into the zone), as an open "V".
       if (req.arrow) {

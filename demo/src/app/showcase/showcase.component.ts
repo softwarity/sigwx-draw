@@ -10,7 +10,7 @@ import {
 } from "@angular/core";
 import { DomSanitizer, SafeHtml } from "@angular/platform-browser";
 import { registerInteractiveCode } from "@softwarity/interactive-code";
-import { DEFAULT_STYLE, SigwxDraw } from "@softwarity/sigwx-draw";
+import { DEFAULT_STYLE, defaultRegistry, SigwxDraw } from "@softwarity/sigwx-draw";
 import type { PhenomenonConfig, SigwxStyleInput, SnapshotDelivery, SnapshotQuality, ToolbarPosition } from "@softwarity/sigwx-draw";
 // Adapters live on dedicated subpaths so the root entry stays peer-free.
 import { MapLibreAdapter } from "@softwarity/sigwx-draw/maplibre";
@@ -32,6 +32,9 @@ import View from "ol/View";
 import { ICONS } from "./icons";
 
 registerInteractiveCode();
+
+/** The default phenomenon registry — so the cards' header icons are the SAME as the toolbar's. */
+const REGISTRY = defaultRegistry();
 
 type Engine = "maplibre" | "openlayers" | "leaflet";
 
@@ -68,6 +71,9 @@ const PHENOMENA: PhenomenonButton[] = [
 /** Europe-centred default view. */
 const CENTER: [number, number] = [2.3, 46.6];
 const ZOOM = 5;
+// MapLibre uses 512px tiles; OpenLayers/Leaflet use 256px → at the same zoom value the raster
+// engines sit ~1 level WIDER. Bump them by 1 so all three frame the same area as MapLibre.
+const RASTER_ZOOM = ZOOM + 1;
 // Each engine keeps its OWN idiomatic basemap so the three are instantly distinguishable:
 //  MapLibre → its demo vector style (no key) · OpenLayers → canonical OSM raster · Leaflet → CARTO Positron.
 const MAPLIBRE_DEMO_STYLE = "https://demotiles.maplibre.org/style.json";
@@ -87,7 +93,7 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
 
   protected readonly phenomena = PHENOMENA;
   protected readonly icon = (m: string): SafeHtml =>
-    this.sanitizer.bypassSecurityTrustHtml(ICONS[m] ?? "");
+    this.sanitizer.bypassSecurityTrustHtml(REGISTRY.has(m) ? REGISTRY.get(m).icon ?? ICONS[m] ?? "" : ICONS[m] ?? "");
 
   protected readonly engine = signal<Engine>("maplibre");
   protected readonly adapterName = signal("MapLibreAdapter");
@@ -97,7 +103,7 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
 
   /** Live GENERAL style edits (chrome: selection / handles / slider / dial / tooltip). */
   private genStyle?: SigwxStyleInput;
-  /** Per-phenomenon config (speed/flightLevel + style) from the bottom cards — the `phenomena` option. */
+  /** Per-phenomenon config (speed/flightLevel + style + extra CB coverages) from the bottom cards. */
   private phenoCfg: Record<string, PhenomenonConfig> = {};
   /** Whether the native toolbar is rendered (toggled via the block comment). */
   private toolbarOn = true;
@@ -276,13 +282,32 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
           text: { halo: col("tHalo") },
         };
       }
+    } else if (type === "cb") {
+      cfg.leaderThunderbolt = on("cBolt");
+      // Extra coverage amounts appended to the OCNL/FRQ carousel (a construction-time catalogue).
+      if (on("cExtra")) cfg.extraCoverages = ["ISOL EMBD", "OCNL EMBD"];
+      if (on("cFL")) {
+        cfg.flightLevel = {
+          min: Number(val("cMin")),
+          max: Number(val("cMax")),
+          default: [Number(val("cBase")), Number(val("cTop"))],
+          beyond: [col("cBeyLo"), col("cBeyHi")] as ["clamp" | "xxx", "clamp" | "xxx"],
+        };
+      }
+      if (on("cOn")) {
+        cfg.style = {
+          edge: { color: col("cEdge") },
+          area: { opacity: Number(val("cAreaOp")) },
+        };
+      }
     }
     this.phenoCfg = { ...this.phenoCfg, [type]: cfg };
 
     // Jet SPEED range is a construction-time option → rebuild. Every flightLevel field
     // (jet + turbulence) applies live (gauge cursors re-clamp at once); style applies live too.
-    const flKeys = ["jFL", "jFLMin", "jFLMax", "jFLDef", "tLim", "tMin", "tMax", "tBase", "tTop", "tBeyLo", "tBeyHi"];
-    if (changed === "jMin" || changed === "jMax" || changed === "jLim") void this.rebuild();
+    const flKeys = ["jFL", "jFLMin", "jFLMax", "jFLDef", "tLim", "tMin", "tMax", "tBase", "tTop", "tBeyLo", "tBeyHi", "cFL", "cMin", "cMax", "cBase", "cTop", "cBeyLo", "cBeyHi"];
+    // Jet speed + CB leaderThunderbolt/coverages are construction-time → rebuild (geometry preserved).
+    if (changed === "jMin" || changed === "jMax" || changed === "jLim" || changed === "cBolt" || changed === "cExtra") void this.rebuild();
     else if (changed && flKeys.includes(changed)) this.sigwx?.setPhenomenonFlightLevel(type, cfg.flightLevel ?? {});
     else this.sigwx?.setPhenomenonStyle(type, cfg.style ?? {});
   }
@@ -306,6 +331,9 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
     try {
       const el = this.mapEl().nativeElement;
       const eng = this.engine();
+      // Keep the current drawing across an engine switch / rebuild — capture before teardown,
+      // re-`load` it once the fresh instance is ready (same as sigmet-draw's demo).
+      const keep = this.sigwx?.save();
 
       this.teardown();
 
@@ -331,12 +359,12 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
         const map = new OlMap({
           target: el,
           layers: [new TileLayer({ source: new OSM() })],
-          view: new View({ center: fromLonLat(CENTER), zoom: ZOOM }),
+          view: new View({ center: fromLonLat(CENTER), zoom: RASTER_ZOOM }),
         });
         this.olMap = map;
         adapter = new OpenLayersAdapter({ map });
       } else {
-        const map = L.map(el).setView([CENTER[1], CENTER[0]], ZOOM);
+        const map = L.map(el).setView([CENTER[1], CENTER[0]], RASTER_ZOOM);
         L.tileLayer(LEAFLET_POSITRON, { attribution: CARTO_ATTR, subdomains: "abcd" }).addTo(map);
         this.lfMap = map;
         adapter = new LeafletAdapter({ map });
@@ -349,7 +377,7 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
         toolbar: this.toolbarOn
           ? {
               position: this.tbPos,
-              tools: ["jetStream", "turbulence"],
+              tools: ["jetStream", "cb", "turbulence"],
               snapshot: {
                 ...(this.snapQOn ? { quality: this.snapQuality as SnapshotQuality } : {}),
                 ...(this.snapClickOn ? { onClick: this.snapClickVal as SnapshotDelivery } : {}),
@@ -368,6 +396,7 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
         );
       });
       await this.sigwx.ready();
+      if (keep?.features.length) this.sigwx.load(keep); // restore the drawing on the new engine
     } catch (e) {
       console.error("[showcase] rebuild failed", e);
     }

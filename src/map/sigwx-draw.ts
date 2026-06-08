@@ -22,9 +22,11 @@ import {
   radialSortRing,
   defaultMetadata,
   defaultRegistry,
+  DEFAULT_CB_COVERAGE,
   DEFAULT_TURBULENCE_SYMBOLS,
   fromFeatureCollection,
   frameK,
+  makeCb,
   makeTurbulence,
   interactionOf,
   isVisible,
@@ -39,6 +41,7 @@ import {
   validate,
 } from "../core/index.js";
 import type {
+  CbCoverage,
   CbStyle,
   FieldSchema,
   FlMode,
@@ -117,6 +120,10 @@ export interface PhenomenonConfig {
   speed?: NumRange;
   flightLevel?: FlightLevelConfig;
   style?: Partial<PhenomenonStyle>;
+  /** CB: lightning-bolt leader (default true) vs a plain straight leader. */
+  leaderThunderbolt?: boolean;
+  /** CB: extra coverage amounts appended to the OCNL/FRQ carousel (strings or full {@link CbCoverage}). */
+  extraCoverages?: (string | CbCoverage)[];
 }
 
 /**
@@ -127,7 +134,7 @@ export interface PhenomenonConfig {
 export interface PhenomenaConfig {
   jetStream?: { speed?: NumRange; flightLevel?: FlightLevelConfig<number>; style?: Partial<JetStyle> };
   turbulence?: { flightLevel?: FlightLevelConfig<[number, number]>; style?: Partial<TurbulenceStyle> };
-  cb?: { style?: Partial<CbStyle> };
+  cb?: { flightLevel?: FlightLevelConfig<[number, number]>; style?: Partial<CbStyle>; leaderThunderbolt?: boolean; extraCoverages?: (string | CbCoverage)[] };
   [type: string]: PhenomenonConfig | undefined;
 }
 
@@ -159,6 +166,13 @@ const fc = (features: Feature[]): FeatureCollection => ({ type: "FeatureCollecti
 /** "Clear all" toolbar icon (a ✕) — `ToolbarItem` is svg-only since draw-adapter 0.2.x. */
 const CLEAR_ICON =
   '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+
+/** Fine "sync" glyph (two inverted curved arrows) drawn ON the central handle of a scalloped
+ *  phenomenon (CB): drag it to move the call-out, TAP it to flip the bumps in/out. Data-URI so
+ *  the adapter rasterises it straight onto the handle (per-feature handle icon). */
+const SYNC_ICON = `data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#1f2328" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>',
+)}`;
 /** Editing-chrome overlays hidden during a snapshot, so the PNG shows the clean chart
  *  (no selection highlight / edit + control handles). The chart decoration stays. */
 const SNAPSHOT_HIDE = ["selection", "handles", "controls"];
@@ -208,6 +222,8 @@ export class SigwxDraw {
   private readonly phenomena: Record<string, PhenomenonConfig | undefined> = {};
   /** Host-added turbulence symbols/types (beyond the default MOD/SEV), by code. */
   private turbTypes: TurbulenceType[] = [];
+  /** Host-added CB coverage amounts (beyond the default OCNL/FRQ). */
+  private cbCoverages: CbCoverage[] = [];
   private readonly readyPromise: Promise<void>;
   private readonly doc = new Map<string, SigwxFeature>();
   private order: string[] = [];
@@ -265,6 +281,11 @@ export class SigwxDraw {
       if (opts.turbulenceTypes?.length) {
         this.turbTypes = [...opts.turbulenceTypes];
         await this.applyTurbulenceCatalog();
+      }
+      const extraCov = this.phenomena["cb"]?.extraCoverages;
+      if (extraCov?.length) {
+        this.cbCoverages = extraCov.map((c) => (typeof c === "string" ? { code: c, label: c } : c));
+        this.applyCbCatalog();
       }
       this.adapter.onPointer((ev) => this.onPointer(ev));
       // Re-render on pan/zoom so screen-sized decorations (wind barbs) and the
@@ -602,6 +623,25 @@ export class SigwxDraw {
     this.renderAll();
   }
 
+  /**
+   * Append CB coverage amounts (beyond the default OCNL / FRQ) to the catalogue — the call-out
+   * box's coverage carousel cycles them. Re-call to add more (merged by `code`).
+   */
+  addCbCoverages(coverages: CbCoverage[]): void {
+    const byCode = new Map(this.cbCoverages.map((c) => [c.code, c]));
+    for (const c of coverages) byCode.set(c.code, c);
+    this.cbCoverages = [...byCode.values()];
+    this.applyCbCatalog();
+    if (this.selectedId) this.emitSelect();
+  }
+
+  /** Rebuild the CB def so its `coverage` enum carries the default OCNL/FRQ plus host-added amounts. */
+  private applyCbCatalog(): void {
+    this.registry.register(makeCb([...DEFAULT_CB_COVERAGE, ...this.cbCoverages]));
+    this.resolved.delete("cb");
+    this.renderAll();
+  }
+
   on(event: "change", cb: (fc: FeatureCollection) => void): void;
   on(event: "select", cb: (spec: FormSpec | null) => void): void;
   on(event: "metadata", cb: (spec: FormSpec) => void): void;
@@ -769,7 +809,7 @@ export class SigwxDraw {
       const f = this.doc.get(id);
       if (!f) continue;
       const def = this.registry.get(f.properties.phenomenon);
-      const features: RenderFeature[] = def.decorate({ geometry: f.geometry, metadata: f.properties.metadata, style: this.styleOf(f.properties.phenomenon), resolution, flightLevel: this.flResolved(f.properties.phenomenon) });
+      const features: RenderFeature[] = def.decorate({ geometry: f.geometry, metadata: f.properties.metadata, style: this.styleOf(f.properties.phenomenon), resolution, flightLevel: this.flResolved(f.properties.phenomenon), leaderThunderbolt: this.phenomena[f.properties.phenomenon]?.leaderThunderbolt });
       for (const feat of features) {
         feat.properties.featureId = id;
         if (feat.properties.layer === ANNOTATION_BUCKET) {
@@ -802,7 +842,11 @@ export class SigwxDraw {
     // Arrow-tip handle — only while its leader is VISIBLE, so it vanishes WITH the arrow
     // when the call-out sits over the tip (no lone handle without an arrow).
     if (selAnchor && placed.leaders.some((l) => l.properties["featureId"] === this.selectedId)) {
-      buckets["handles"]!.push({ type: "Feature", properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: "anchor" }, geometry: { type: "Point", coordinates: selAnchor } });
+      // Scalloped phenomena (CB): the central handle wears a sync glyph — drag to move, TAP to
+      // flip the bumps in/out. A white dot under the dark glyph makes it read as a button.
+      const selF = this.doc.get(this.selectedId!);
+      const scallop = !!selF && this.styleOf(selF.properties.phenomenon).edge?.decorator === "scallop";
+      buckets["handles"]!.push({ type: "Feature", properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: "anchor", ...(scallop ? { icon: SYNC_ICON, size: 0.8, fill: "#ffffff" } : {}) }, geometry: { type: "Point", coordinates: selAnchor } });
     }
 
     // Remember where each call-out box landed (lon/lat) so the area FL gauge can
@@ -1224,15 +1268,19 @@ export class SigwxDraw {
       this.delete(featureId);
       return;
     } else if (hit.overlay === "text-boxes" && typeof featureId === "string") {
-      // The call-out label → reposition the call-out (the indicator).
-      this.dragTarget = { kind: "callout", featureId, labelId: String(hit.props["labelId"] ?? "l"), grab: this.calloutGrab(featureId, ev.lngLat) };
+      // The call-out box → DRAG to reposition; or (when it carries `cycleField`) TAP to cycle
+      // that enum — e.g. CB coverage OCNL↔FRQ, whose value lives in the box text, not a glyph.
+      const cf = hit.props["cycleField"];
+      const ef = typeof cf === "string" ? this.registry.get(this.doc.get(featureId)!.properties.phenomenon).schema.find((s) => s.key === cf) : undefined;
+      const toggle = ef && ef.type === "enum" ? { field: ef.key, options: ef.options.map((o) => String(o.value)) } : undefined;
+      this.dragTarget = { kind: "callout", featureId, labelId: String(hit.props["labelId"] ?? "l"), grab: this.calloutGrab(featureId, ev.lngLat), ...(toggle ? { toggle } : {}) };
       this.didDrag = false;
       this.adapter.setPanEnabled(false);
-    } else if ((hit.overlay === "edge" || hit.overlay === "area-fill") && typeof featureId === "string") {
-      // Grab the body of an area (its dashed edge or fill) → move the whole zone.
-      // Vertices sit on top (handles overlay) so they still win for reshaping.
+    } else if ((hit.overlay === "edge" || hit.overlay === "decoration" || hit.overlay === "area-fill") && typeof featureId === "string") {
+      // Grab the body of a feature (an area's edge/fill, OR a jet's axis/barbs) → move the
+      // WHOLE feature. Vertices sit on top (handles overlay) so they still win for reshaping.
       const f = this.doc.get(featureId);
-      if (f && f.geometry.type === "Polygon") {
+      if (f && (f.geometry.type === "Polygon" || f.geometry.type === "LineString")) {
         if (featureId !== this.selectedId) this.select(featureId);
         this.dragTarget = { kind: "translate", featureId, lastPx: this.adapter.project(ev.lngLat) ?? [0, 0] };
         this.didDrag = false;
@@ -1448,6 +1496,20 @@ export class SigwxDraw {
         const cur = String(f.properties.metadata[toggle.field] ?? toggle.options[0]);
         const i = toggle.options.indexOf(cur);
         f.properties.metadata[toggle.field] = toggle.options[(i + 1) % toggle.options.length]!;
+        this.renderAll();
+        this.emitChange();
+        if (this.selectedId) this.emitMetadata();
+        return;
+      }
+    }
+    // Tap (no drag) the central handle of a scalloped phenomenon (CB) → flip the bump direction.
+    if (t.kind === "anchor" && !dragged) {
+      const f = this.doc.get(t.featureId);
+      const st = f ? this.styleOf(f.properties.phenomenon) : undefined;
+      if (f && st?.edge?.decorator === "scallop") {
+        const cur = f.properties.metadata["scallopInvert"];
+        const eff = cur != null ? Boolean(cur) : st.edge?.scallopSide === "in";
+        f.properties.metadata["scallopInvert"] = !eff;
         this.renderAll();
         this.emitChange();
         if (this.selectedId) this.emitMetadata();
@@ -1692,6 +1754,8 @@ function toAnnReq(featureId: string, feat: RenderFeature): AnnReq {
     content: p.content ?? p.text ?? "",
     leader: p.leader !== false,
     ...(p.arrow ? { arrow: true } : {}),
+    ...(p.cycleField ? { cycleField: p.cycleField } : {}),
+    ...(p.leaderStyle ? { leaderStyle: p.leaderStyle } : {}),
     ...(p.symbol ? { symbol: p.symbol } : {}),
     ...(p.symbolColor ? { symbolColor: p.symbolColor } : {}),
     textColor: p.textColor ?? "#111",

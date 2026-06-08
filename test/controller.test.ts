@@ -75,17 +75,8 @@ function stroke(sigwx: SigwxDraw, a: MockAdapter, type: string, pts: [number, nu
   return lastId(sigwx);
 }
 
-/** Click-laid polygon (CB/turbulence): click each point, then double-click. */
-function clickDraw(sigwx: SigwxDraw, a: MockAdapter, type: string, pts: [number, number][]): string {
-  sigwx.draw(type);
-  for (const [lon, lat] of pts) a.ev("click", lon, lat);
-  const last = pts[pts.length - 1]!;
-  a.ev("dblclick", last[0], last[1]);
-  return lastId(sigwx);
-}
-
 const JET: [number, number][] = [[0, 0], [2, 1], [4, 0], [6, 1]];
-const POLY: [number, number][] = [[0, 0], [4, 0], [4, 4]];
+const POLY: [number, number][] = [[0, 0], [4, 0], [4, 4], [0, 4]];
 
 describe("SigwxDraw controller (draw mode)", () => {
   let adapter: MockAdapter;
@@ -149,11 +140,43 @@ describe("SigwxDraw controller (draw mode)", () => {
   });
 
   it("draws a CB polygon: scalloped fill + edge + call-out + leader", () => {
-    clickDraw(sigwx, adapter, "cb", POLY);
+    stroke(sigwx, adapter, "cb", POLY);
     expect(adapter.count("area-fill")).toBe(1);
     expect(adapter.count("edge")).toBe(1);
     expect(adapter.count("text-boxes")).toBeGreaterThan(0); // placed call-out (+ FL-gauge labels while selected)
     expect(adapter.count("leaders")).toBeGreaterThan(0); // leader to the anchor (+ gauge axis)
+  });
+
+  it("dragging a jet's body (axis/barbs) translates the whole jet, like an area", () => {
+    const id = stroke(sigwx, adapter, "jetStream", JET);
+    const coords = () => (sigwx.save().features[0]!.geometry as { coordinates: [number, number][] }).coordinates;
+    const before = coords().map((c) => [...c] as [number, number]);
+    adapter.ev("down", 2, 1, { overlay: "decoration", props: { featureId: id } });
+    adapter.ev("move", 5, 4);
+    adapter.ev("up", 5, 4);
+    const after = coords();
+    expect(after[0]![0]).not.toBeCloseTo(before[0]![0], 5); // it moved
+    // rigid translate: inter-vertex offsets are preserved (the shape didn't deform)
+    expect(after[1]![0] - after[0]![0]).toBeCloseTo(before[1]![0] - before[0]![0], 5);
+    expect(after[1]![1] - after[0]![1]).toBeCloseTo(before[1]![1] - before[0]![1], 5);
+  });
+
+  it("tapping the CB call-out box cycles the coverage (OCNL ↔ FRQ carousel)", () => {
+    const id = stroke(sigwx, adapter, "cb", POLY);
+    expect(lastMeta(sigwx)["coverage"]).toBe("OCNL"); // default
+    // A TAP (down + up, no drag) on the call-out box carrying `cycleField` cycles that enum.
+    adapter.ev("down", 5, 5, { overlay: "text-boxes", props: { featureId: id, labelId: "cb", cycleField: "coverage" } });
+    adapter.ev("up", 5, 5);
+    expect(lastMeta(sigwx)["coverage"]).toBe("FRQ"); // OCNL → FRQ
+  });
+
+  it("tapping the CB central handle flips the scallop bumps (scallopInvert)", () => {
+    const id = stroke(sigwx, adapter, "cb", POLY);
+    expect(lastMeta(sigwx)["scallopInvert"]).toBeUndefined(); // default → style (outward)
+    // A TAP (down + up, no drag) on the central anchor handle flips the bump direction.
+    adapter.ev("down", 5, 5, { overlay: "handles", props: { featureId: id, hClass: "control", role: "anchor" } });
+    adapter.ev("up", 5, 5);
+    expect(lastMeta(sigwx)["scallopInvert"]).toBe(true); // outward → inward
   });
 
   it("emits a form spec with a list section for the jet", () => {
@@ -188,7 +211,7 @@ describe("SigwxDraw controller (draw mode)", () => {
 
   it("save → load round-trips the chart", () => {
     stroke(sigwx, adapter, "jetStream", JET);
-    clickDraw(sigwx, adapter, "cb", POLY);
+    stroke(sigwx, adapter, "cb", POLY);
     const saved = sigwx.save();
     expect(saved.features).toHaveLength(2);
 
@@ -198,7 +221,7 @@ describe("SigwxDraw controller (draw mode)", () => {
   });
 
   it("clicking a feature hit selects it", () => {
-    const id = clickDraw(sigwx, adapter, "cb", POLY);
+    const id = stroke(sigwx, adapter, "cb", POLY);
     sigwx.select(null);
     expect(adapter.count("handles")).toBe(0);
     adapter.ev("click", 2, 2, { overlay: "edge", props: { featureId: id } });
@@ -262,5 +285,17 @@ describe("SigwxDraw controller (draw mode)", () => {
     const sym = spec!.fields?.find((f) => f.key === "symbol");
     const codes = sym?.options?.map((o) => String(o.value));
     expect(codes).toEqual(["MOD", "SEV", "MTW"]); // completes, not replaces; default MOD first
+  });
+
+  it("phenomena.cb.extraCoverages extends the coverage carousel (OCNL/FRQ + added), keeping OCNL the default", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, phenomena: { cb: { extraCoverages: ["OCNL EMBD"] } } });
+    await s.ready();
+    let spec: { fields?: { key: string; options?: { value: unknown }[]; default?: unknown }[] } | null = null;
+    s.on("select", (x) => (spec = x as never));
+    stroke(s, a, "cb", [[0, 0], [4, 0], [4, 4], [0, 4]]); // freehand balloon
+    const cov = spec!.fields?.find((f) => f.key === "coverage");
+    const codes = cov?.options?.map((o) => String(o.value));
+    expect(codes).toEqual(["OCNL", "FRQ", "OCNL EMBD"]); // completes, not replaces; default OCNL first
   });
 });
