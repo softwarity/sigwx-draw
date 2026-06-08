@@ -60,6 +60,17 @@ export interface CbStyle {
   symbol?: SymbolStyle;
   text?: TextStyle;
 }
+/** Icing — a ticked purple edge + fill per intensity (MOD/SEV, same hue lighter/darker) and a
+ *  black & white glyph/FL call-out. Same shape as {@link TurbulenceStyle} (mod/sev driven). */
+export interface IcingStyle {
+  color: string;
+  mod?: { color?: string };
+  sev?: { color?: string };
+  edge?: EdgeStyle;
+  area?: AreaStyle;
+  symbol?: SymbolStyle;
+  text?: TextStyle;
+}
 
 /**
  * The superset of every phenomenon's style fields — what {@link DecorateFn} receives

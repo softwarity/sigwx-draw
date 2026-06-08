@@ -19,6 +19,19 @@ const TURB_SEV = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"
 <g fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
 <path d="M5 22 H13 L16 14 L19 22 H27"/><path d="M11 15 L16 7 L21 15"/></g></svg>`;
 
+// Icing glyphs: two outer arms angling IN to a central box, with feet below — MOD = 1 box
+// (2 feet), SEV = 2 boxes (3 feet), SAME outer width. Distinct sprite ids (`ICE_MOD`/`ICE_SEV`)
+// so they never collide with turbulence's MOD/SEV. `currentColor` → re-tinted per feature.
+// A square-ish U (as wide as tall) + vertical bars on its lower part — bar length = the U's
+// size, each crossing the U's bottom with 2/3 below + 1/3 inside. MOD = 2 bars, SEV = 3.
+const ICE_MOD = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+<g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+<path d="M9 5 V16 Q9 19 11 19 H21 Q23 19 23 16 V5"/><path d="M13.5 14 V28 M18.5 14 V28"/></g></svg>`;
+
+const ICE_SEV = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+<g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+<path d="M9 5 V16 Q9 19 11 19 H21 Q23 19 23 16 V5"/><path d="M12.5 14 V28 M16 14 V28 M19.5 14 V28"/></g></svg>`;
+
 /** CB call-out glyph: the coverage amount over "CB" (e.g. OCNL / CB) — the text the WAFC
  *  chart actually draws. The coverage CODE is the sprite id, so tapping it cycles the
  *  coverage (carousel). Host coverages register their own via this helper. `currentColor`
@@ -37,6 +50,8 @@ export function coverageGlyph(code: string): string {
 export const DEFAULT_SPRITES: SymbolSprites = {
   MOD: TURB_MOD,
   SEV: TURB_SEV,
+  ICE_MOD,
+  ICE_SEV,
   OCNL: coverageGlyph("OCNL"),
   FRQ: coverageGlyph("FRQ"),
 };

@@ -38,10 +38,13 @@ export interface AnnReq {
   symbol?: string;
   symbolColor?: string;
   symbolSize?: number;
+  /** Place the glyph INSIDE the box top (icing) instead of above it. The content must reserve
+   *  leading blank lines for it. */
+  symbolInside?: boolean;
   textColor: string;
   textSize: number;
   textHalo: string;
-  textBackground: string;
+  textBackground?: string;
   textBorder: string;
 }
 
@@ -170,19 +173,22 @@ export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<stri
       textColor: req.textColor,
       textSize: req.textSize,
       textHalo: req.textHalo,
-      textBackground: req.textBackground,
+      ...(req.textBackground !== undefined ? { textBackground: req.textBackground } : {}),
       textBorder: req.textBorder,
       ...(req.cycleField ? { cycleField: req.cycleField } : {}),
     };
     boxes.push({ type: "Feature", properties: props, geometry: { type: "Point", coordinates: [centerLL.lon, centerLL.lat] } });
 
-    // Severity (or other) glyph sits just above the box — part of the call-out.
+    // Severity (or other) glyph: just ABOVE the box (turbulence), or INSIDE its top half
+    // (icing — the content reserves leading blank lines for it).
     if (req.symbol) {
-      const symLL = proj.unproject([cx, cy - h / 2 - 12]);
+      const symLL = proj.unproject([cx, req.symbolInside ? cy - h / 4 : cy - h / 2 - 12]);
       if (symLL) {
         symbols.push({
           type: "Feature",
-          properties: { layer: "symbols", featureId: req.featureId, labelId: req.labelId, symbol: req.symbol, size: req.symbolSize ?? 1.1, symbolColor: req.symbolColor ?? req.textBorder },
+          // A glyph INSIDE the box is a touch smaller so it keeps a margin off the box top
+          // (OL/Leaflet box padding is tighter than MapLibre's, where it would otherwise touch).
+          properties: { layer: "symbols", featureId: req.featureId, labelId: req.labelId, symbol: req.symbol, size: req.symbolSize ?? (req.symbolInside ? 0.82 : 1.1), symbolColor: req.symbolColor ?? req.textBorder },
           geometry: { type: "Point", coordinates: [symLL.lon, symLL.lat] },
         });
       }
@@ -195,18 +201,19 @@ export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<stri
     // A "lightning" leader (CB) attaches at the box CENTRE (≈ just under the "CB" line) and
     // zigzags; the default attaches at the top-centre (by the glyph) in a straight line.
     const bolt = req.leaderStyle === "lightning";
-    // CB's box has no top glyph → attach the leader at its CENTRE (≈ under "CB"). A glyph
-    // (turbulence) sits above the box → attach at the top. Both lightning AND plain straight obey this.
-    const calloutPx: [number, number] = [cx, req.symbol ? cy - h / 2 : cy];
+    // A glyph ABOVE the box (turbulence) → attach the leader at the box TOP. Otherwise (CB's
+    // boxed text, or icing's glyph INSIDE the box) → attach at the CENTRE. Lightning + straight obey this.
+    const topGlyph = !!req.symbol && !req.symbolInside;
+    const calloutPx: [number, number] = [cx, topGlyph ? cy - h / 2 : cy];
     const leaderLen = Math.hypot(arrowPx[0] - calloutPx[0], arrowPx[1] - calloutPx[1]) || 1;
     const ux = (arrowPx[0] - calloutPx[0]) / leaderLen;
     const uy = (arrowPx[1] - calloutPx[1]) / leaderLen;
     // Base gap (px), plus the glyph's vertical extent when the leader heads UP toward it
     // (the symbol sits above the box, so only an upward leader runs through it).
-    const pad = req.symbol ? 8 + 18 * Math.max(0, -uy) : 6;
-    // The call-out's occupied zone = the box PLUS the glyph band above it. Hide the
-    // leader + arrow when the arrow anchor falls under that zone (symbol over the tip).
-    const occupied: Rect = req.symbol ? { x: rect.x, y: rect.y - 22, w: rect.w, h: rect.h + 22 } : rect;
+    const pad = topGlyph ? 8 + 18 * Math.max(0, -uy) : 6;
+    // The call-out's occupied zone = the box PLUS the glyph band above it (only when the glyph
+    // sits ABOVE). Hide the leader + arrow when the arrow anchor falls under that zone.
+    const occupied: Rect = topGlyph ? { x: rect.x, y: rect.y - 22, w: rect.w, h: rect.h + 22 } : rect;
     if (req.leader && !contains(occupied, arrowPx[0], arrowPx[1]) && leaderLen >= pad + LEADER_STUB) {
       const startPx: [number, number] = [calloutPx[0] + ux * pad, calloutPx[1] + uy * pad];
       const startLL = proj.unproject(startPx) ?? centerLL;

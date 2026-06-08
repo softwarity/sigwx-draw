@@ -54,6 +54,9 @@ export interface RenderProps {
   rotation?: number;
   size?: number;
   symbolColor?: string;
+  /** Place the call-out glyph INSIDE the box (top), not above it (icing). The content must
+   *  carry leading blank lines to reserve its space. */
+  symbolInside?: boolean;
   // text-boxes / annotations
   text?: string;
   textColor?: string;

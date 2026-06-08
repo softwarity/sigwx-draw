@@ -7,9 +7,12 @@ export const SIGWX_LAYERS: LayerSpec[] = [
   { id: "selection", kind: "line" },
   { id: "edge", kind: "line" },
   { id: "decoration", kind: "line" },
-  { id: "symbols", kind: "symbol" },
   { id: "leaders", kind: "line" },
   { id: "text-boxes", kind: "text" },
+  // `symbols` ABOVE `text-boxes` so a call-out glyph placed INSIDE the box (icing) isn't hidden
+  // by the box fill. The hit-test still resolves handles (higher z) first, so it doesn't affect
+  // double-click vertex insertion (verified on all 3 engines).
+  { id: "symbols", kind: "symbol" },
   { id: "handles", kind: "circle" },
   { id: "controls", kind: "text" }, // editing affordances (the ✕ delete control) — top + hidden in snapshots
 ];

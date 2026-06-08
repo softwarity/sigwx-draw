@@ -8,8 +8,7 @@
 import { catmullRomClosed, coordsOf, lineFeature, pointFeature, polygonFeature } from "../decorate/index.js";
 import type { Pt } from "../decorate/index.js";
 import type { DecorateFn, PhenomenonDef, RenderFeature } from "../phenomenon.js";
-import { fl, num, ringCentroid, str, textBoxProps } from "./util.js";
-import { regularPolygon } from "./util.js";
+import { fl, num, regularPolygon, ringCentroid, str } from "./util.js";
 
 /** One entry of the turbulence symbol catalogue: a `code` (also the sprite id) + label. */
 export interface TurbulenceSymbol {
@@ -83,9 +82,13 @@ export function makeTurbulence(symbols: TurbulenceSymbol[] = DEFAULT_TURBULENCE_
         arrow: true,
         symbol: sym, // the code IS the sprite id
         symbolColor: style.symbol?.color ?? ink,
-        ...textBoxProps(style),
-        textColor: ink, // FL text follows the severity (no fixed text.color)
-        textBorder: ink, // leader + box ink
+        // NO textBackground → CAT's FL is NOT boxed: just the glyph ABOVE + the FL text with a
+        // halo (unlike CB/icing whose call-out IS a black & white panel). `textBorder` only
+        // tints the leader/arrow here.
+        textColor: ink, // FL text follows the severity
+        textSize: style.text?.size ?? 13,
+        textHalo: style.text?.halo ?? "#ffffff",
+        textBorder: ink, // leader/arrow ink
       }),
     );
     return out;

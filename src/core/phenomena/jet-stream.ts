@@ -177,12 +177,15 @@ const decorate: DecorateFn = ({ geometry, metadata, style, resolution }) => {
     );
   });
 
-  // FL call-outs (WAFC §3.5.5 "at points along its length"): a boxed "FLxxx" at
+  // FL call-outs (WAFC §3.5.5 "at points along its length"): a plain "FLxxx" at
   // the max-wind point (+ vertical extent "lower/upper" when ≥120, fig 9) AND at
   // every point where the FL CHANGES. Constant FL → one label (at the max, fig 11);
   // varying FL → one per change. Attached below the line, rotated, no leader.
   const flNum = (v: number | undefined): string => String(Math.round(num(v))).padStart(3, "0");
-  const tb = { ...textBoxProps(style), textBorder: stroke };
+  // NO box: just text + halo. A box (textBackground/textBorder) would NOT rotate with the
+  // (rotated) label on OL/Leaflet — it floats off the text — so the jet FL is never boxed.
+  const tbp = textBoxProps(style);
+  const tb = { textColor: tbp.textColor, textSize: tbp.textSize, textHalo: tbp.textHalo };
   const flLabel = (p: Break, withExtent: boolean): void => {
     // Anchor under the MIDDLE of the barb cluster (the point sits at one end of it),
     // a touch below the line.

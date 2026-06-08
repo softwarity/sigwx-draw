@@ -53,7 +53,7 @@ const ENGINE_BY_ADAPTER: Record<string, Engine> = {
   OpenLayersAdapter: "openlayers",
   LeafletAdapter: "leaflet",
 };
-type Phenomenon = "jetStream" | "cb" | "turbulence";
+type Phenomenon = "jetStream" | "cb" | "turbulence" | "icing";
 
 interface PhenomenonButton {
   type: Phenomenon;
@@ -300,14 +300,32 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
           area: { opacity: Number(val("cAreaOp")) },
         };
       }
+    } else if (type === "icing") {
+      cfg.leaderThunderbolt = on("iBolt");
+      if (on("iFL")) {
+        cfg.flightLevel = {
+          min: Number(val("iMin")),
+          max: Number(val("iMax")),
+          default: [Number(val("iBase")), Number(val("iTop"))],
+          beyond: [col("iBeyLo"), col("iBeyHi")] as ["clamp" | "xxx", "clamp" | "xxx"],
+        };
+      }
+      if (on("iOn")) {
+        // MOD/SEV inks (same hue, lighter/darker) drive the purple edge + fill, like CAT.
+        cfg.style = {
+          mod: { color: col("iMod") },
+          sev: { color: col("iSev") },
+          area: { opacity: Number(val("iAreaOp")) },
+        };
+      }
     }
     this.phenoCfg = { ...this.phenoCfg, [type]: cfg };
 
     // Jet SPEED range is a construction-time option → rebuild. Every flightLevel field
     // (jet + turbulence) applies live (gauge cursors re-clamp at once); style applies live too.
-    const flKeys = ["jFL", "jFLMin", "jFLMax", "jFLDef", "tLim", "tMin", "tMax", "tBase", "tTop", "tBeyLo", "tBeyHi", "cFL", "cMin", "cMax", "cBase", "cTop", "cBeyLo", "cBeyHi"];
-    // Jet speed + CB leaderThunderbolt/coverages are construction-time → rebuild (geometry preserved).
-    if (changed === "jMin" || changed === "jMax" || changed === "jLim" || changed === "cBolt" || changed === "cExtra") void this.rebuild();
+    const flKeys = ["jFL", "jFLMin", "jFLMax", "jFLDef", "tLim", "tMin", "tMax", "tBase", "tTop", "tBeyLo", "tBeyHi", "cFL", "cMin", "cMax", "cBase", "cTop", "cBeyLo", "cBeyHi", "iFL", "iMin", "iMax", "iBase", "iTop", "iBeyLo", "iBeyHi"];
+    // Jet speed + CB/icing leaderThunderbolt/coverages are construction-time → rebuild (geometry preserved).
+    if (changed === "jMin" || changed === "jMax" || changed === "jLim" || changed === "cBolt" || changed === "cExtra" || changed === "iBolt") void this.rebuild();
     else if (changed && flKeys.includes(changed)) this.sigwx?.setPhenomenonFlightLevel(type, cfg.flightLevel ?? {});
     else this.sigwx?.setPhenomenonStyle(type, cfg.style ?? {});
   }
@@ -377,7 +395,7 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
         toolbar: this.toolbarOn
           ? {
               position: this.tbPos,
-              tools: ["jetStream", "cb", "turbulence"],
+              tools: ["jetStream", "cb", "icing", "turbulence"],
               snapshot: {
                 ...(this.snapQOn ? { quality: this.snapQuality as SnapshotQuality } : {}),
                 ...(this.snapClickOn ? { onClick: this.snapClickVal as SnapshotDelivery } : {}),

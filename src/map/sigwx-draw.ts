@@ -45,6 +45,7 @@ import type {
   CbStyle,
   FieldSchema,
   FlMode,
+  IcingStyle,
   InteractionSpec,
   JetStyle,
   ListField,
@@ -135,6 +136,7 @@ export interface PhenomenaConfig {
   jetStream?: { speed?: NumRange; flightLevel?: FlightLevelConfig<number>; style?: Partial<JetStyle> };
   turbulence?: { flightLevel?: FlightLevelConfig<[number, number]>; style?: Partial<TurbulenceStyle> };
   cb?: { flightLevel?: FlightLevelConfig<[number, number]>; style?: Partial<CbStyle>; leaderThunderbolt?: boolean; extraCoverages?: (string | CbCoverage)[] };
+  icing?: { flightLevel?: FlightLevelConfig<[number, number]>; style?: Partial<IcingStyle>; leaderThunderbolt?: boolean };
   [type: string]: PhenomenonConfig | undefined;
 }
 
@@ -1758,10 +1760,13 @@ function toAnnReq(featureId: string, feat: RenderFeature): AnnReq {
     ...(p.leaderStyle ? { leaderStyle: p.leaderStyle } : {}),
     ...(p.symbol ? { symbol: p.symbol } : {}),
     ...(p.symbolColor ? { symbolColor: p.symbolColor } : {}),
+    ...(p.symbolInside ? { symbolInside: true } : {}),
     textColor: p.textColor ?? "#111",
     textSize: p.textSize ?? 13,
     textHalo: p.textHalo ?? "#fff",
-    textBackground: p.textBackground ?? "#fff",
+    // Only box when the decorate ASKED for it (CB/icing set textBackground). No default → a
+    // call-out without textBackground (turbulence) is plain text + halo, NOT boxed.
+    ...(p.textBackground !== undefined ? { textBackground: p.textBackground } : {}),
     textBorder: p.textBorder ?? "#111",
   };
 }

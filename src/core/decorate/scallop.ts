@@ -75,3 +75,52 @@ export function scallopRing(ring: Position[], opts: ScallopOptions): Position[] 
   if (out.length) out.push(out[0]!); // close
   return out.map((p) => toLonLat(p, k));
 }
+
+export interface TickOptions {
+  /** Arc length between ticks, in planar degrees. */
+  spacing: number;
+  /** Tick length pointing INWARD (toward the centroid), in planar degrees. */
+  length: number;
+}
+
+/**
+ * Small perpendicular TICKS along a ring, evenly spaced by arc length, each pointing INWARD
+ * (toward the centroid) — the WAFC icing-area boundary convention. Returns one `[outer, inner]`
+ * lon/lat segment per tick (render as a MultiLineString alongside the plain boundary line).
+ */
+export function inwardTicks(ring: Position[], opts: TickOptions): Position[][] {
+  const pts = ring.map((c) => [c[0], c[1]] as Pt);
+  if (pts.length >= 2) {
+    const f = pts[0]!;
+    const l = pts[pts.length - 1]!;
+    if (f[0] === l[0] && f[1] === l[1]) pts.pop(); // drop closing dup
+  }
+  if (pts.length < 3) return [];
+  const k = frameK(pts);
+  const planar = pts.map((c) => toPlanar(c, k));
+  const n = planar.length;
+  const cx = planar.reduce((s, p) => s + p[0], 0) / n;
+  const cy = planar.reduce((s, p) => s + p[1], 0) / n;
+  const ticks: Position[][] = [];
+  let total = 0; // arc length walked so far
+  for (let i = 0; i < n; i++) {
+    const a = planar[i]!;
+    const b = planar[(i + 1) % n]!;
+    const seg = sub(b, a);
+    const segLen = len(seg);
+    if (segLen === 0) continue;
+    const dir = unit(seg);
+    // ticks fall at arc positions that are multiples of `spacing`, within this edge.
+    const firstTick = Math.ceil(total / opts.spacing) * opts.spacing;
+    for (let t = firstTick; t < total + segLen; t += opts.spacing) {
+      const base = add(a, scale(dir, t - total));
+      let nrm = perpRight(dir);
+      // face TOWARD the centroid (inward).
+      if (nrm[0] * (base[0] - cx) + nrm[1] * (base[1] - cy) > 0) nrm = [-nrm[0], -nrm[1]];
+      const inner = add(base, scale(nrm, opts.length));
+      ticks.push([toLonLat(base, k), toLonLat(inner, k)]);
+    }
+    total += segLen;
+  }
+  return ticks;
+}

@@ -16,6 +16,7 @@ export type {
   JetStyle,
   TurbulenceStyle,
   CbStyle,
+  IcingStyle,
   PhenomenonStyle,
 } from "./style.js";
 export { mergePhenomenonStyle, rgba } from "./style.js";
@@ -50,11 +51,13 @@ export {
 
 export * from "./decorate/index.js";
 
-export { BUILTIN_PHENOMENA, defaultRegistry, jetStream, cb, turbulence } from "./registry.js";
+export { BUILTIN_PHENOMENA, defaultRegistry, jetStream, cb, icing, turbulence } from "./registry.js";
 export { makeTurbulence, DEFAULT_TURBULENCE_SYMBOLS } from "./phenomena/turbulence.js";
 export type { TurbulenceSymbol } from "./phenomena/turbulence.js";
 export { makeCb, DEFAULT_CB_COVERAGE, CB_CLOUD_TYPE_BUFR } from "./phenomena/cb.js";
 export type { CbCoverage } from "./phenomena/cb.js";
+export { makeIcing, DEFAULT_ICING_SYMBOLS } from "./phenomena/icing.js";
+export type { IcingSymbol } from "./phenomena/icing.js";
 
 export type { SigwxFeature, SigwxFeatureProps } from "./geojson.js";
 export { toFeatureCollection, fromFeatureCollection } from "./geojson.js";

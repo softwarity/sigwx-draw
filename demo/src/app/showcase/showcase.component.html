@@ -195,6 +195,43 @@ ${cOn}    style: {
         <code-binding key="cAreaOp" type="number" value="0.18" min="0" max="0.5" step="0.02"></code-binding>
       </interactive-code>
     </div>
+
+    <div class="pheno-card" (change)="onPhenoChange('icing', $event)">
+      <header><span class="ic" [innerHTML]="icon('icing')"></span> Icing</header>
+      <interactive-code language="typescript" show-copy>
+        <textarea>phenomena: {
+  icing: {
+    // ⚡ lightning leader (false → plain straight)
+    leaderThunderbolt: ${iBolt},
+    // FL range + default [base, top] + per-bound off-chart mode ("clamp" | "xxx")
+${iFL}    flightLevel: {
+      min: ${iMin}, max: ${iMax},
+      default: [${iBase}, ${iTop}],
+      beyond: ["${iBeyLo}", "${iBeyHi}"],
+    },${/iFL}
+${iOn}    style: {
+      // MOD ink (lighter purple)
+      mod: { color: "${iMod}" },
+      // SEV ink (darker purple) — drives edge + fill
+      sev: { color: "${iSev}" },
+      area: { opacity: ${iAreaOp} },
+    },${/iOn}
+  },
+},</textarea>
+        <code-binding key="iBolt" type="boolean" value="true"></code-binding>
+        <code-binding key="iFL" type="comment" value="false"></code-binding>
+        <code-binding key="iMin" type="number" value="200" min="100" max="300" step="10"></code-binding>
+        <code-binding key="iMax" type="number" value="550" min="400" max="600" step="10"></code-binding>
+        <code-binding key="iBase" type="number" value="220" min="200" max="400" step="10"></code-binding>
+        <code-binding key="iTop" type="number" value="380" min="300" max="600" step="10"></code-binding>
+        <code-binding key="iBeyLo" type="select" options="clamp,xxx" value="xxx"></code-binding>
+        <code-binding key="iBeyHi" type="select" options="clamp,xxx" value="xxx"></code-binding>
+        <code-binding key="iOn" type="comment" value="false"></code-binding>
+        <code-binding key="iMod" type="color" value="#a371f7"></code-binding>
+        <code-binding key="iSev" type="color" value="#6639ba"></code-binding>
+        <code-binding key="iAreaOp" type="number" value="0.18" min="0" max="0.5" step="0.02"></code-binding>
+      </interactive-code>
+    </div>
   </div>
 
   <h2 class="api">Every phenomenon is one call</h2>
