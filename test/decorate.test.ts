@@ -13,6 +13,7 @@ import {
   pointInRing,
   radialSortRing,
   scallopRing,
+  tropopause,
   validate,
   windBarbFeatures,
 } from "../src/core/index.js";
@@ -285,5 +286,35 @@ describe("metadata defaults & validation", () => {
   it("flags an invalid enum value", () => {
     const errors = validate(cb, { coverage: "BOGUS" });
     expect(errors["coverage"]).toBeDefined();
+  });
+});
+
+describe("tropopause (single-FL spot / contour)", () => {
+  it("contour (LineString) → a dotted blue edge + an un-boxed FL at the middle", () => {
+    const line: Geometry = { type: "LineString", coordinates: [[0, 0], [2, 1], [4, 0]] };
+    const fs = tropopause.decorate({ geometry: line, metadata: { fl: 400 }, style: tropopause.style });
+    const edge = byLayer(fs, "edge")[0]!;
+    expect(edge.geometry.type).toBe("LineString");
+    expect(edge.properties.dash).toBeDefined(); // dotted
+    const label = byLayer(fs, "text-boxes")[0]!;
+    expect(label.geometry.type).toBe("Point");
+    expect(label.properties.text).toBe("FL400");
+    expect(label.properties.textBackground).toBeUndefined(); // NOT boxed (contour)
+  });
+
+  it("spot (Point) → a single BOXED FL, no line", () => {
+    const pt: Geometry = { type: "Point", coordinates: [3, 2] };
+    const fs = tropopause.decorate({ geometry: pt, metadata: { fl: 460 }, style: tropopause.style });
+    expect(byLayer(fs, "edge")).toHaveLength(0); // no contour for a spot
+    const label = byLayer(fs, "text-boxes")[0]!;
+    expect(label.properties.text).toBe("FL460");
+    expect(label.properties.textBackground).toBeDefined(); // boxed (spot height)
+    expect(label.geometry).toMatchObject({ type: "Point", coordinates: [3, 2] });
+  });
+
+  it("the only metadata is `fl` (no top/base, no enum)", () => {
+    const m = defaultMetadata(tropopause);
+    expect(Object.keys(m)).toEqual(["fl"]);
+    expect(m["fl"]).toBe(380);
   });
 });

@@ -2,13 +2,14 @@ import type { FeatureCollection } from "geojson";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { LatLng } from "../src/core/index.js";
-import type { MapAdapter, PointerEvent, SymbolSprites, ToolbarItem } from "../src/map/index.js";
+import type { KeyEvent, MapAdapter, PointerEvent, SymbolSprites, ToolbarItem } from "../src/map/index.js";
 import { SigwxDraw } from "../src/map/index.js";
 
 /** Headless mock adapter: records overlays, exposes a trivial linear projection. */
 class MockAdapter implements MapAdapter {
   overlays = new Map<string, FeatureCollection>();
   cb: ((ev: PointerEvent) => void) | undefined;
+  keyCb: ((ev: KeyEvent) => void) | undefined;
   panEnabled = true;
   ready(): Promise<void> {
     return Promise.resolve();
@@ -41,10 +42,12 @@ class MockAdapter implements MapAdapter {
     this.panEnabled = enabled;
   }
   setDoubleClickZoom(): void {}
+  setInteractive(): void {} // draw-adapter 0.2.7 (lock map)
   setCursor(): void {}
   onPointer(cb: (ev: PointerEvent) => void): void {
     this.cb = cb;
   }
+  onKey(cb: (ev: KeyEvent) => void): void { this.keyCb = cb; } // draw-adapter 0.2.7 (keyboard transport)
   destroy(): void {}
 
   count(layer: string): number {
@@ -52,6 +55,9 @@ class MockAdapter implements MapAdapter {
   }
   ev(type: PointerEvent["type"], lon: number, lat: number, hit?: PointerEvent["hit"]): void {
     this.cb?.({ type, lngLat: { lon, lat }, ...(hit ? { hit } : {}) });
+  }
+  key(key: string): void {
+    this.keyCb?.({ key, code: key, ctrl: false, meta: false, shift: false, alt: false, preventDefault: () => {} });
   }
 }
 
@@ -131,11 +137,11 @@ describe("SigwxDraw controller (draw mode)", () => {
     expect(pts.every((p) => p.fl === 320)).toBe(true);
   });
 
-  it("the ✕ delete control (controls overlay) removes the selected feature", () => {
-    const id = stroke(sigwx, adapter, "jetStream", JET);
+  it("renders NO on-map ✕ control; Backspace (via adapter.onKey) deletes the selection", () => {
+    stroke(sigwx, adapter, "jetStream", JET); // selected on commit
     expect(sigwx.save().features).toHaveLength(1);
-    // A press on the ✕ (rendered in the `controls` overlay) deletes the feature.
-    adapter.ev("down", 1, 1, { overlay: "controls", props: { featureId: id } });
+    expect(adapter.count("controls")).toBe(0); // the red ✕ is gone (keyboard only)
+    adapter.key("Backspace"); // the adapter's normalized key event → delete the selection
     expect(sigwx.save().features).toHaveLength(0);
   });
 
@@ -297,5 +303,99 @@ describe("SigwxDraw controller (draw mode)", () => {
     const cov = spec!.fields?.find((f) => f.key === "coverage");
     const codes = cov?.options?.map((o) => String(o.value));
     expect(codes).toEqual(["OCNL", "FRQ", "OCNL EMBD"]); // completes, not replaces; default OCNL first
+  });
+});
+
+describe("tropopause (one button → spot or contour by gesture)", () => {
+  let adapter: MockAdapter;
+  let sigwx: SigwxDraw;
+
+  beforeEach(async () => {
+    adapter = new MockAdapter();
+    sigwx = new SigwxDraw({ adapter });
+    await sigwx.ready();
+  });
+
+  it("a real drag draws a CONTOUR (LineString) — dotted edge + a centred FL label", () => {
+    stroke(sigwx, adapter, "tropopause", [[0, 0], [2, 1], [4, 0]]); // ~206 px extent ≫ threshold
+    const f = sigwx.save().features[0]!;
+    expect(f.geometry.type).toBe("LineString");
+    expect(f.properties!["phenomenon"]).toBe("tropopause");
+    expect(adapter.count("edge")).toBeGreaterThanOrEqual(1); // the dotted iso-line
+    expect(adapter.count("text-boxes")).toBeGreaterThanOrEqual(1); // the FL label
+  });
+
+  it("a click (no drag) drops a spot-height POINT", () => {
+    sigwx.draw("tropopause");
+    adapter.ev("down", 1, 1);
+    adapter.ev("up", 1, 1); // no move → 1 coord → 0 px extent → point
+    const f = sigwx.save().features[0]!;
+    expect(f.geometry.type).toBe("Point");
+    expect(f.properties!["phenomenon"]).toBe("tropopause");
+  });
+
+  it("a tiny drag (below the line threshold) also drops a POINT", () => {
+    sigwx.draw("tropopause");
+    adapter.ev("down", 0, 0);
+    adapter.ev("move", 0.5, 0.2); // ~27 px extent < 60 px threshold
+    adapter.ev("up", 0.5, 0.2);
+    expect(sigwx.save().features[0]!.geometry.type).toBe("Point");
+  });
+
+  it("the single-FL gauge drags the contour's fl, clamped to the field range", () => {
+    const id = stroke(sigwx, adapter, "tropopause", [[0, 0], [2, 1], [4, 0]]);
+    expect(lastMeta(sigwx)["fl"]).toBe(380); // default
+    // Drag the mFL handle's cursor far UP (high lat) → saturates at the field max.
+    adapter.ev("down", 0, 0, { overlay: "handles", props: { featureId: id, hClass: "control", role: "mFL" } });
+    adapter.ev("move", 0, 50);
+    adapter.ev("up", 0, 50);
+    expect(lastMeta(sigwx)["fl"]).toBe(600);
+    // …and far DOWN → the field min.
+    adapter.ev("down", 0, 0, { overlay: "handles", props: { featureId: id, hClass: "control", role: "mFL" } });
+    adapter.ev("move", 0, -50);
+    adapter.ev("up", 0, -50);
+    expect(lastMeta(sigwx)["fl"]).toBe(250);
+  });
+
+  it("deleting contour vertices one by one collapses to a spot POINT at the last", () => {
+    const id = stroke(sigwx, adapter, "tropopause", [[0, 0], [2, 1], [4, 0]]); // 3 vertices
+    expect(sigwx.save().features[0]!.geometry.type).toBe("LineString");
+    const del = (i: number) => adapter.ev("dblclick", 0, 0, { overlay: "handles", props: { featureId: id, hClass: "vertex", role: `v${i}` } });
+    del(0); // 3 → 2 vertices, still a line
+    expect(sigwx.save().features[0]!.geometry.type).toBe("LineString");
+    del(0); // 2 → 1 → collapses to a spot point (keeps the `fl`)
+    const f = sigwx.save().features[0]!;
+    expect(f.geometry.type).toBe("Point");
+    expect((f.properties!["metadata"] as Record<string, unknown>)["fl"]).toBe(380);
+  });
+});
+
+describe("call-out boxes (draw-adapter 0.2.8 boxes a border-only label too)", () => {
+  let adapter: MockAdapter;
+  let sigwx: SigwxDraw;
+
+  beforeEach(async () => {
+    adapter = new MockAdapter();
+    sigwx = new SigwxDraw({ adapter });
+    await sigwx.ready();
+  });
+
+  const callout = (labelId: string) =>
+    (adapter.overlays.get("text-boxes")?.features ?? []).find((b) => b.properties?.["labelId"] === labelId);
+
+  it("turbulence FL call-out is UNBOXED — no textBackground NOR textBorder on the placed box", () => {
+    stroke(sigwx, adapter, "turbulence", [[0, 0], [4, 0], [4, 4], [0, 4]]);
+    const box = callout("turb");
+    expect(box).toBeDefined();
+    expect(box!.properties?.["textBackground"]).toBeUndefined();
+    expect(box!.properties?.["textBorder"]).toBeUndefined(); // ← a border alone would draw a box in 0.2.8
+  });
+
+  it("CB call-out stays BOXED — textBackground + textBorder both present", () => {
+    stroke(sigwx, adapter, "cb", POLY);
+    const box = callout("cb");
+    expect(box).toBeDefined();
+    expect(box!.properties?.["textBackground"]).toBeDefined();
+    expect(box!.properties?.["textBorder"]).toBeDefined();
   });
 });

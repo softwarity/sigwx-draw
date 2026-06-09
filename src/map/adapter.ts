@@ -14,6 +14,7 @@ export type {
   LayerSpec,
   SymbolSprites,
   PointerEvent,
+  KeyEvent,
   ToolbarItem,
   ToolbarOptions,
   ToolbarPosition,

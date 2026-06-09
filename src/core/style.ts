@@ -72,6 +72,14 @@ export interface IcingStyle {
   text?: TextStyle;
 }
 
+/** Tropopause — a thin blue dotted iso-line (contour) or a boxed spot height; one FL.
+ *  `edge` is the dotted line, `text` the FL label (boxed only for a spot). */
+export interface TropopauseStyle {
+  color: string;
+  edge?: EdgeStyle;
+  text?: TextStyle;
+}
+
 /**
  * The superset of every phenomenon's style fields — what {@link DecorateFn} receives
  * and {@link mergePhenomenonStyle} operates on. Each specific style ({@link JetStyle},

@@ -8,6 +8,7 @@ export type {
   LayerSpec,
   SymbolSprites,
   PointerEvent,
+  KeyEvent,
   Projection,
   ToolbarItem,
   ToolbarOptions,

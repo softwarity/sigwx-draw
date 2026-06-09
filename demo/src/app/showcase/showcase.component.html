@@ -16,7 +16,10 @@ const map = new Map({ /* your basemap, controls, projection */ });
 const sigwx = new SigwxDraw({
   adapter: new ${adapter}({ map }),
 ${tbOff}  toolbar: {
+    // the bar's flow (row/column) is derived from this — no more `orientation`
     position: "${tbPosition}",
+    // 🔒 built-in "lock map" toggle (freezes pan/zoom while drawing); false hides it
+    lock: ${tbLock},
     // 📷 capture button — defaults: native / download (Leaflet: disabled)
     snapshot: {
       // native | low | medium | high
@@ -44,6 +47,7 @@ ${tooltip}    tooltip: { color: "${tipColor}", background: "${tipBg}", fontSize:
         <code-binding key="mapImport" type="readonly" [value]="mapImport()"></code-binding>
         <code-binding key="tbOff" type="comment" value="true"></code-binding>
         <code-binding key="tbPosition" type="select" options="top,top-left,top-right,bottom,bottom-left,bottom-right,left,left-top,left-bottom,right,right-top,right-bottom" value="bottom" carousel></code-binding>
+        <code-binding key="tbLock" type="boolean" value="true"></code-binding>
         <code-binding key="snapQ" type="comment" value="false"></code-binding>
         <code-binding key="snapQuality" type="select" options="native,low,medium,high" value="native" carousel></code-binding>
         <code-binding key="snapClick" type="comment" value="false"></code-binding>
@@ -84,7 +88,7 @@ ${tooltip}    tooltip: { color: "${tipColor}", background: "${tipBg}", fontSize:
     <code>phenomena: &#123; &lt;type&gt;: &#123; speed?, flightLevel?, style? &#125; &#125;</code>:
     its numeric bounds (jet <code>speed</code>, turbulence <code>flightLevel</code>) and its <strong>own</strong> visual tokens — the shape colour
     (jet axis&nbsp;+&nbsp;arrow&nbsp;+&nbsp;feathers; turbulence dashed edge&nbsp;+&nbsp;fill), the FL text,
-    the severity glyph. One card each, scroll sideways for more. The blocks start
+    the severity glyph. One card each — all shown below. The blocks start
     <strong>commented out</strong> with bold alternative values — un-comment one to apply it live.
   </p>
   <div class="pheno-configs">
@@ -232,6 +236,32 @@ ${iOn}    style: {
         <code-binding key="iAreaOp" type="number" value="0.18" min="0" max="0.5" step="0.02"></code-binding>
       </interactive-code>
     </div>
+
+    <div class="pheno-card" (change)="onPhenoChange('tropopause', $event)">
+      <header><span class="ic" [innerHTML]="icon('tropopause')"></span> Tropopause</header>
+      <interactive-code language="typescript" show-copy>
+        <textarea>phenomena: {
+  tropopause: {
+    // ONE value per feature — a contour (line) or a spot (point) carries a single FL
+${pFL}    flightLevel: {
+      min: ${pMin}, max: ${pMax},
+      default: ${pDef},
+    },${/pFL}
+${pOn}    style: {
+      // the dotted iso-line + its FL label (one colour)
+      edge: { color: "${pEdge}" },
+      text: { color: "${pEdge}" },
+    },${/pOn}
+  },
+},</textarea>
+        <code-binding key="pFL" type="comment" value="false"></code-binding>
+        <code-binding key="pMin" type="number" value="250" min="150" max="350" step="10"></code-binding>
+        <code-binding key="pMax" type="number" value="600" min="400" max="650" step="10"></code-binding>
+        <code-binding key="pDef" type="number" value="380" min="250" max="600" step="10"></code-binding>
+        <code-binding key="pOn" type="comment" value="false"></code-binding>
+        <code-binding key="pEdge" type="color" value="#0b6bcb"></code-binding>
+      </interactive-code>
+    </div>
   </div>
 
   <h2 class="api">Every phenomenon is one call</h2>
@@ -263,7 +293,7 @@ ${iOn}    style: {
     <thead><tr><th>Option</th><th>Type</th><th>Default</th><th>What it does</th></tr></thead>
     <tbody>
       <tr><td><code>adapter</code></td><td><code>MapAdapter</code></td><td>—</td><td><strong>Required.</strong> Wraps your map — <code>new MapLibreAdapter(&#123; map &#125;)</code> or <code>new OpenLayersAdapter(&#123; map &#125;)</code>.</td></tr>
-      <tr><td><code>toolbar</code></td><td><code>boolean | ToolbarOptions</code></td><td>—</td><td>Render the turnkey native toolbar, auto-built from the registry. <code>true</code> for defaults, or <code>&#123; position, padding, gap, orientation, className &#125;</code>. Omit for none.</td></tr>
+      <tr><td><code>toolbar</code></td><td><code>boolean | ToolbarOptions</code></td><td>—</td><td>Render the turnkey native toolbar, auto-built from the registry. <code>true</code> for defaults, or <code>&#123; position, lock, padding, gap, className &#125;</code> (the bar's flow follows <code>position</code>). Omit for none.</td></tr>
       <tr><td><code>style</code></td><td><code>SigwxStyleInput</code></td><td><code>DEFAULT_STYLE</code></td><td><strong>Global chrome only</strong> (selection, handles, slider, control handles, tooltip), merged onto the defaults.</td></tr>
       <tr><td><code>phenomena</code></td><td><code>Record&lt;type, &#123; speed?, flightLevel?, style? &#125;&gt;</code></td><td><code>&#123;&#125;</code></td><td>Per-phenomenon config: <code>speed</code> (jet dial range), <code>flightLevel</code> (turbulence/CB chart FL range; beyond it shows XXX), <code>style</code> (that phenomenon's visual tokens).</td></tr>
       <tr><td><code>registry</code></td><td><code>PhenomenonRegistry</code></td><td><code>defaultRegistry()</code></td><td>Override/extend the set of phenomena driving the toolbar &amp; rendering.</td></tr>

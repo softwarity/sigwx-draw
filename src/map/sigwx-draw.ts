@@ -44,6 +44,7 @@ import type {
   CbCoverage,
   CbStyle,
   FieldSchema,
+  FlightLevelField,
   FlMode,
   IcingStyle,
   InteractionSpec,
@@ -55,9 +56,10 @@ import type {
   Pt,
   RenderFeature,
   SigwxFeature,
+  TropopauseStyle,
   TurbulenceStyle,
 } from "../core/index.js";
-import type { MapAdapter, PointerEvent, SnapshotOptions, SymbolSprites, ToolbarItem, ToolbarOptions } from "./adapter.js";
+import type { KeyEvent, MapAdapter, PointerEvent, SnapshotOptions, SymbolSprites, ToolbarItem, ToolbarOptions } from "./adapter.js";
 import { ANNOTATION_BUCKET, OVERLAY_IDS } from "./layers.js";
 import { placeAnnotations } from "./placement.js";
 import type { AnnReq, Pin } from "./placement.js";
@@ -137,6 +139,7 @@ export interface PhenomenaConfig {
   turbulence?: { flightLevel?: FlightLevelConfig<[number, number]>; style?: Partial<TurbulenceStyle> };
   cb?: { flightLevel?: FlightLevelConfig<[number, number]>; style?: Partial<CbStyle>; leaderThunderbolt?: boolean; extraCoverages?: (string | CbCoverage)[] };
   icing?: { flightLevel?: FlightLevelConfig<[number, number]>; style?: Partial<IcingStyle>; leaderThunderbolt?: boolean };
+  tropopause?: { flightLevel?: FlightLevelConfig<number>; style?: Partial<TropopauseStyle> };
   [type: string]: PhenomenonConfig | undefined;
 }
 
@@ -178,17 +181,6 @@ const SYNC_ICON = `data:image/svg+xml,${encodeURIComponent(
 /** Editing-chrome overlays hidden during a snapshot, so the PNG shows the clean chart
  *  (no selection highlight / edit + control handles). The chart decoration stays. */
 const SNAPSHOT_HIDE = ["selection", "handles", "controls"];
-
-/** Is keyboard focus in an editable element (input/textarea/select/contenteditable),
- *  traversing open shadow roots (e.g. the metadata-form web component)? Used so the
- *  window-level Backspace/Delete handler never steals a keystroke from text entry. */
-function isEditableTarget(): boolean {
-  if (typeof document === "undefined") return false;
-  let el: Element | null = document.activeElement;
-  while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
-  if (!el) return false;
-  return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || (el as HTMLElement).isContentEditable;
-}
 /** On-map speed dial (speedometer): fixed radius + angular sweep (deg, screen y-down). */
 const SPEED_R = 52;
 const SPEED_A0 = 150; // min-speed angle (down-left)
@@ -207,6 +199,10 @@ const speedForAngle = (deg: number, min: number, max: number): number => {
 /** Vertical FL gauge: reference level (gauge centre) and screen pixels per FL. */
 const FL_REF = 350;
 const FL_PX = 0.6;
+/** A freehand stroke whose on-screen extent (bbox diagonal) is below this collapses to a
+ *  POINT instead of a line (`pointWhenShort`) — ≈ 1.5× the "FLxxx" label box, so a contour
+ *  must be visibly longer than its own label to count as a line (tropopause spot vs contour). */
+const POINT_MAX_PX = 60;
 
 /** A break point sitting at a jet extremity (t≈0 / t≈1): its speed is fixed at the floor. */
 const isEndItem = (it: Metadata): boolean => {
@@ -216,6 +212,14 @@ const isEndItem = (it: Metadata): boolean => {
 
 function listFieldOf(def: PhenomenonDef): ListField | undefined {
   return def.schema.find((f): f is ListField => f.type === "list");
+}
+
+/** A phenomenon whose ONLY level is a single `fl` field (no list, no top/base) → the
+ *  tropopause-style single-FL on-map gauge (vs the jet break gauge / area top-base gauge). */
+function singleFlFieldOf(def: PhenomenonDef): FlightLevelField | undefined {
+  if (listFieldOf(def)) return undefined;
+  if (def.schema.some((s) => s.key === "topFL" || s.key === "baseFL")) return undefined;
+  return def.schema.find((f): f is FlightLevelField => f.type === "fl" && f.key === "fl");
 }
 
 export class SigwxDraw {
@@ -264,7 +268,6 @@ export class SigwxDraw {
   private idSeq = 0;
   private destroyed = false;
   private renderScheduled = false;
-  private keyHandler: ((e: KeyboardEvent) => void) | undefined;
 
   private readonly changeListeners = new Set<(fc: FeatureCollection) => void>();
   private readonly selectListeners = new Set<(spec: FormSpec | null) => void>();
@@ -293,10 +296,10 @@ export class SigwxDraw {
       // Re-render on pan/zoom so screen-sized decorations (wind barbs) and the
       // call-out placement both refresh.
       this.adapter.onViewChange(() => this.scheduleRender());
-      if (typeof window !== "undefined") {
-        this.keyHandler = (e) => this.onKey(e);
-        window.addEventListener("keydown", this.keyHandler);
-      }
+      // Keyboard via the adapter (draw-adapter 0.2.7+): scoped to the map container (so it's
+      // multi-instance safe and the host app's own inputs elsewhere never reach us) and editable
+      // targets are already skipped — no window-level listener / `isEditableTarget` shim needed.
+      this.adapter.onKey((ev) => this.onKey(ev));
       if (opts.toolbar) this.buildToolbar(opts.toolbar === true ? {} : opts.toolbar);
       this.renderAll();
     });
@@ -339,6 +342,8 @@ export class SigwxDraw {
     const m = f?.properties.metadata;
     if (m && typeof m["topFL"] === "number" && typeof m["baseFL"] === "number") {
       this.flRef = ((m["topFL"] as number) + (m["baseFL"] as number)) / 2;
+    } else if (m && typeof m["fl"] === "number") {
+      this.flRef = m["fl"] as number; // single-FL phenomenon (tropopause) → centre the gauge on it
     }
     this.syncDblClickZoom();
     this.renderAll();
@@ -412,8 +417,19 @@ export class SigwxDraw {
     if (!f) return;
     const g = f.geometry;
     if (g.type === "LineString") {
-      if (g.coordinates.length <= 2 || !g.coordinates[index]) return;
-      g.coordinates.splice(index, 1);
+      if (!g.coordinates[index]) return;
+      // A phenomenon that also allows a POINT (tropopause) collapses a 2-vertex contour to a
+      // spot when one is removed — delete the contour's points one by one until a single spot
+      // height remains. A polyline-only phenomenon (jet) keeps ≥ 2.
+      if (g.coordinates.length <= 2) {
+        const canPoint = this.registry.get(f.properties.phenomenon).primitives.includes("point");
+        if (g.coordinates.length === 2 && canPoint) {
+          const keep = g.coordinates[index === 0 ? 1 : 0]!;
+          f.geometry = { type: "Point", coordinates: [keep[0]!, keep[1]!] };
+        } else return;
+      } else {
+        g.coordinates.splice(index, 1);
+      }
     } else if (g.type === "Polygon") {
       const ring = g.coordinates[0];
       if (!ring) return;
@@ -662,7 +678,6 @@ export class SigwxDraw {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
-    if (this.keyHandler && typeof window !== "undefined") window.removeEventListener("keydown", this.keyHandler);
     this.changeListeners.clear();
     this.selectListeners.clear();
     this.metadataListeners.clear();
@@ -732,9 +747,22 @@ export class SigwxDraw {
     if (!d) return;
     this.stroking = false;
     this.adapter.setPanEnabled(true);
+    const it = interactionOf(this.registry.get(d.type));
+    // A stroke too short on screen to read as a line (a click, or a tiny drag) collapses to a
+    // spot-height POINT, not a contour (tropopause). Measured on the RAW coords BEFORE simplify
+    // so a single-point click is caught. The point lands where the gesture began.
+    if (it.pointWhenShort && this.strokeExtentPx(d.coords) < POINT_MAX_PX) {
+      const at = d.coords[0];
+      if (at) {
+        this.commit(d.type, { type: "Point", coordinates: [at[0]!, at[1]!] });
+        return;
+      }
+      this.cancelDrawing();
+      this.renderAll();
+      return;
+    }
     const span = this.adapter.getViewSpan();
     let simplified = simplify(d.coords.map((c) => [c[0]!, c[1]!]), span * 0.012);
-    const it = interactionOf(this.registry.get(d.type));
     const min = it.primitive === "polygon" ? 3 : 2;
     if (simplified.length < min) {
       this.cancelDrawing();
@@ -765,6 +793,18 @@ export class SigwxDraw {
 
   private isFreehand(): boolean {
     return !!this.drawing && interactionOf(this.registry.get(this.drawing.type)).freehand === true;
+  }
+
+  /** On-screen extent (bbox diagonal, px) of a captured stroke — drives the point/line
+   *  decision for a `pointWhenShort` phenomenon. 0 for an empty/unprojectable stroke. */
+  private strokeExtentPx(coords: Position[]): number {
+    const px = coords
+      .map((c) => this.adapter.project({ lon: c[0]!, lat: c[1]! }))
+      .filter((p): p is [number, number] => !!p);
+    if (px.length < 2) return 0;
+    const xs = px.map((p) => p[0]);
+    const ys = px.map((p) => p[1]);
+    return Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
   }
 
   private afterEdit(id: string): void {
@@ -865,11 +905,14 @@ export class SigwxDraw {
         if (c) {
           const l1 = this.adapter.unproject([c[0] - 17, c[1]]);
           const l2 = this.adapter.unproject([c[0] + 17, c[1]]);
-          if (l1 && l2) buckets["leaders"]!.push({ type: "Feature", properties: { layer: "leaders", featureId: id, stroke: String(box.properties.textBorder ?? "#111"), strokeWidth: 1 }, geometry: { type: "LineString", coordinates: [[l1.lon, l1.lat], [l2.lon, l2.lat]] } });
+          // Ink = the box border when boxed (CB/icing), else the text colour — so an UNBOXED
+          // call-out (turbulence, which no longer carries `textBorder`) keeps its severity-tinted rule.
+          if (l1 && l2) buckets["leaders"]!.push({ type: "Feature", properties: { layer: "leaders", featureId: id, stroke: String(box.properties.textBorder ?? box.properties.textColor ?? "#111"), strokeWidth: 1 }, geometry: { type: "LineString", coordinates: [[l1.lon, l1.lat], [l2.lon, l2.lat]] } });
         }
       }
     }
     if (this.selectedId) this.renderAreaGauge(buckets);
+    if (this.selectedId) this.renderSingleFlGauge(buckets);
 
     // `decorate` bakes the resolved style into the `handles` props (the generic
     // adapter is dumb); every other overlay is passed through unchanged.
@@ -916,6 +959,42 @@ export class SigwxDraw {
     const lbl = (v: number, off: boolean): string => (off ? "XXX" : String(Math.round(v)).padStart(3, "0"));
     mk(top, "mTop", lbl(top, top > topMax));
     mk(base, "mBase", lbl(base, base < baseMin));
+  }
+
+  /** Single-FL gauge (tropopause) — a short vertical track + a draggable handle beside the
+   *  spot point or the contour's midpoint. Sets `placedAt` so the `metaLevel` drag (field
+   *  "fl") reads the same anchor. */
+  private renderSingleFlGauge(buckets: Record<string, Feature[]>): void {
+    const f = this.doc.get(this.selectedId!);
+    if (!f) return;
+    if (!singleFlFieldOf(this.registry.get(f.properties.phenomenon))) return;
+    // Anchor: the spot point itself, or the contour's arc-length midpoint (where the FL sits).
+    let anchor: Position | null = null;
+    if (f.geometry.type === "Point") anchor = f.geometry.coordinates;
+    else if (f.geometry.type === "LineString" && f.geometry.coordinates.length >= 2) {
+      const dense = catmullRom(f.geometry.coordinates as Pt[], 16);
+      const k = frameK(dense);
+      anchor = toLonLat(pointAtFraction(dense.map((c) => toPlanar(c, k)), 0.5).p, k);
+    }
+    if (!anchor) return;
+    this.placedAt.set(this.selectedId!, [anchor[0]!, anchor[1]!]); // the metaLevel drag reads this anchor
+    const bc = this.adapter.project({ lon: anchor[0]!, lat: anchor[1]! });
+    if (!bc) return;
+    const lvl = typeof f.properties.metadata["fl"] === "number" ? (f.properties.metadata["fl"] as number) : this.flRef;
+    const gx = bc[0] + 30; // just right of the label
+    const un = (x: number, y: number): Position | null => {
+      const u = this.adapter.unproject([x, y]);
+      return u ? [u.lon, u.lat] : null;
+    };
+    const yOf = (l: number): number => bc[1] - (l - this.flRef) * FL_PX;
+    // A short track around the level + the draggable handle + a value label (orange chrome).
+    const aTop = un(gx, yOf(lvl) - 34);
+    const aBot = un(gx, yOf(lvl) + 34);
+    if (aTop && aBot) buckets["leaders"]!.push({ type: "Feature", properties: { layer: "leaders", stroke: this.style.control.line.color, strokeWidth: this.style.control.line.width }, geometry: { type: "LineString", coordinates: [aTop, aBot] } });
+    const hp = un(gx, yOf(lvl));
+    const lp = un(gx + 24, yOf(lvl));
+    if (hp) buckets["handles"]!.push({ type: "Feature", properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: "mFL" }, geometry: { type: "Point", coordinates: hp } });
+    if (lp) buckets["text-boxes"]!.push({ type: "Feature", properties: { layer: "text-boxes", text: `FL${String(Math.round(lvl)).padStart(3, "0")}`, textColor: this.style.control.text.color, textSize: 12, textHalo: this.style.control.text.halo }, geometry: { type: "Point", coordinates: lp } });
   }
 
   /** Screen radius from a call-out anchor to the farthest polygon vertex (capped) so
@@ -973,22 +1052,8 @@ export class SigwxDraw {
       properties: { layer: "selection", featureId: this.selectedId, stroke: this.style.selection.color, strokeWidth: this.style.selection.width, ...(this.style.selection.dash ? { dash: [...this.style.selection.dash] } : {}) },
       geometry: selGeom,
     });
-    // On-map delete affordance: a red ✕ just off the feature's top-right corner. Click it
-    // (or press Backspace/Delete) to remove the feature. `labelId:"__delete"` is the marker
-    // the pointer handler intercepts (see onDown).
-    const sx = coordsOf(f.geometry)
-      .map((c) => this.adapter.project({ lon: c[0]!, lat: c[1]! }))
-      .filter((p): p is [number, number] => !!p);
-    if (sx.length) {
-      const corner = this.adapter.unproject([Math.max(...sx.map((p) => p[0])) + 14, Math.min(...sx.map((p) => p[1])) - 14]);
-      if (corner) {
-        buckets["controls"]!.push({
-          type: "Feature",
-          properties: { layer: "controls", featureId: this.selectedId, text: "×", textColor: "#f85149", textSize: 20, textHalo: "#ffffff" },
-          geometry: { type: "Point", coordinates: [corner.lon, corner.lat] },
-        });
-      }
-    }
+    // Feature deletion is keyboard-only (Backspace/Delete on the selection, see onKey) —
+    // no on-map ✕ control, by design.
     vertices(f.geometry).forEach((v, i) => {
       buckets["handles"]!.push({
         type: "Feature",
@@ -1148,22 +1213,22 @@ export class SigwxDraw {
 
   // ── pointer & keyboard ─────────────────────────────────────────────────────
 
-  private onKey(e: KeyboardEvent): void {
+  private onKey(ev: KeyEvent): void {
     if (this.mode === "drawing") {
-      if (e.key === "Enter") {
-        e.preventDefault();
+      if (ev.key === "Enter") {
+        ev.preventDefault();
         this.finalizeDrawing();
-      } else if (e.key === "Escape") {
-        e.preventDefault();
+      } else if (ev.key === "Escape") {
+        ev.preventDefault();
         this.cancelDrawing();
         this.renderAll();
       }
       return;
     }
-    // Delete the SELECTED feature with Backspace (the Mac "delete" key) or Delete — but
-    // never while typing in a field (the listener is on window).
-    if ((e.key === "Backspace" || e.key === "Delete") && this.selectedId && !isEditableTarget()) {
-      e.preventDefault();
+    // Delete the SELECTED feature with Backspace (the Mac "delete" key) or Delete. The adapter's
+    // `onKey` already skips editable targets and is scoped to the focused map container.
+    if ((ev.key === "Backspace" || ev.key === "Delete") && this.selectedId) {
+      ev.preventDefault();
       this.delete(this.selectedId);
     }
   }
@@ -1241,6 +1306,8 @@ export class SigwxDraw {
         this.dragTarget = { kind: "level", featureId, index: this.selectedSub, field: role };
       } else if (hClass === "control" && (role === "mTop" || role === "mBase")) {
         this.dragTarget = { kind: "metaLevel", featureId, field: role === "mTop" ? "topFL" : "baseFL" };
+      } else if (hClass === "control" && role === "mFL") {
+        this.dragTarget = { kind: "metaLevel", featureId, field: "fl" };
       } else if (hClass === "control" && role === "anchor") {
         this.dragTarget = { kind: "anchor", featureId };
       } else if (hClass === "toggle") {
@@ -1265,10 +1332,6 @@ export class SigwxDraw {
       this.dragTarget = { kind: "callout", featureId, labelId: String(hit.props["labelId"] ?? "l"), grab: this.calloutGrab(featureId, ev.lngLat), ...(toggle ? { toggle } : {}) };
       this.didDrag = false;
       this.adapter.setPanEnabled(false);
-    } else if (hit.overlay === "controls" && typeof featureId === "string") {
-      // The ✕ delete control (see renderSelection) → remove the feature, don't arm a drag.
-      this.delete(featureId);
-      return;
     } else if (hit.overlay === "text-boxes" && typeof featureId === "string") {
       // The call-out box → DRAG to reposition; or (when it carries `cycleField`) TAP to cycle
       // that enum — e.g. CB coverage OCNL↔FRQ, whose value lives in the box text, not a glyph.
@@ -1433,7 +1496,8 @@ export class SigwxDraw {
         let level = Math.max(lo, Math.min(hi, Math.round((this.flRef + (bc[1] - cur[1]) / FL_PX) / 5) * 5));
         const m = f.properties.metadata;
         if (t.field === "topFL") level = Math.max(level, typeof m["baseFL"] === "number" ? (m["baseFL"] as number) : lo);
-        else level = Math.min(level, typeof m["topFL"] === "number" ? (m["topFL"] as number) : hi);
+        else if (t.field === "baseFL") level = Math.min(level, typeof m["topFL"] === "number" ? (m["topFL"] as number) : hi);
+        // else (a single `fl` field, tropopause): just the clamped level, no top/base pairing.
         m[t.field] = level;
       }
     } else if (t.kind === "callout") {

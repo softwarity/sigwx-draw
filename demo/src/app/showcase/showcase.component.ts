@@ -53,7 +53,7 @@ const ENGINE_BY_ADAPTER: Record<string, Engine> = {
   OpenLayersAdapter: "openlayers",
   LeafletAdapter: "leaflet",
 };
-type Phenomenon = "jetStream" | "cb" | "turbulence" | "icing";
+type Phenomenon = "jetStream" | "cb" | "turbulence" | "icing" | "tropopause";
 
 interface PhenomenonButton {
   type: Phenomenon;
@@ -107,8 +107,11 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
   private phenoCfg: Record<string, PhenomenonConfig> = {};
   /** Whether the native toolbar is rendered (toggled via the block comment). */
   private toolbarOn = true;
-  /** Live toolbar position edited in the panel. */
+  /** Live toolbar position edited in the panel. Its row/column flow is DERIVED from this
+   *  (the `orientation` option was removed in draw-adapter 0.2.7). */
   private tbPos: ToolbarPosition = "bottom";
+  /** Show the built-in "lock map" toggle button (draw-adapter 0.2.7 `toolbar.lock`, default on). */
+  private tbLock = true;
   /** Snapshot ("capture map" PNG button) config. The `snapshot: {}` block is always present
    *  (the button always shows); each field is opt-in via its comment toggle, else the lib
    *  default applies (native / download / shutter on). `onClick` is the plain-click delivery;
@@ -186,7 +189,12 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
     }
     if (t?.key === "tbPosition") {
       this.tbPos = String(t.value) as ToolbarPosition;
-      void this.rebuild(); // re-place the native toolbar
+      void this.rebuild(); // re-place the native toolbar (its flow follows the position)
+      return;
+    }
+    if (t?.key === "tbLock") {
+      this.tbLock = t.value === true || t.value === "true";
+      void this.rebuild(); // the lock button is a toolbar construction-time option
       return;
     }
     // Snapshot fields — each is a toolbar construction-time option → rebuild.
@@ -318,12 +326,21 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
           area: { opacity: Number(val("iAreaOp")) },
         };
       }
+    } else if (type === "tropopause") {
+      // One value per feature (a contour/spot carries a single FL) → a single `default`.
+      if (on("pFL")) {
+        cfg.flightLevel = { min: Number(val("pMin")), max: Number(val("pMax")), default: Number(val("pDef")) };
+      }
+      // The dotted iso-line + its FL label share one colour.
+      if (on("pOn")) {
+        cfg.style = { edge: { color: col("pEdge") }, text: { color: col("pEdge") } };
+      }
     }
     this.phenoCfg = { ...this.phenoCfg, [type]: cfg };
 
     // Jet SPEED range is a construction-time option → rebuild. Every flightLevel field
     // (jet + turbulence) applies live (gauge cursors re-clamp at once); style applies live too.
-    const flKeys = ["jFL", "jFLMin", "jFLMax", "jFLDef", "tLim", "tMin", "tMax", "tBase", "tTop", "tBeyLo", "tBeyHi", "cFL", "cMin", "cMax", "cBase", "cTop", "cBeyLo", "cBeyHi", "iFL", "iMin", "iMax", "iBase", "iTop", "iBeyLo", "iBeyHi"];
+    const flKeys = ["jFL", "jFLMin", "jFLMax", "jFLDef", "tLim", "tMin", "tMax", "tBase", "tTop", "tBeyLo", "tBeyHi", "cFL", "cMin", "cMax", "cBase", "cTop", "cBeyLo", "cBeyHi", "iFL", "iMin", "iMax", "iBase", "iTop", "iBeyLo", "iBeyHi", "pFL", "pMin", "pMax", "pDef"];
     // Jet speed + CB/icing leaderThunderbolt/coverages are construction-time → rebuild (geometry preserved).
     if (changed === "jMin" || changed === "jMax" || changed === "jLim" || changed === "cBolt" || changed === "cExtra" || changed === "iBolt") void this.rebuild();
     else if (changed && flKeys.includes(changed)) this.sigwx?.setPhenomenonFlightLevel(type, cfg.flightLevel ?? {});
@@ -395,7 +412,8 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
         toolbar: this.toolbarOn
           ? {
               position: this.tbPos,
-              tools: ["jetStream", "cb", "icing", "turbulence"],
+              tools: ["jetStream", "cb", "icing", "turbulence", "tropopause"],
+              lock: this.tbLock,
               snapshot: {
                 ...(this.snapQOn ? { quality: this.snapQuality as SnapshotQuality } : {}),
                 ...(this.snapClickOn ? { onClick: this.snapClickVal as SnapshotDelivery } : {}),

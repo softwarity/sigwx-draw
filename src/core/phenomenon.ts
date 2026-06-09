@@ -189,6 +189,11 @@ export interface InteractionSpec {
    * clicking points (double-click / Enter to finish).
    */
   freehand?: boolean;
+  /** Freehand only: when the finished stroke's on-screen extent is too short to read as a
+   *  line (< ~1.5× the FL label box), commit a POINT instead of a path — so a click (or a
+   *  tiny drag) drops a spot height and a real drag draws a contour (tropopause). Needs the
+   *  def to allow a `"point"` primitive too. */
+  pointWhenShort?: boolean;
   /** `"draw"` = a drawn path/area; `"drop"` = a default geometry at the centre. */
   mode: "draw" | "drop";
 }

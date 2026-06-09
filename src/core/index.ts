@@ -17,6 +17,7 @@ export type {
   TurbulenceStyle,
   CbStyle,
   IcingStyle,
+  TropopauseStyle,
   PhenomenonStyle,
 } from "./style.js";
 export { mergePhenomenonStyle, rgba } from "./style.js";
@@ -51,7 +52,7 @@ export {
 
 export * from "./decorate/index.js";
 
-export { BUILTIN_PHENOMENA, defaultRegistry, jetStream, cb, icing, turbulence } from "./registry.js";
+export { BUILTIN_PHENOMENA, defaultRegistry, jetStream, cb, icing, turbulence, tropopause } from "./registry.js";
 export { makeTurbulence, DEFAULT_TURBULENCE_SYMBOLS } from "./phenomena/turbulence.js";
 export type { TurbulenceSymbol } from "./phenomena/turbulence.js";
 export { makeCb, DEFAULT_CB_COVERAGE, CB_CLOUD_TYPE_BUFR } from "./phenomena/cb.js";

@@ -98,20 +98,20 @@
 
 .hint { color: var(--text-muted); font-size: 13px; margin: 10px 0 0; }
 
-/* Optional per-phenomenon style cards — a horizontally-scrolling strip. */
+/* Optional per-phenomenon style cards — a wrapping grid (every card visible, no side-scroll). */
 .opt { color: var(--text-muted); font-weight: 400; }
 
 .pheno-configs {
   display: flex;
   flex-direction: row;
+  flex-wrap: wrap;        // wrap onto as many rows as needed → all cards visible at once
   gap: 12px;
-  overflow-x: auto;       // the strip owns the horizontal scrollbar
-  padding-bottom: 8px;    // room for the scrollbar under the cards
   margin: 4px 0 8px;
 }
 
 .pheno-card {
-  flex: 0 0 380px;        // fixed width, laid out side by side
+  flex: 1 1 340px;        // fill the row, then wrap to the next line
+  min-width: 0;           // allow shrink (the code block owns its own overflow)
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border-color);

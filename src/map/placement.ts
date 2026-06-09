@@ -173,8 +173,12 @@ export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<stri
       textColor: req.textColor,
       textSize: req.textSize,
       textHalo: req.textHalo,
-      ...(req.textBackground !== undefined ? { textBackground: req.textBackground } : {}),
-      textBorder: req.textBorder,
+      // A BOXED call-out (CB/icing) sets `textBackground`; its border (`textBorder`) goes on the
+      // box too. An UNBOXED call-out (turbulence: `textBorder` is only the leader/arrow/glyph ink,
+      // no background) must NOT draw a box — and draw-adapter 0.2.8+ boxes a border-only label, so
+      // we forward `textBorder` to the box ONLY alongside a background. The leader below still
+      // reads `req.textBorder` for its ink, so it stays coloured either way.
+      ...(req.textBackground !== undefined ? { textBackground: req.textBackground, textBorder: req.textBorder } : {}),
       ...(req.cycleField ? { cycleField: req.cycleField } : {}),
     };
     boxes.push({ type: "Feature", properties: props, geometry: { type: "Point", coordinates: [centerLL.lon, centerLL.lat] } });
