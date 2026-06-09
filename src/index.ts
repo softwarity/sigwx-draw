@@ -3,7 +3,7 @@
  * OpenLayers. The phenomenon registry + metadata schema drive the rendering
  * (jet barbs scale with wind speed, CB gets a scalloped edge, turbulence dashed).
  *
- * Subpath entry points: `./core` (pure), `./maplibre`, `./openlayers`, `./form`.
+ * Subpath entry points: `./core` (pure), `./maplibre`, `./openlayers`, `./leaflet`.
  */
 export * from "./core/index.js";
 export * from "./map/index.js";

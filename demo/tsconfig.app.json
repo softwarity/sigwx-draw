@@ -10,7 +10,6 @@
       "@softwarity/sigwx-draw/maplibre": ["../dist/map/maplibre-adapter"],
       "@softwarity/sigwx-draw/openlayers": ["../dist/map/openlayers-adapter"],
       "@softwarity/sigwx-draw/leaflet": ["../dist/map/leaflet-adapter"],
-      "@softwarity/sigwx-draw/form": ["../dist/form/index"],
       "@softwarity/draw-adapter": ["../../draw-adapter/dist/index", "./node_modules/@softwarity/draw-adapter/dist/index"],
       "@softwarity/draw-adapter/maplibre": ["../../draw-adapter/dist/maplibre", "./node_modules/@softwarity/draw-adapter/dist/maplibre"],
       "@softwarity/draw-adapter/openlayers": ["../../draw-adapter/dist/openlayers", "./node_modules/@softwarity/draw-adapter/dist/openlayers"],

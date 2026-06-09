@@ -27,10 +27,6 @@
     "./leaflet": {
       "types": "./dist/map/leaflet-adapter.d.ts",
       "import": "./dist/map/leaflet-adapter.js"
-    },
-    "./form": {
-      "types": "./dist/form/index.d.ts",
-      "import": "./dist/form/index.js"
     }
   },
   "files": [
