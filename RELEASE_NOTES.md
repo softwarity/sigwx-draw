@@ -1,5 +1,9 @@
 # Release Notes
 
+## NEXT RELEASE
+
+---
+
 ## 0.3.0
 
 - **Add: Tropopause phenomenon** — the height of the tropopause as a single flight level
