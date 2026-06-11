@@ -5,9 +5,11 @@
  * just draws `sprite = metadata.symbol`. Click the glyph on the map to pick another
  * (carousel for a small set, radial picker for a large one — handled by the map layer).
  */
+import type { MarkerWidget } from "@softwarity/draw-adapter";
+
 import { catmullRomClosed, coordsOf, lineFeature, pointFeature, polygonFeature } from "../decorate/index.js";
 import type { Pt } from "../decorate/index.js";
-import type { DecorateFn, PhenomenonDef, RenderFeature } from "../phenomenon.js";
+import type { DecorateFn, PhenomenonDef, RenderFeature, WidgetInput } from "../phenomenon.js";
 import { fl, num, regularPolygon, ringCentroid, str } from "./util.js";
 
 /** One entry of the turbulence symbol catalogue: a `code` (also the sprite id) + label. */
@@ -126,6 +128,41 @@ export function makeTurbulence(symbols: TurbulenceSymbol[] = DEFAULT_TURBULENCE_
       { type: "fl", key: "topFL", label: "Top", default: 360, min: FL_MIN, max: FL_MAX },
     ],
     decorate,
+    // When SELECTED, the call-out (glyph above the FL text) is REPLACED by a DOM card at
+    // the same placed spot — UNFRAMED like the canvas call-out — whose severity glyph is a
+    // `"carousel"` control (click = next, shift-click = previous; emits name:"symbol").
+    // Returns null when unselected ⇒ the canvas call-out (tap-the-glyph cycle) renders as usual.
+    widget: ({ id, metadata, editable, style, callout, sprite }: WidgetInput): MarkerWidget | null => {
+      if (!editable || !callout) return null;
+      const sym = str(metadata["symbol"], first);
+      const ink = (sym === "SEV" ? style.sev : style.mod)?.color ?? style.color;
+      const options = symbols.map((s) => {
+        const svg = sprite?.(s.code);
+        return svg ? { value: s.code, svg } : { value: s.code, label: s.code };
+      });
+      // The canvas call-out centres the TEXT box on the placed anchor with the glyph ABOVE
+      // it — this card stacks glyph + text, so a plain "center" origin would shift the whole
+      // assembly DOWN by half the glyph. Pin the card at its TEXT block's centre instead
+      // (fractional origin), so select/unselect don't jump.
+      const fontPx = style.text?.size ?? 13;
+      const textH = callout.content.split("\n").length * fontPx * 1.3;
+      const glyphH = 32; // sprite intrinsic px (the carousel renders it 1:1)
+      return {
+        id,
+        anchor: { lon: callout.at[0]!, lat: callout.at[1]! },
+        origin: { x: 0.5, y: (glyphH + textH / 2) / (glyphH + textH) },
+        font: { color: ink, size: fontPx },
+        child: {
+          dir: "v",
+          align: "center",
+          gap: 0,
+          items: [
+            { kind: "text", value: sym, control: "carousel", name: "symbol", options },
+            ...callout.content.split("\n").map((value) => ({ kind: "text" as const, value })),
+          ],
+        },
+      };
+    },
     // Grey shading per the WAFC norm — MOD light grey, SEV darker grey (the ink drives
     // edge + fill + glyph + FL text; `text` carries only a halo). See `decorate`.
     style: {

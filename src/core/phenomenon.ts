@@ -10,6 +10,7 @@
  *
  * This module is PURE (no DOM/map): everything here is unit-testable map-free.
  */
+import type { MarkerWidget } from "@softwarity/draw-adapter";
 import type { Feature, Geometry } from "geojson";
 
 import type { LatLng } from "./coord.js";
@@ -44,6 +45,9 @@ export interface RenderProps {
   // area-fill
   fillColor?: string;
   fillOpacity?: number;
+  /** Declutter staging: `"late"` chrome (a jet's arrowhead — it carries the DIRECTION)
+   *  survives down to HALF the hide threshold, outliving the barbs/labels. */
+  declutter?: "late";
   // edge / decoration (line)
   stroke?: string;
   strokeWidth?: number;
@@ -71,9 +75,6 @@ export interface RenderProps {
   leader?: boolean;
   /** Draw an arrowhead at the anchor end of the call-out leader. */
   arrow?: boolean;
-  /** Schema enum key to cycle when the call-out BOX is tapped (on-map carousel) — used when
-   *  the coverage/type lives in the box text itself (CB) rather than a separate glyph. */
-  cycleField?: string;
   /** Leader style: "lightning" → a zigzag bolt attaching under the box (convective/CB). */
   leaderStyle?: string;
   kind?: string;
@@ -106,6 +107,28 @@ export interface DecorationInput {
  * engine-agnostic — emits plain GeoJSON tagged via {@link RenderProps}.
  */
 export type DecorateFn = (input: DecorationInput) => RenderFeature[];
+
+/** Input to a {@link PhenomenonDef.widget} builder — a point phenomenon whose whole visual is
+ *  an inline-editable marker card (TC / volcano / radioactive), not derived render features. */
+export interface WidgetInput {
+  /** Owning feature id — echoed into the widget's `id`. */
+  id: string;
+  /** The editable base geometry (a Point), in lon/lat. */
+  geometry: Geometry;
+  metadata: Metadata;
+  /** Selected ⇒ its text becomes an inline `<input>`; else a read-only label. */
+  editable: boolean;
+  style: PhenomenonStyle;
+  /** The feature's placed call-out box (area phenomena with an annotation): its placed
+   *  anchor (lon/lat) + the rendered text. Controller-provided AFTER the placement pass —
+   *  lets a widget REPLACE the call-out while selected (e.g. CB's `+` control card).
+   *  Absent for point markers and before the first placement. */
+  callout?: { at: [number, number]; content: string };
+  /** Resolve a registered sprite id to its inline SVG (the controller's merged catalogue,
+   *  host extensions included) — lets a widget build GLYPH carousel options (the
+   *  turbulence/icing severity pickers). */
+  sprite?: (id: string) => string | undefined;
+}
 
 // ── Metadata schema ────────────────────────────────────────────────────────
 
@@ -222,6 +245,11 @@ export interface PhenomenonDef {
   schema: FieldSchema[];
   /** geometry + metadata → derived decoration features. The heart of SIGWX. */
   decorate: DecorateFn;
+  /** Build a `MarkerWidget` (a DOM card) for this feature — a point marker (TC / volcano /
+   *  radioactive), OR a transient control panel for another phenomenon (e.g. CB's edge `+`
+   *  buttons). Return `null` to emit no widget for the current state (e.g. when unselected).
+   *  The controller collects the non-null ones and calls `adapter.setWidgets(...)`. */
+  widget?: (input: WidgetInput) => MarkerWidget | null;
   /** Default per-phenomenon style (host can override via the aggregate style). */
   style: PhenomenonStyle;
   /** Optional one-line human summary (label/tooltip). */

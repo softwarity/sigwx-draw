@@ -5,9 +5,11 @@
  * WHITE call-out (box / glyph / FL / leader), per the WAFC chart. The fill + edge follow the
  * intensity (MOD lighter, SEV darker purple). Tap the glyph on the map to cycle MOD ↔ SEV.
  */
+import type { MarkerWidget } from "@softwarity/draw-adapter";
+
 import { catmullRomClosed, coordsOf, frameK, inwardTicks, lineFeature, pointFeature, polygonFeature, polylineLength, toPlanar } from "../decorate/index.js";
 import type { Pt } from "../decorate/index.js";
-import type { DecorateFn, PhenomenonDef, RenderFeature } from "../phenomenon.js";
+import type { DecorateFn, PhenomenonDef, RenderFeature, WidgetInput } from "../phenomenon.js";
 import { fl, num, regularPolygon, ringCentroid, str, textBoxProps } from "./util.js";
 
 /** One icing intensity: a `code` (which IS the sprite id, e.g. `ICE_MOD`) + a display label. */
@@ -131,6 +133,38 @@ export function makeIcing(symbols: IcingSymbol[] = DEFAULT_ICING_SYMBOLS): Pheno
       { type: "fl", key: "topFL", label: "Top", default: 360, min: FL_MIN, max: FL_MAX },
     ],
     decorate,
+    // When SELECTED, the black & white call-out panel is REPLACED by a DOM card at the same
+    // placed spot, whose fork glyph is a `"carousel"` control (click = next, shift-click =
+    // previous; emits name:"symbol"). The canvas content's leading BLANK lines (reserved for
+    // the inside glyph) are dropped — the glyph is its own card item. Returns null when
+    // unselected ⇒ the canvas call-out (tap-the-glyph cycle) renders as usual.
+    widget: ({ id, metadata, editable, style, callout, sprite }: WidgetInput): MarkerWidget | null => {
+      if (!editable || !callout) return null;
+      const ink = style.text?.color ?? "#1f2328"; // black & white, like the canvas panel
+      const sym = str(metadata["symbol"], first);
+      const options = symbols.map((s) => {
+        const svg = sprite?.(s.code);
+        return svg ? { value: s.code, svg } : { value: s.code, label: s.code.replace("ICE_", "") };
+      });
+      return {
+        id,
+        anchor: { lon: callout.at[0]!, lat: callout.at[1]! },
+        bg: style.text?.background ?? "#ffffff",
+        border: ink,
+        radius: "small",
+        padding: "small",
+        font: { color: ink, size: style.text?.size ?? 13 },
+        child: {
+          dir: "v",
+          align: "center",
+          gap: 0,
+          items: [
+            { kind: "text", value: sym, control: "carousel", name: "symbol", options },
+            ...callout.content.split("\n").filter((l) => l.trim() !== "").map((value) => ({ kind: "text" as const, value })),
+          ],
+        },
+      };
+    },
     // Purple shading per the WAFC norm — MOD lighter, SEV darker (the ink drives edge + fill);
     // the call-out is black & white (see `decorate`).
     style: {

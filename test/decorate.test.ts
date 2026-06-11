@@ -219,13 +219,13 @@ describe("cb / turbulence", () => {
     expect(x).toBeCloseTo(1, 5);
     expect(y).toBeCloseTo(1, 5); // NOT 0.8 (the density-skewed vertex mean)
   });
-  it("CB emits a scalloped fill + edge + a single call-out box (coverage / CB / top / base, tap to cycle)", () => {
+  it("CB emits a scalloped fill + edge + a single call-out box (coverage / CB / top / base)", () => {
     const fs = cb.decorate({ geometry: poly, metadata: { coverage: "OCNL", topFL: 350, baseFL: 100 }, style: cb.style });
     expect(byLayer(fs, "area-fill").length).toBe(1);
     expect(byLayer(fs, "edge").length).toBe(1);
     const ann = byLayer(fs, "annotations")[0]!;
     expect(ann.properties.arrow).toBe(true);
-    expect(ann.properties.cycleField).toBe("coverage"); // tap the box → cycle the coverage enum
+    expect(ann.properties.cycleField).toBeUndefined(); // the coverage is edited on the SELECTED card's carousel
     const content = String(ann.properties.content);
     expect(content).toContain("OCNL"); // coverage — in the box itself now
     expect(content).toContain("CB");

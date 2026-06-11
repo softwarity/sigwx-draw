@@ -45,7 +45,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@softwarity/draw-adapter": "^0.2.9",
+    "@softwarity/draw-adapter": "^0.3.2",
     "@types/geojson": "^7946.0.14"
   },
   "peerDependencies": {

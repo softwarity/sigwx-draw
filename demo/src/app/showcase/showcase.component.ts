@@ -53,7 +53,7 @@ const ENGINE_BY_ADAPTER: Record<string, Engine> = {
   OpenLayersAdapter: "openlayers",
   LeafletAdapter: "leaflet",
 };
-type Phenomenon = "jetStream" | "cb" | "turbulence" | "icing" | "tropopause";
+type Phenomenon = "jetStream" | "cb" | "turbulence" | "icing" | "tropopause" | "volcano" | "tropicalCyclone" | "radioactive";
 
 interface PhenomenonButton {
   type: Phenomenon;
@@ -335,6 +335,11 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
       if (on("pOn")) {
         cfg.style = { edge: { color: col("pEdge") }, text: { color: col("pEdge") } };
       }
+    } else if (type === "volcano" || type === "tropicalCyclone" || type === "radioactive") {
+      // Marker widgets: `color` inks the glyph + card frame; `text` lets the name/coord
+      // deviate (colour + font px) — or follow the ink when left out.
+      const p = type === "volcano" ? "v" : type === "tropicalCyclone" ? "y" : "r";
+      if (on(p + "On")) cfg.style = { color: col(p + "Color"), text: { color: col(p + "Text"), size: Number(val(p + "Size")) } };
     }
     this.phenoCfg = { ...this.phenoCfg, [type]: cfg };
 
@@ -412,7 +417,7 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
         toolbar: this.toolbarOn
           ? {
               position: this.tbPos,
-              tools: ["jetStream", "cb", "icing", "turbulence", "tropopause"],
+              tools: ["jetStream", "cb", "icing", "turbulence", "tropopause", "volcano", "tropicalCyclone", "radioactive"],
               lock: this.tbLock,
               snapshot: {
                 ...(this.snapQOn ? { quality: this.snapQuality as SnapshotQuality } : {}),

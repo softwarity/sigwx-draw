@@ -8,9 +8,14 @@
  * turbulence AND icing — these are NOT drawn separately on the CB. Embedded (EMBD)
  * coverage was discontinued in January 2025, so the default catalogue is OCNL / FRQ.
  */
-import { coordsOf, frameK, lineFeature, pointFeature, polygonFeature, polylineLength, scallopRing, toPlanar } from "../decorate/index.js";
-import type { DecorateFn, PhenomenonDef, RenderFeature } from "../phenomenon.js";
+import type { MarkerWidget } from "@softwarity/draw-adapter";
+
+import { coordsOf, frameK, lineFeature, outerRings, pointFeature, polygonFeature, polylineLength, scallopRing, toPlanar } from "../decorate/index.js";
+import type { DecorateFn, PhenomenonDef, RenderFeature, WidgetInput } from "../phenomenon.js";
 import { fl, num, regularPolygon, ringCentroid, str, textBoxProps } from "./util.js";
+
+/** A `+` glyph for CB's transient edge action buttons. */
+const CB_PLUS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 6 V18 M6 12 H18"/></svg>';
 
 /** One CB coverage amount: `code` (stored in metadata), `label`, and the WMO BUFR
  *  0-20-008 figure for IWXXM export. The cloud type is always CB ({@link CB_CLOUD_TYPE_BUFR}). */
@@ -44,17 +49,13 @@ export function makeCb(coverages: CbCoverage[] = DEFAULT_CB_COVERAGE): Phenomeno
   const first = coverages[0]?.code ?? "OCNL";
 
   const decorate: DecorateFn = ({ geometry, metadata, style, flightLevel, leaderThunderbolt }) => {
-    const ring = coordsOf(geometry);
-    if (ring.length < 3) return [];
-    // Scallop the boundary — real geometry; bumps point OUTWARD (away from the fill), so a
-    // concave edge / hole naturally reads as bumps "into" it. `scallopRing` orients by the ring.
-    const k = frameK(ring);
-    const perim = polylineLength(ring.map((c) => toPlanar(c, k)));
-    const wavelength = Math.max(0.05, perim / 36);
+    // A CB may be MULTI-AREA (drawn with the call-out's `+` button): one logical CB — one
+    // box, one metadata set — whose geometry holds several polygons. Scallop + fill EACH.
+    const rings = outerRings(geometry).filter((r) => r.length >= 3);
+    if (!rings.length) return [];
     // Bump direction is per-feature: toggled ON THE MAP (tap the central handle) via the
     // `scallopInvert` metadata flag; falls back to the style default. true → bumps point INWARD.
     const invert = metadata["scallopInvert"] != null ? Boolean(metadata["scallopInvert"]) : style.edge?.scallopSide === "in";
-    const scalloped = scallopRing(ring, { wavelength, amplitude: wavelength * 0.6, invert });
     const out: RenderFeature[] = [];
 
     // Chart vertical bounds (FL250–600 by default; overridable via `flightLevel`). A base
@@ -70,24 +71,33 @@ export function makeCb(coverages: CbCoverage[] = DEFAULT_CB_COVERAGE): Phenomeno
 
     const ink = style.edge?.color ?? style.color; // red — the scalloped EDGE (the area outline)
     const callout = style.text?.color ?? "#1f2328"; // black — the call-out panel, per the WAFC visuals
-    if (style.area) {
-      out.push(polygonFeature(scalloped, { layer: "area-fill", fillColor: style.area.color ?? style.color, fillOpacity: style.area.opacity ?? 0.12 }));
+    for (const ring of rings) {
+      // Scallop each boundary — real geometry; bumps point OUTWARD (away from the fill), so a
+      // concave edge / hole naturally reads as bumps "into" it. `scallopRing` orients by the ring.
+      const k = frameK(ring);
+      const perim = polylineLength(ring.map((c) => toPlanar(c, k)));
+      const wavelength = Math.max(0.05, perim / 36);
+      const scalloped = scallopRing(ring, { wavelength, amplitude: wavelength * 0.6, invert });
+      if (style.area) {
+        out.push(polygonFeature(scalloped, { layer: "area-fill", fillColor: style.area.color ?? style.color, fillOpacity: style.area.opacity ?? 0.12 }));
+      }
+      out.push(lineFeature(scalloped, { layer: "edge", stroke: ink, strokeWidth: style.edge?.width ?? 2 }));
     }
-    out.push(lineFeature(scalloped, { layer: "edge", stroke: ink, strokeWidth: style.edge?.width ?? 2 }));
 
     // Call-out: ONE framed box "{coverage} / CB / {top} / {base}" — black text + white box + black
-    // border + black leader/arrow (the WAFC panel is black & white; the scallop stays red). Tap the
-    // box to cycle the coverage (carousel via `cycleField`).
+    // border + black leader/arrow (the WAFC panel is black & white; the scallop stays red). The
+    // coverage is edited on the SELECTED card's carousel. Anchored at the LARGEST area's
+    // centroid (`coordsOf` of a MultiPolygon = its largest ring); the controller aims one
+    // leader/arrow at EACH area.
     const coverage = str(metadata["coverage"], first);
     out.push(
-      pointFeature(ringCentroid(ring), {
+      pointFeature(ringCentroid(coordsOf(geometry)), {
         layer: "annotations",
         labelId: "cb",
         // Multi-word coverages (e.g. "OCNL EMBD") stack onto their own lines (one line more).
         content: `${coverage.replace(/ /g, "\n")}\nCB\n${flx(metadata["topFL"], false)}\n${flx(metadata["baseFL"], true)}`,
         leader: true,
         arrow: true,
-        cycleField: "coverage", // tap the box → cycle this enum (the on-map carousel)
         // Lightning-bolt leader by default (convective); `leaderThunderbolt:false` → plain straight.
         ...(leaderThunderbolt === false ? {} : { leaderStyle: "lightning" }),
         ...textBoxProps(style),
@@ -133,6 +143,40 @@ export function makeCb(coverages: CbCoverage[] = DEFAULT_CB_COVERAGE): Phenomeno
       { type: "fl", key: "topFL", label: "Top", default: 400, min: FL_MIN, max: FL_MAX },
     ],
     decorate,
+    // When SELECTED, the call-out box is REPLACED by a DOM card at the same placed spot —
+    // same content, plus `+` buttons straddling its edges (`onWidgetAction("draw-more")`).
+    // The COVERAGE line is a `"carousel"` control (click = next, shift-click = previous,
+    // emits `onWidgetEdit({id, name:"coverage", value})`) — it replaces the old tap-the-box
+    // cycle while selected. The leader/arrow still points at the card. Returns null when
+    // unselected (or before the first placement) ⇒ the canvas call-out renders as usual.
+    widget: ({ id, metadata, editable, style, callout }: WidgetInput): MarkerWidget | null => {
+      if (!editable || !callout) return null;
+      const ink = style.text?.color ?? "#1f2328"; // black & white, like the canvas call-out
+      // The canvas content is `{coverage (multi-word = multi-line)}\nCB\n{top}\n{base}` — keep
+      // its LAST 2 lines (the flx-formatted FLs); the coverage AND the "CB" word fold into the
+      // carousel as a stacked multi-line label (mirrors the canvas; needs the adapter's
+      // `white-space: pre-line` on the control, else it degrades to one line).
+      const tail = callout.content.split("\n").slice(-2);
+      return {
+        id,
+        anchor: { lon: callout.at[0]!, lat: callout.at[1]! },
+        bg: style.text?.background ?? "#ffffff",
+        border: ink,
+        radius: "small",
+        padding: "small",
+        font: { color: ink, size: style.text?.size ?? 13 },
+        child: {
+          dir: "v",
+          align: "center",
+          gap: 0,
+          items: [
+            { kind: "text", value: str(metadata["coverage"], first), control: "carousel", name: "coverage", options: coverages.map((c) => ({ value: c.code, label: `${c.code.replace(/ /g, "\n")}\nCB` })) },
+            ...tail.map((value) => ({ kind: "text" as const, value })),
+          ],
+        },
+        buttons: [{ event: "draw-more", place: ["top", "left", "bottom"], svg: CB_PLUS, bordered: true, title: "Draw a linked area" }],
+      };
+    },
     // Red scalloped edge (PNG convention). The ink drives edge + fill tint + glyph + FL text.
     style: {
       color: "#d1242f",

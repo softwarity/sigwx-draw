@@ -88,7 +88,9 @@ const decorate: DecorateFn = ({ geometry, metadata, style, resolution }) => {
     const n = planar.length;
     const tip = reversed ? planar[0]! : planar[n - 1]!;
     const dir = reversed ? sub(planar[0]!, planar[1]!) : sub(planar[n - 1]!, planar[n - 2]!);
-    out.push(arrowheadFeature(tip, dir, k, arrowSize, { layer: "decoration", stroke, strokeWidth: 1, fillColor: stroke }));
+    // `declutter:"late"`: the arrowhead carries the jet's DIRECTION — zoomed out it outlives
+    // the barbs/labels (hides only at half the declutter threshold).
+    out.push(arrowheadFeature(tip, dir, k, arrowSize, { layer: "decoration", stroke, strokeWidth: 1, fillColor: stroke, declutter: "late" }));
   }
   // Leave room for the arrowhead at the downstream tip so the end barb doesn't overlap it.
   const endMargin = showArrow ? arrowSize * 1.8 : 0;

@@ -18,6 +18,7 @@ export type {
   CbStyle,
   IcingStyle,
   TropopauseStyle,
+  MarkerStyle,
   PhenomenonStyle,
 } from "./style.js";
 export { mergePhenomenonStyle, rgba } from "./style.js";
@@ -30,6 +31,7 @@ export type {
   Metadata,
   DecorationInput,
   DecorateFn,
+  WidgetInput,
   FieldSchema,
   NumberField,
   FlightLevelField,
@@ -52,7 +54,7 @@ export {
 
 export * from "./decorate/index.js";
 
-export { BUILTIN_PHENOMENA, defaultRegistry, jetStream, cb, icing, turbulence, tropopause } from "./registry.js";
+export { BUILTIN_PHENOMENA, defaultRegistry, jetStream, cb, icing, turbulence, tropopause, volcano, tropicalCyclone, radioactive } from "./registry.js";
 export { makeTurbulence, DEFAULT_TURBULENCE_SYMBOLS } from "./phenomena/turbulence.js";
 export type { TurbulenceSymbol } from "./phenomena/turbulence.js";
 export { makeCb, DEFAULT_CB_COVERAGE, CB_CLOUD_TYPE_BUFR } from "./phenomena/cb.js";

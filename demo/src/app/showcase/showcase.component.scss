@@ -137,6 +137,9 @@
     display: block;
     margin: 0;
     font-size: 12px;
+    // The card clips (overflow: hidden) — the code block must own its own horizontal
+    // scrollbar, else a long config line is CUT with no way to see the rest.
+    overflow-x: auto;
   }
 }
 

@@ -13,11 +13,15 @@
  */
 import type { Feature, FeatureCollection, Geometry, Position } from "geojson";
 
+import { ringCentroid } from "../core/phenomena/util.js";
+
 import {
   catmullRom,
   catmullRomClosed,
   clampInRing,
   coordsOf,
+  outerRings,
+  pointInRing,
   isSimpleRing,
   radialSortRing,
   defaultMetadata,
@@ -57,9 +61,10 @@ import type {
   RenderFeature,
   SigwxFeature,
   TropopauseStyle,
+  MarkerStyle,
   TurbulenceStyle,
 } from "../core/index.js";
-import type { KeyEvent, MapAdapter, PointerEvent, SnapshotOptions, SymbolSprites, ToolbarItem, ToolbarOptions } from "./adapter.js";
+import type { KeyEvent, MapAdapter, MarkerWidget, PointerEvent, SnapshotOptions, SymbolSprites, ToolbarItem, ToolbarOptions } from "./adapter.js";
 import { ANNOTATION_BUCKET, OVERLAY_IDS } from "./layers.js";
 import { placeAnnotations } from "./placement.js";
 import type { AnnReq, Pin } from "./placement.js";
@@ -140,6 +145,9 @@ export interface PhenomenaConfig {
   cb?: { flightLevel?: FlightLevelConfig<[number, number]>; style?: Partial<CbStyle>; leaderThunderbolt?: boolean; extraCoverages?: (string | CbCoverage)[] };
   icing?: { flightLevel?: FlightLevelConfig<[number, number]>; style?: Partial<IcingStyle>; leaderThunderbolt?: boolean };
   tropopause?: { flightLevel?: FlightLevelConfig<number>; style?: Partial<TropopauseStyle> };
+  volcano?: { style?: Partial<MarkerStyle> };
+  tropicalCyclone?: { style?: Partial<MarkerStyle> };
+  radioactive?: { style?: Partial<MarkerStyle> };
   [type: string]: PhenomenonConfig | undefined;
 }
 
@@ -165,6 +173,12 @@ export interface SigwxDrawOptions {
   phenomena?: PhenomenaConfig;
   /** Extra turbulence symbols/types, added to the default MOD/SEV catalogue. */
   turbulenceTypes?: TurbulenceType[];
+  /** Chrome decluttering. `minZoneFraction` (default 0.15): an UNSELECTED feature whose
+   *  on-screen extent is smaller than this fraction of the view hides its CHROME —
+   *  call-out box + leader + arrow + glyph, FL labels, and a jet's barbs/arrowhead.
+   *  The shape itself (outline/fill) still marks it; zooming toward it (or selecting
+   *  it) brings everything back. `0` ⇒ never hide. */
+  callouts?: { minZoneFraction?: number };
 }
 
 const fc = (features: Feature[]): FeatureCollection => ({ type: "FeatureCollection", features });
@@ -176,7 +190,9 @@ const CLEAR_ICON =
  *  phenomenon (CB): drag it to move the call-out, TAP it to flip the bumps in/out. Data-URI so
  *  the adapter rasterises it straight onto the handle (per-feature handle icon). */
 const SYNC_ICON = `data:image/svg+xml,${encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#1f2328" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>',
+  // Explicit width/height: an SVG data-URI WITHOUT intrinsic dimensions rasterizes at the
+  // browser default 300×150 (OL `Icon` uses the intrinsic size × scale → a giant glyph).
+  '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1f2328" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>',
 )}`;
 /** Editing-chrome overlays hidden during a snapshot, so the PNG shows the clean chart
  *  (no selection highlight / edit + control handles). The chart decoration stays. */
@@ -222,6 +238,13 @@ function singleFlFieldOf(def: PhenomenonDef): FlightLevelField | undefined {
   return def.schema.find((f): f is FlightLevelField => f.type === "fl" && f.key === "fl");
 }
 
+/** A point marker (TC / volcano / radioactive): its widget IS the whole rendering — so it's
+ *  grouped under the toolbar submenu and shows no vertex handle (the card covers the point).
+ *  CB also produces a widget (a transient `+` control panel) but is an AREA → NOT a marker. */
+function isPointMarker(def: PhenomenonDef): boolean {
+  return !!def.widget && def.primitives.length === 1 && def.primitives[0] === "point";
+}
+
 export class SigwxDraw {
   private readonly adapter: MapAdapter;
   private readonly registry: PhenomenonRegistry;
@@ -235,6 +258,11 @@ export class SigwxDraw {
   private order: string[] = [];
   private selectedId: string | null = null;
   private selectedSub: number | null = null;
+  /** Selected AREA(s) of a multi-area feature (CB MultiPolygon): clicking ONE area selects
+   *  the feature (info box included) but narrows the outline/handles — and the drag and
+   *  Delete actions — to those areas. SHIFT-click toggles an area in/out of the set.
+   *  Empty = whole-feature selection (e.g. selected via its card). */
+  private selectedAreas: number[] = [];
   private mode: "idle" | "drawing" | "editing" = "idle";
   private drawing: { type: string; coords: Position[] } | null = null;
   private drawCursor: Position | null = null;
@@ -245,9 +273,8 @@ export class SigwxDraw {
     | { kind: "speed"; featureId: string; index: number }
     | { kind: "level"; featureId: string; index: number; field: "fl" | "top" | "base" }
     | { kind: "metaLevel"; featureId: string; field: string }
-    | { kind: "toggle"; featureId: string; field: string; options: string[] }
-    | { kind: "callout"; featureId: string; labelId: string; grab: [number, number]; toggle?: { field: string; options: string[] } }
-    | { kind: "anchor"; featureId: string }
+    | { kind: "callout"; featureId: string; labelId: string; grab: [number, number] }
+    | { kind: "anchor"; featureId: string; area: number }
     | { kind: "translate"; featureId: string; lastPx: [number, number] }
     | null = null;
   private didDrag = false;
@@ -260,11 +287,22 @@ export class SigwxDraw {
   private style: SigwxStyle;
   private readonly resolved = new Map<string, PhenomenonStyle>();
   private readonly pins = new Map<string, Pin>();
-  /** User-moved leader anchor (arrow tip), lon/lat per feature — re-clamped into the ring each render. */
-  private readonly anchorPins = new Map<string, [number, number]>();
+  /** User-moved leader anchors (arrow tips), lon/lat per feature — ONE per area (index-aligned
+   *  with the geometry's polygons), each re-clamped into ITS ring every render. */
+  private readonly anchorPins = new Map<string, [number, number][]>();
+  /** Feature id the next drawn polygon is APPENDED to (the call-out's `+` button) — the new
+   *  area joins that feature's geometry (Polygon → MultiPolygon) instead of creating a feature. */
+  private appendTo: string | null = null;
   /** Where each feature's call-out box was last placed (lon/lat) — so the area FL gauge follows it. */
   private readonly placedAt = new Map<string, [number, number]>();
   private lastAnnReqs: AnnReq[] = [];
+  /** Merged sprite catalogue (defaults + host overrides + turbulence extensions) — the
+   *  widget builders resolve their glyph carousel options from it. */
+  private readonly spriteCatalog: SymbolSprites = {};
+  /** Call-out declutter threshold (fraction of the view span; 0 = never hide). */
+  private readonly calloutFraction: number;
+  /** Last visibility per feature (the ±10% hysteresis needs the previous state). */
+  private readonly calloutShown = new Map<string, boolean>();
   private idSeq = 0;
   private destroyed = false;
   private renderScheduled = false;
@@ -277,12 +315,15 @@ export class SigwxDraw {
     this.adapter = opts.adapter;
     this.registry = opts.registry ?? defaultRegistry();
     this.phenomena = opts.phenomena ?? {};
+    this.calloutFraction = opts.callouts?.minZoneFraction ?? 0.15;
     this.style = mergeStyle(DEFAULT_STYLE, opts.style);
 
     this.readyPromise = this.adapter.ready().then(async () => {
       // The generic adapter does NOT auto-register sprites — register the SIGWX
-      // defaults (MOD/SEV turbulence glyphs); the host's overrides win.
-      await this.adapter.registerSymbols({ ...DEFAULT_SPRITES, ...(opts.symbolSprite ?? {}) });
+      // defaults (MOD/SEV turbulence glyphs); the host's overrides win. Keep the merged
+      // catalogue: widget builders resolve their glyph carousel options from it.
+      Object.assign(this.spriteCatalog, DEFAULT_SPRITES, opts.symbolSprite ?? {});
+      await this.adapter.registerSymbols(this.spriteCatalog);
       if (opts.turbulenceTypes?.length) {
         this.turbTypes = [...opts.turbulenceTypes];
         await this.applyTurbulenceCatalog();
@@ -300,6 +341,27 @@ export class SigwxDraw {
       // multi-instance safe and the host app's own inputs elsewhere never reach us) and editable
       // targets are already skipped — no window-level listener / `isEditableTarget` shim needed.
       this.adapter.onKey((ev) => this.onKey(ev));
+      // Widget edits → metadata. The control's `name` says WHICH field changed (the CB
+      // coverage carousel emits name:"coverage"); a nameless control is the markers' name
+      // input. The coord line is decimal degrees, lat then lon (e.g. "1.7N 127.9E").
+      this.adapter.onWidgetEdit((e) => this.updateMetadata(e.id, { [e.name ?? "name"]: e.value }));
+      this.adapter.setCoordFormat((ll) => `${Math.abs(ll.lat).toFixed(1)}${ll.lat >= 0 ? "N" : "S"} ${Math.abs(ll.lon).toFixed(1)}${ll.lon >= 0 ? "E" : "W"}`);
+      // The card's delete ✕ (the input swallows Delete/Backspace) → same routing as the
+      // Delete key: an area-narrowed selection drops THAT area, else the whole feature.
+      this.adapter.onWidgetDelete((e) => {
+        const f = this.doc.get(e.id);
+        if (f?.geometry.type === "MultiPolygon" && e.id === this.selectedId && this.selectedAreas.length) this.removeAreas(e.id, this.selectedAreas);
+        else this.delete(e.id);
+      });
+      // The card's edge "+" button ("draw-more") → draw an EXTRA AREA appended to THIS
+      // feature (one CB, several zones, one box, one arrow per zone).
+      this.adapter.onWidgetAction((e) => {
+        const f = this.doc.get(e.id);
+        if (e.event === "draw-more" && f) {
+          this.draw(f.properties.phenomenon);
+          this.appendTo = e.id; // set AFTER draw() — it resets stale state via cancelDrawing
+        }
+      });
       if (opts.toolbar) this.buildToolbar(opts.toolbar === true ? {} : opts.toolbar);
       this.renderAll();
     });
@@ -333,9 +395,38 @@ export class SigwxDraw {
     return "";
   }
 
+  /** Remove the given AREAS of a multi-area feature. The feature — and its info box —
+   *  survives while other areas remain; the last remaining area demotes back to a simple
+   *  Polygon; removing EVERY area deletes the whole feature. */
+  private removeAreas(id: string, areas: number[]): void {
+    const f = this.doc.get(id);
+    if (!f || f.geometry.type !== "MultiPolygon") return;
+    const g = f.geometry;
+    if (areas.length >= g.coordinates.length) {
+      this.delete(id); // every area selected → the whole feature (info box included) goes
+      return;
+    }
+    for (const a of [...areas].sort((x, y) => y - x)) {
+      if (!g.coordinates[a]) continue;
+      g.coordinates.splice(a, 1);
+      this.anchorPins.get(id)?.splice(a, 1); // keep the other areas' moved arrow tips aligned
+    }
+    if (g.coordinates.length === 1) f.geometry = { type: "Polygon", coordinates: g.coordinates[0]! };
+    this.selectedAreas = [];
+    this.afterEdit(id);
+  }
+
+  /** Narrow (or widen, with `[]`) the selection to a set of areas of the selected feature. */
+  private setSelectedAreas(areas: number[]): void {
+    if (this.selectedAreas.length === areas.length && this.selectedAreas.every((a, i) => a === areas[i])) return;
+    this.selectedAreas = areas;
+    this.scheduleRender();
+  }
+
   select(id: string | null): void {
     this.selectedId = id != null && this.doc.has(id) ? id : null;
     this.selectedSub = null;
+    this.selectedAreas = []; // whole-feature selection; an AREA click then narrows it
     // Centre the FL gauge of an AREA on its top/base midpoint (so the slider sits
     // level with the call-out, not hanging below).
     const f = this.selectedId ? this.doc.get(this.selectedId) : undefined;
@@ -438,6 +529,33 @@ export class SigwxDraw {
       uniq.splice(index, 1);
       uniq.push(uniq[0]!);
       g.coordinates[0] = uniq;
+    } else if (g.type === "MultiPolygon") {
+      // Flat index → (area, local), same walk as vertices(). An area already at its
+      // 3-vertex minimum loses the WHOLE area instead; a single remaining area demotes
+      // the geometry back to a simple Polygon.
+      let off = index;
+      let done = false;
+      for (let a = 0; a < g.coordinates.length && !done; a++) {
+        const ring = g.coordinates[a]?.[0];
+        if (!ring) continue;
+        const uniq = ring.length > 1 && samePoint(ring[0]!, ring[ring.length - 1]!) ? ring.slice(0, -1) : ring.slice();
+        if (off >= uniq.length) {
+          off -= uniq.length;
+          continue;
+        }
+        if (uniq.length <= 3) {
+          g.coordinates.splice(a, 1);
+          this.anchorPins.get(id)?.splice(a, 1); // keep the other areas' moved tips aligned
+          if (g.coordinates.length === 1) f.geometry = { type: "Polygon", coordinates: g.coordinates[0]! };
+          this.selectedAreas = [];
+        } else {
+          uniq.splice(off, 1);
+          uniq.push(uniq[0]!);
+          g.coordinates[a]![0] = uniq;
+        }
+        done = true;
+      }
+      if (!done) return;
     } else {
       return;
     }
@@ -477,29 +595,46 @@ export class SigwxDraw {
     const f = this.doc.get(id);
     if (!f) return;
     const g = f.geometry;
-    const verts = vertices(g);
-    if (verts.length < 2) return;
-    const k = frameK(verts as Pt[]);
-    const planar = verts.map((c) => toPlanar(c as Pt, k));
-    const cur = toPlanar([at[0]!, at[1]!], k);
-    const cyclic = g.type === "Polygon";
-    const segCount = cyclic ? planar.length : planar.length - 1;
-    let best = 0;
-    let bestD = Infinity;
-    for (let i = 0; i < segCount; i++) {
-      const d = segDist(cur, planar[i]!, planar[(i + 1) % planar.length]!);
-      if (d < bestD) {
-        bestD = d;
-        best = i;
+    // A MultiPolygon inserts into ONE area's ring — the clicked one (a flat segment search
+    // would bridge areas). The same per-ring path serves the simple Polygon (area 0).
+    if (g.type === "Polygon" || g.type === "MultiPolygon") {
+      const a = g.type === "MultiPolygon" ? nearestArea(g, at) : 0;
+      const poly = g.type === "MultiPolygon" ? g.coordinates[a] : g.coordinates;
+      const uniq = openRing(poly?.[0] ?? []).slice();
+      if (uniq.length < 2) return;
+      const k = frameK(uniq as Pt[]);
+      const planar = uniq.map((c) => toPlanar(c as Pt, k));
+      const cur = toPlanar([at[0]!, at[1]!], k);
+      let best = 0;
+      let bestD = Infinity;
+      for (let i = 0; i < planar.length; i++) {
+        const d = segDist(cur, planar[i]!, planar[(i + 1) % planar.length]!);
+        if (d < bestD) {
+          bestD = d;
+          best = i;
+        }
       }
-    }
-    if (g.type === "LineString") {
-      g.coordinates.splice(best + 1, 0, at);
-    } else if (g.type === "Polygon") {
-      const uniq = verts.slice();
       uniq.splice(best + 1, 0, at);
       uniq.push(uniq[0]!);
-      g.coordinates[0] = uniq;
+      poly![0] = uniq;
+    } else if (g.type === "LineString") {
+      const verts = vertices(g);
+      if (verts.length < 2) return;
+      const k = frameK(verts as Pt[]);
+      const planar = verts.map((c) => toPlanar(c as Pt, k));
+      const cur = toPlanar([at[0]!, at[1]!], k);
+      let best = 0;
+      let bestD = Infinity;
+      for (let i = 0; i < planar.length - 1; i++) {
+        const d = segDist(cur, planar[i]!, planar[i + 1]!);
+        if (d < bestD) {
+          bestD = d;
+          best = i;
+        }
+      }
+      g.coordinates.splice(best + 1, 0, at);
+    } else {
+      return;
     }
     if (this.selectedId !== id) this.select(id);
     else this.afterEdit(id);
@@ -523,6 +658,7 @@ export class SigwxDraw {
     this.order = this.order.filter((x) => x !== id);
     for (const k of [...this.pins.keys()]) if (k.startsWith(`${id}:`)) this.pins.delete(k);
     this.anchorPins.delete(id);
+    this.calloutShown.delete(id);
     if (this.selectedId === id) {
       this.selectedId = null;
       this.selectedSub = null;
@@ -612,8 +748,17 @@ export class SigwxDraw {
   /** Capture the map as a PNG (the same as the toolbar's snapshot button). The editing
    *  chrome is hidden by default for a clean chart; pass `opts` to override (`hideOverlays`,
    *  `target: "download" | "clipboard" | "blob"`, `scale`, `filename`). The Blob is returned. */
-  snapshot(opts?: SnapshotOptions): Promise<Blob> {
-    return this.adapter.snapshot({ hideOverlays: SNAPSHOT_HIDE, ...opts });
+  async snapshot(opts?: SnapshotOptions): Promise<Blob> {
+    // A selected marker shows an editable <input>; capture it in its un-selected (label) state, then restore.
+    const sel = this.selectedId;
+    const selF = sel ? this.doc.get(sel) : undefined;
+    const widgetSelected = !!selF && !!this.registry.get(selF.properties.phenomenon).widget;
+    if (widgetSelected) this.select(null);
+    try {
+      return await this.adapter.snapshot({ hideOverlays: SNAPSHOT_HIDE, ...opts });
+    } finally {
+      if (widgetSelected) this.select(sel!);
+    }
   }
 
   /**
@@ -634,6 +779,7 @@ export class SigwxDraw {
   private async applyTurbulenceCatalog(): Promise<void> {
     const sprites: SymbolSprites = {};
     for (const t of this.turbTypes) sprites[t.code] = t.svg;
+    Object.assign(this.spriteCatalog, sprites); // widgets resolve glyph options from here too
     if (Object.keys(sprites).length) await this.adapter.registerSymbols(sprites);
     const symbols = [...DEFAULT_TURBULENCE_SYMBOLS, ...this.turbTypes.map((t) => ({ code: t.code, label: t.label }))];
     this.registry.register(makeTurbulence(symbols));
@@ -705,6 +851,24 @@ export class SigwxDraw {
 
   /** Commit a drawn geometry as a new feature, select it, leave drawing mode. */
   private commit(type: string, geometry: Geometry): void {
+    // `+` append mode: the freshly drawn polygon joins the TARGET feature's geometry as an
+    // extra area (Polygon → MultiPolygon) — one logical phenomenon (one box, one metadata
+    // set, one arrow per area), NOT a new feature.
+    const target = this.appendTo ? this.doc.get(this.appendTo) : undefined;
+    this.appendTo = null;
+    if (target && geometry.type === "Polygon" && (target.geometry.type === "Polygon" || target.geometry.type === "MultiPolygon")) {
+      if (target.geometry.type === "Polygon") target.geometry = { type: "MultiPolygon", coordinates: [target.geometry.coordinates, geometry.coordinates] };
+      else target.geometry.coordinates.push(geometry.coordinates);
+      this.drawing = null;
+      this.drawCursor = null;
+      this.stroking = false;
+      this.mode = "editing";
+      this.adapter.setCursor("");
+      this.select(target.properties.id); // back on the SAME feature — its card returns
+      this.setSelectedAreas([target.geometry.coordinates.length - 1]); // …narrowed to the area just drawn
+      this.emitChange();
+      return;
+    }
     const id = `f${this.idSeq++}`;
     const metadata = defaultMetadata(this.registry.get(type));
     this.applyFlDefault(type, metadata); // override FL defaults from `phenomena[type].flightLevel.default`
@@ -782,6 +946,7 @@ export class SigwxDraw {
   }
 
   private cancelDrawing(): void {
+    this.appendTo = null; // an aborted `+` stroke must not capture the NEXT drawing
     if (!this.drawing) return;
     this.drawing = null;
     this.drawCursor = null;
@@ -844,26 +1009,50 @@ export class SigwxDraw {
     const buckets: Record<string, Feature[]> = {};
     for (const id of OVERLAY_IDS) buckets[id] = [];
     const annReqs: AnnReq[] = [];
-    let selAnchor: [number, number] | null = null; // selected zone's arrow tip — drawn AFTER placement
+    let selAnchors: [number, number][] = []; // selected zone's arrow tips (one per area) — drawn AFTER placement
     const resolution = this.resolution();
+    const viewSpan = this.adapter.getViewSpan();
 
     for (const id of this.order) {
       const f = this.doc.get(id);
       if (!f) continue;
       const def = this.registry.get(f.properties.phenomenon);
       const features: RenderFeature[] = def.decorate({ geometry: f.geometry, metadata: f.properties.metadata, style: this.styleOf(f.properties.phenomenon), resolution, flightLevel: this.flResolved(f.properties.phenomenon), leaderThunderbolt: this.phenomena[f.properties.phenomenon]?.leaderThunderbolt });
+      // Declutter: an UNSELECTED feature whose on-screen extent is INSIGNIFICANT vs the
+      // current view drops its CHROME — call-out/leader/arrow, glyphs, FL labels, and the
+      // jet's barbs/arrowhead (all screen-sized, they'd dwarf the shape). The shape itself
+      // (edge/fill) still marks it; zooming toward it (or selecting it) brings it all back.
+      // Points are always significant (a spot/marker box IS the object). ±10% hysteresis.
+      let hideChrome = false;
+      let hideLate = false; // "late" chrome (a jet's arrowhead) survives to HALF the threshold
+      if (id !== this.selectedId && this.calloutFraction > 0 && f.geometry.type !== "Point") {
+        const ratio = zoneSpanRatio(f.geometry, viewSpan);
+        const was = this.calloutShown.get(id) ?? true;
+        const show = ratio >= this.calloutFraction * (was ? 0.9 : 1.1);
+        this.calloutShown.set(id, show);
+        hideChrome = !show;
+        hideLate = hideChrome && ratio < this.calloutFraction * 0.5;
+      }
       for (const feat of features) {
         feat.properties.featureId = id;
-        if (feat.properties.layer === ANNOTATION_BUCKET) {
+        const layer = feat.properties.layer;
+        if ((layer === ANNOTATION_BUCKET || layer === "decoration" || layer === "symbols" || layer === "text-boxes") && (feat.properties.declutter === "late" ? hideLate : hideChrome)) continue;
+        if (layer === ANNOTATION_BUCKET) {
           const req = toAnnReq(id, feat);
           // The leader's arrow tip is user-movable, constrained INSIDE the zone (and
           // re-clamped each render so a reshape keeps it valid). The box stays put — only
           // the arrow re-aims. A draggable handle sits on the tip while the zone is selected.
-          if (f.geometry.type === "Polygon" && req.leader) {
-            const ring = coordsOf(f.geometry);
-            const a = clampInRing(this.anchorPins.get(id) ?? [req.anchor.lon, req.anchor.lat], ring);
-            req.arrowAnchor = { lon: a[0], lat: a[1] };
-            if (id === this.selectedId) selAnchor = a; // handle drawn after placement (only if the leader shows)
+          if ((f.geometry.type === "Polygon" || f.geometry.type === "MultiPolygon") && req.leader) {
+            // ONE arrow per AREA, each tip user-movable and clamped inside ITS ring (re-clamped
+            // every render so a reshape keeps it valid). The box stays put — only the arrows re-aim.
+            const tips = this.anchorPins.get(id);
+            req.arrowAnchors = outerRings(f.geometry)
+              .filter((r) => r.length >= 3)
+              .map((ring, k) => {
+                const a = clampInRing(tips?.[k] ?? ringMean(ring), ring);
+                return { lon: a[0], lat: a[1] };
+              });
+            if (id === this.selectedId) selAnchors = req.arrowAnchors.map((p) => [p.lon, p.lat]);
           }
           // Push an area's call-out OUTSIDE the zone (unless the zone is very large).
           const r = this.areaAvoidRadius(f.geometry, req.anchor);
@@ -878,17 +1067,21 @@ export class SigwxDraw {
 
     this.lastAnnReqs = annReqs;
     const placed = placeAnnotations(annReqs, this.adapter, this.pins);
-    buckets["text-boxes"]!.push(...placed.boxes);
     buckets["leaders"]!.push(...placed.leaders);
-    buckets["symbols"]!.push(...placed.symbols);
+    // placed.symbols are pushed AFTER the widgets are known — a replaced call-out's glyph
+    // lives in its card (the severity carousel), not on the canvas.
     // Arrow-tip handle — only while its leader is VISIBLE, so it vanishes WITH the arrow
     // when the call-out sits over the tip (no lone handle without an arrow).
-    if (selAnchor && placed.leaders.some((l) => l.properties["featureId"] === this.selectedId)) {
+    if (selAnchors.length && placed.leaders.some((l) => l.properties["featureId"] === this.selectedId)) {
       // Scalloped phenomena (CB): the central handle wears a sync glyph — drag to move, TAP to
       // flip the bumps in/out. A white dot under the dark glyph makes it read as a button.
+      // One handle PER AREA (`area` index) — each drags its own arrow tip.
       const selF = this.doc.get(this.selectedId!);
       const scallop = !!selF && this.styleOf(selF.properties.phenomenon).edge?.decorator === "scallop";
-      buckets["handles"]!.push({ type: "Feature", properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: "anchor", ...(scallop ? { icon: SYNC_ICON, size: 0.8, fill: "#ffffff" } : {}) }, geometry: { type: "Point", coordinates: selAnchor } });
+      selAnchors.forEach((a, k) => {
+        // The scallop-flip button doubles as a TAP target → pointer cursor (plain tips stay "grab").
+        buckets["handles"]!.push({ type: "Feature", properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: "anchor", area: k, ...(scallop ? { icon: SYNC_ICON, size: 0.8, fill: "#ffffff", cursor: "pointer" } : {}) }, geometry: { type: "Point", coordinates: a } });
+      });
     }
 
     // Remember where each call-out box landed (lon/lat) so the area FL gauge can
@@ -896,8 +1089,19 @@ export class SigwxDraw {
     this.placedAt.clear();
     for (const box of placed.boxes) {
       const id = box.properties.featureId;
+      if (id && box.geometry.type === "Point") this.placedAt.set(id, box.geometry.coordinates as [number, number]);
+    }
+    // Widgets are built AFTER placement so one can ride its feature's placed call-out:
+    // such a widget REPLACES that call-out box (selected CB → the DOM card carries the same
+    // content + the `+` edge buttons; the leader still points at the card).
+    const widgets = this.collectWidgets();
+    const replaced = new Set(widgets.map((w) => w.id));
+    buckets["symbols"]!.push(...placed.symbols.filter((s) => !replaced.has(String(s.properties.featureId ?? ""))));
+    for (const box of placed.boxes) {
+      const id = box.properties.featureId;
+      if (id && box.geometry.type === "Point" && replaced.has(id)) continue; // the widget IS this box
+      buckets["text-boxes"]!.push(box);
       if (!id || box.geometry.type !== "Point") continue;
-      this.placedAt.set(id, box.geometry.coordinates as [number, number]);
       // A liseré (thin rule) between the two FL lines of an area call-out (top/base).
       const def = this.registry.get(this.doc.get(id)!.properties.phenomenon);
       if (def.schema.some((s) => s.key === "topFL") && def.schema.some((s) => s.key === "baseFL")) {
@@ -917,6 +1121,35 @@ export class SigwxDraw {
     // `decorate` bakes the resolved style into the `handles` props (the generic
     // adapter is dumb); every other overlay is passed through unchanged.
     for (const id of OVERLAY_IDS) this.adapter.setOverlay(id, decorate(id, fc(buckets[id]!), this.style));
+    // Marker phenomena (TC / volcano / radioactive) + transient control cards (CB) render as
+    // DOM cards, not overlay features — the FULL current set (diffed by id, updated in place).
+    this.adapter.setWidgets(widgets);
+  }
+
+  /** Build the widgets of widget-phenomena features (`editable` = the selected one). Runs
+   *  AFTER the placement pass: an area phenomenon's builder gets its placed call-out
+   *  (position + content) so its card can replace the box. */
+  private collectWidgets(): MarkerWidget[] {
+    const out: MarkerWidget[] = [];
+    for (const id of this.order) {
+      const f = this.doc.get(id);
+      if (!f) continue;
+      const def = this.registry.get(f.properties.phenomenon);
+      if (!def.widget) continue;
+      const at = this.placedAt.get(id);
+      const req = at ? this.lastAnnReqs.find((r) => r.featureId === id) : undefined;
+      const w = def.widget({
+        id,
+        geometry: f.geometry,
+        metadata: f.properties.metadata,
+        editable: id === this.selectedId,
+        style: this.styleOf(f.properties.phenomenon),
+        ...(at && req ? { callout: { at, content: req.content } } : {}),
+        sprite: (sid: string) => this.spriteCatalog[sid],
+      });
+      if (w) out.push(w); // a builder may return null (no widget for this state, e.g. CB unselected)
+    }
+    return out;
   }
 
   /** FL gauge (top/base) for a selected AREA phenomenon (turbulence/CB), placed
@@ -1000,11 +1233,12 @@ export class SigwxDraw {
   /** Screen radius from a call-out anchor to the farthest polygon vertex (capped) so
    *  the box clears the zone; 0 for non-areas. Very large zones stay near (capped). */
   private areaAvoidRadius(geometry: Geometry, anchor: { lon: number; lat: number }): number {
-    if (geometry.type !== "Polygon") return 0;
+    if (geometry.type !== "Polygon" && geometry.type !== "MultiPolygon") return 0;
     const a = this.adapter.project(anchor);
     if (!a) return 0;
     let r = 0;
-    for (const p of geometry.coordinates[0] ?? []) {
+    // The anchor sits in the LARGEST area (`coordsOf`) — clear that ring's extent.
+    for (const p of coordsOf(geometry)) {
       const px = this.adapter.project({ lon: p[0]!, lat: p[1]! });
       if (px) r = Math.max(r, Math.hypot(px[0] - a[0], px[1] - a[1]));
     }
@@ -1041,12 +1275,22 @@ export class SigwxDraw {
     const it = interactionOf(def);
     // The selection highlight hugs the SMOOTHED curve (not the raw control
     // polyline), so there's no stray straight "construction" line under a jet.
-    const selGeom: Geometry =
-      it.smooth && f.geometry.type === "LineString"
+    // An AREA-narrowed selection (areas of a MultiPolygon clicked / shift-toggled)
+    // highlights THOSE rings only.
+    const allRings = outerRings(f.geometry);
+    const selRings =
+      f.geometry.type === "MultiPolygon" && this.selectedAreas.length
+        ? this.selectedAreas.map((a) => ({ a, ring: allRings[a] })).filter((x): x is { a: number; ring: Pt[] } => !!x.ring && x.ring.length >= 3)
+        : undefined;
+    const selGeom: Geometry = selRings
+      ? { type: "MultiLineString", coordinates: selRings.map(({ ring }) => (it.smooth ? catmullRomClosed(ring, 16) : ring)) }
+      : it.smooth && f.geometry.type === "LineString"
         ? { type: "LineString", coordinates: catmullRom(f.geometry.coordinates as Pt[], 16) }
         : it.smooth && f.geometry.type === "Polygon"
           ? { type: "LineString", coordinates: catmullRomClosed(f.geometry.coordinates[0] as Pt[], 16) }
-          : outline(f.geometry);
+          : it.smooth && f.geometry.type === "MultiPolygon"
+            ? { type: "MultiLineString", coordinates: outerRings(f.geometry).filter((r) => r.length >= 3).map((r) => catmullRomClosed(r, 16)) }
+            : outline(f.geometry);
     buckets["selection"]!.push({
       type: "Feature",
       properties: { layer: "selection", featureId: this.selectedId, stroke: this.style.selection.color, strokeWidth: this.style.selection.width, ...(this.style.selection.dash ? { dash: [...this.style.selection.dash] } : {}) },
@@ -1054,13 +1298,24 @@ export class SigwxDraw {
     });
     // Feature deletion is keyboard-only (Backspace/Delete on the selection, see onKey) —
     // no on-map ✕ control, by design.
-    vertices(f.geometry).forEach((v, i) => {
-      buckets["handles"]!.push({
-        type: "Feature",
-        properties: { layer: "handles", hClass: "vertex", featureId: this.selectedId, role: `v${i}` },
-        geometry: { type: "Point", coordinates: v },
-      });
-    });
+    // Point markers are edited via their DOM card, which sits over the point — no vertex handle.
+    // (CB has a widget too, but it's an area control — its polygon still needs its handles.)
+    // Area-narrowed selection ⇒ handles for THOSE rings only, roles kept in FLAT indexing
+    // (`v${flatStart+i}`) so setVertex/removeVertex address the right vertex.
+    if (!isPointMarker(def)) {
+      const groups = selRings
+        ? selRings.map(({ a, ring }) => ({ off: flatStart(f.geometry, a), verts: openRing(ring) }))
+        : [{ off: 0, verts: vertices(f.geometry) }];
+      for (const { off, verts } of groups) {
+        verts.forEach((v, i) => {
+          buckets["handles"]!.push({
+            type: "Feature",
+            properties: { layer: "handles", hClass: "vertex", featureId: this.selectedId, role: `v${off + i}` },
+            geometry: { type: "Point", coordinates: v },
+          });
+        });
+      }
+    }
     // Slider handles for the list field (jet break points), placed on the curve.
     const lf = listFieldOf(def);
     if (lf) {
@@ -1225,11 +1480,14 @@ export class SigwxDraw {
       }
       return;
     }
-    // Delete the SELECTED feature with Backspace (the Mac "delete" key) or Delete. The adapter's
-    // `onKey` already skips editable targets and is scoped to the focused map container.
+    // Delete with Backspace (the Mac "delete" key) or Delete. An AREA-narrowed selection
+    // (one area of a multi-area CB) removes THAT area — the feature and its info box live
+    // on while other areas remain. Otherwise the whole selected feature goes.
     if ((ev.key === "Backspace" || ev.key === "Delete") && this.selectedId) {
       ev.preventDefault();
-      this.delete(this.selectedId);
+      const f = this.doc.get(this.selectedId);
+      if (f?.geometry.type === "MultiPolygon" && this.selectedAreas.length) this.removeAreas(this.selectedId, this.selectedAreas);
+      else this.delete(this.selectedId);
     }
   }
 
@@ -1309,11 +1567,7 @@ export class SigwxDraw {
       } else if (hClass === "control" && role === "mFL") {
         this.dragTarget = { kind: "metaLevel", featureId, field: "fl" };
       } else if (hClass === "control" && role === "anchor") {
-        this.dragTarget = { kind: "anchor", featureId };
-      } else if (hClass === "toggle") {
-        const ef = this.registry.get(this.doc.get(featureId)!.properties.phenomenon).schema.find((s) => s.key === role);
-        const options = ef && ef.type === "enum" ? ef.options.map((o) => String(o.value)) : [];
-        this.dragTarget = { kind: "toggle", featureId, field: role, options };
+        this.dragTarget = { kind: "anchor", featureId, area: Number(hit.props["area"] ?? 0) };
       }
       // Only seize the pointer if a drag was actually armed — a control handle hit with
       // no selected sub-item arms nothing, and must NOT leave pan disabled (onUp returns
@@ -1322,32 +1576,64 @@ export class SigwxDraw {
         this.didDrag = false;
         this.adapter.setPanEnabled(false);
       }
-    } else if (hit.overlay === "symbols" && typeof featureId === "string") {
-      // The call-out glyph: DRAG it to reposition the call-out (the indicator —
-      // the leader keeps pointing at the zone); CLICK it (no drag) to cycle its
-      // symbol enum (e.g. MOD ↔ SEV).
-      const f = this.doc.get(featureId);
-      const ef = f && this.registry.get(f.properties.phenomenon).schema.find((s) => s.type === "enum");
-      const toggle = ef && ef.type === "enum" ? { field: ef.key, options: ef.options.map((o) => String(o.value)) } : undefined;
-      this.dragTarget = { kind: "callout", featureId, labelId: String(hit.props["labelId"] ?? "l"), grab: this.calloutGrab(featureId, ev.lngLat), ...(toggle ? { toggle } : {}) };
-      this.didDrag = false;
-      this.adapter.setPanEnabled(false);
-    } else if (hit.overlay === "text-boxes" && typeof featureId === "string") {
-      // The call-out box → DRAG to reposition; or (when it carries `cycleField`) TAP to cycle
-      // that enum — e.g. CB coverage OCNL↔FRQ, whose value lives in the box text, not a glyph.
-      const cf = hit.props["cycleField"];
-      const ef = typeof cf === "string" ? this.registry.get(this.doc.get(featureId)!.properties.phenomenon).schema.find((s) => s.key === cf) : undefined;
-      const toggle = ef && ef.type === "enum" ? { field: ef.key, options: ef.options.map((o) => String(o.value)) } : undefined;
-      this.dragTarget = { kind: "callout", featureId, labelId: String(hit.props["labelId"] ?? "l"), grab: this.calloutGrab(featureId, ev.lngLat), ...(toggle ? { toggle } : {}) };
+    } else if ((hit.overlay === "symbols" || hit.overlay === "text-boxes") && typeof featureId === "string") {
+      // The call-out (its glyph OR its box) → DRAG to reposition; a plain CLICK selects
+      // (onClick). Editing the enum (coverage / severity) happens on the SELECTED card's
+      // carousel — the old unselected tap-to-cycle was removed (selection-first editing,
+      // consistent across engines and phenomena, and animated).
+      this.dragTarget = { kind: "callout", featureId, labelId: String(hit.props["labelId"] ?? "l"), grab: this.calloutGrab(featureId, ev.lngLat) };
       this.didDrag = false;
       this.adapter.setPanEnabled(false);
     } else if ((hit.overlay === "edge" || hit.overlay === "decoration" || hit.overlay === "area-fill") && typeof featureId === "string") {
       // Grab the body of a feature (an area's edge/fill, OR a jet's axis/barbs) → move the
       // WHOLE feature. Vertices sit on top (handles overlay) so they still win for reshaping.
       const f = this.doc.get(featureId);
-      if (f && (f.geometry.type === "Polygon" || f.geometry.type === "LineString")) {
+      if (f && (f.geometry.type === "Polygon" || f.geometry.type === "MultiPolygon" || f.geometry.type === "LineString")) {
         if (featureId !== this.selectedId) this.select(featureId);
-        this.dragTarget = { kind: "translate", featureId, lastPx: this.adapter.project(ev.lngLat) ?? [0, 0] };
+        // Multi-area feature: a press on an area narrows the selection to THAT area
+        // (outline/handles/drag/Delete scope) — the info box stays with the whole feature.
+        // SHIFT-press toggles the area in/out of the selected set (multi-selection).
+        let draggable = true;
+        if (f.geometry.type === "MultiPolygon") {
+          const a = nearestArea(f.geometry, [ev.lngLat.lon, ev.lngLat.lat]);
+          if (ev.shiftKey && this.selectedAreas.length) {
+            const cur = new Set(this.selectedAreas);
+            if (cur.has(a)) cur.delete(a);
+            else cur.add(a);
+            this.setSelectedAreas([...cur].sort((x, y) => x - y));
+            draggable = cur.has(a); // a press that just DE-selected an area doesn't drag
+          } else if (!this.selectedAreas.includes(a)) {
+            this.setSelectedAreas([a]);
+          }
+          // else: pressing an area ALREADY in the multi-set keeps the set — the drag moves
+          // the whole set; a plain CLICK (no drag) narrows to that area in onClick.
+        } else {
+          this.setSelectedAreas([]);
+        }
+        if (draggable) {
+          this.dragTarget = { kind: "translate", featureId, lastPx: this.adapter.project(ev.lngLat) ?? [0, 0] };
+          this.didDrag = false;
+          this.adapter.setPanEnabled(false);
+        }
+      }
+    } else if (hit.overlay === "widget" && typeof hit.props["id"] === "string") {
+      // A widget card. A point marker's card (TC/volcano/radioactive) moves the POINT on drag
+      // (the input captures its own clicks/keys for editing, so this fires only off the body).
+      // An area's control card (selected CB — it replaces the call-out) reuses the CALL-OUT
+      // gestures: drag repositions the box, a tap cycles the carousel enum (coverage).
+      const fid = hit.props["id"] as string;
+      if (fid !== this.selectedId) this.select(fid);
+      const f = this.doc.get(fid);
+      if (f) {
+        const def = this.registry.get(f.properties.phenomenon);
+        if (isPointMarker(def)) {
+          this.dragTarget = { kind: "translate", featureId: fid, lastPx: this.adapter.project(ev.lngLat) ?? [0, 0] };
+        } else {
+          // The card replaces the call-out: drag still repositions the box, but a body tap
+          // no longer cycles — the coverage line is a real `"carousel"` control now.
+          const req = this.lastAnnReqs.find((r) => r.featureId === fid);
+          this.dragTarget = { kind: "callout", featureId: fid, labelId: req?.labelId ?? "l", grab: this.calloutGrab(fid, ev.lngLat) };
+        }
         this.didDrag = false;
         this.adapter.setPanEnabled(false);
       }
@@ -1375,13 +1661,18 @@ export class SigwxDraw {
     const f = this.doc.get(t.featureId);
     if (!f) return;
     if (t.kind === "vertex") {
-      if (f.geometry.type === "Polygon") {
+      if (f.geometry.type === "Polygon" || f.geometry.type === "MultiPolygon") {
         // Constrain the zone to a SIMPLE polygon: apply the move, but undo it if it makes
         // an edge cross another (the vertex then "sticks" at the edge of validity).
-        const v = f.geometry.coordinates[0]?.[t.index];
+        // Multi-area: the guard checks the ring the dragged FLAT index belongs to.
+        const g = f.geometry;
+        const a = areaOfFlat(g, t.index);
+        const ring = (g.type === "MultiPolygon" ? g.coordinates[a]?.[0] : g.coordinates[0]) as Position[] | undefined;
+        const local = g.type === "MultiPolygon" ? t.index - flatStart(g, a) : t.index;
+        const v = ring?.[local];
         const prev = v ? ([...v] as Position) : null;
-        setVertex(f.geometry, t.index, [ev.lngLat.lon, ev.lngLat.lat]);
-        if (prev && !isSimpleRing(coordsOf(f.geometry))) setVertex(f.geometry, t.index, prev);
+        setVertex(g, t.index, [ev.lngLat.lon, ev.lngLat.lat]);
+        if (prev && ring && !isSimpleRing(ring as Pt[])) setVertex(g, t.index, prev);
       } else {
         setVertex(f.geometry, t.index, [ev.lngLat.lon, ev.lngLat.lat]);
       }
@@ -1508,8 +1799,14 @@ export class SigwxDraw {
       // (no first-move jump), then express that as the pin offset from the anchor.
       if (anchorPx && cursorPx) this.pins.set(`${t.featureId}:${t.labelId}`, { dx: cursorPx[0] - t.grab[0] - anchorPx[0], dy: cursorPx[1] - t.grab[1] - anchorPx[1] });
     } else if (t.kind === "anchor") {
-      // Move the leader's anchor (the arrow tip), kept inside the zone (clamped to the ring).
-      this.anchorPins.set(t.featureId, clampInRing([ev.lngLat.lon, ev.lngLat.lat], coordsOf(f.geometry)));
+      // Move ONE leader anchor (this area's arrow tip), kept inside ITS zone (clamped to its ring).
+      const rings = outerRings(f.geometry).filter((r) => r.length >= 3);
+      const ring = rings[t.area] ?? rings[0];
+      if (ring) {
+        const tips = this.anchorPins.get(t.featureId) ?? [];
+        tips[t.area] = clampInRing([ev.lngLat.lon, ev.lngLat.lat], ring);
+        this.anchorPins.set(t.featureId, tips);
+      }
     } else if (t.kind === "translate") {
       // Move every vertex by the cursor's SCREEN delta (project → +px → unproject)
       // so the shape stays rigid on screen — in mercator AND globe (a lon/lat delta
@@ -1517,7 +1814,51 @@ export class SigwxDraw {
       // from the new geometry, so they follow along.
       const cur = this.adapter.project(ev.lngLat);
       if (cur) {
-        this.translateScreen(f.geometry, cur[0] - t.lastPx[0], cur[1] - t.lastPx[1]);
+        const dx = cur[0] - t.lastPx[0];
+        const dy = cur[1] - t.lastPx[1];
+        const g = f.geometry;
+        const sel = this.selectedAreas;
+        const shiftTip = (a: number): void => {
+          const tip = this.anchorPins.get(t.featureId)?.[a];
+          if (!tip) return;
+          const px = this.adapter.project({ lon: tip[0], lat: tip[1] });
+          const ll = px ? this.adapter.unproject([px[0] + dx, px[1] + dy]) : null;
+          if (ll) {
+            tip[0] = ll.lon;
+            tip[1] = ll.lat;
+          }
+        };
+        // Dragging area(s) must NOT drag the info box (symmetry: dragging the box never
+        // drags the area) — but the box's placement anchor (the LARGEST ring's centroid)
+        // may have just moved with the geometry. Pin the box at its current placed spot,
+        // expressed as an offset from the POST-move anchor.
+        const freezeBox = (): void => {
+          const boxLL = this.placedAt.get(t.featureId);
+          const req = this.lastAnnReqs.find((r) => r.featureId === t.featureId);
+          if (!boxLL || !req) return;
+          const anchor = ringCentroid(coordsOf(f.geometry));
+          const anchorPx = this.adapter.project({ lon: anchor[0]!, lat: anchor[1]! });
+          const boxPx = this.adapter.project({ lon: boxLL[0], lat: boxLL[1] });
+          if (anchorPx && boxPx) this.pins.set(`${t.featureId}:${req.labelId}`, { dx: boxPx[0] - anchorPx[0], dy: boxPx[1] - anchorPx[1] });
+        };
+        if (g.type === "MultiPolygon" && sel.length && sel.length < g.coordinates.length) {
+          // Area-narrowed drag: ONLY the selected areas move (their moved arrow tips ride
+          // along); the other areas and the info box stay put.
+          for (const a of sel) {
+            if (!g.coordinates[a]) continue;
+            this.translateScreen({ type: "Polygon", coordinates: g.coordinates[a]! }, dx, dy);
+            shiftTip(a);
+          }
+          freezeBox();
+        } else {
+          // Whole-feature drag: all areas move. The info box rides along ONLY for the
+          // explicit all-areas multi-selection (shift) — a single-area feature keeps its
+          // box put, like any area drag.
+          this.translateScreen(g, dx, dy);
+          if (g.type === "MultiPolygon") g.coordinates.forEach((_, a) => shiftTip(a));
+          else shiftTip(0);
+          if (g.type === "Polygon") freezeBox();
+        }
         t.lastPx = cur;
       }
     }
@@ -1552,22 +1893,8 @@ export class SigwxDraw {
     }
     this.dragFree = null;
     this.willDelete = false;
-    // A glyph clicked (not dragged) cycles its enum value (e.g. MOD ↔ SEV). The
-    // symbol arms a `callout` (drag = reposition the call-out) that carries the
-    // toggle for the click case; a handle "toggle" carries it directly.
-    const toggle = t.kind === "toggle" ? { field: t.field, options: t.options } : t.kind === "callout" ? t.toggle : undefined;
-    if (toggle && !dragged && toggle.options.length) {
-      const f = this.doc.get(t.featureId);
-      if (f) {
-        const cur = String(f.properties.metadata[toggle.field] ?? toggle.options[0]);
-        const i = toggle.options.indexOf(cur);
-        f.properties.metadata[toggle.field] = toggle.options[(i + 1) % toggle.options.length]!;
-        this.renderAll();
-        this.emitChange();
-        if (this.selectedId) this.emitMetadata();
-        return;
-      }
-    }
+    // (The old tap-a-glyph/box enum cycle is gone — enums are edited on the SELECTED
+    // card's carousel control; a plain tap just selects, via onClick.)
     // Tap (no drag) the central handle of a scalloped phenomenon (CB) → flip the bump direction.
     if (t.kind === "anchor" && !dragged) {
       const f = this.doc.get(t.featureId);
@@ -1600,20 +1927,20 @@ export class SigwxDraw {
         p[1] = ll.lat;
       }
     };
+    // A closed ring repeats its first vertex as the last (often the SAME array
+    // reference) — shift each unique vertex once, then re-close, so the closing
+    // point isn't double-shifted (which made one vertex drift chaotically).
+    const shiftRing = (ring: Position[]): void => {
+      const n = ring.length;
+      const closed = n > 1 && samePoint(ring[0]!, ring[n - 1]!);
+      const count = closed ? n - 1 : n;
+      for (let i = 0; i < count; i++) shift(ring[i]!);
+      if (closed) ring[n - 1] = [ring[0]![0]!, ring[0]![1]!];
+    };
     if (geom.type === "Point") shift(geom.coordinates);
     else if (geom.type === "LineString") geom.coordinates.forEach(shift);
-    else if (geom.type === "Polygon") {
-      for (const ring of geom.coordinates) {
-        // A closed ring repeats its first vertex as the last (often the SAME array
-        // reference) — shift each unique vertex once, then re-close, so the closing
-        // point isn't double-shifted (which made one vertex drift chaotically).
-        const n = ring.length;
-        const closed = n > 1 && samePoint(ring[0]!, ring[n - 1]!);
-        const count = closed ? n - 1 : n;
-        for (let i = 0; i < count; i++) shift(ring[i]!);
-        if (closed) ring[n - 1] = [ring[0]![0]!, ring[0]![1]!];
-      }
-    }
+    else if (geom.type === "Polygon") geom.coordinates.forEach(shiftRing);
+    else if (geom.type === "MultiPolygon") for (const poly of geom.coordinates) poly.forEach(shiftRing);
   }
 
   private onClick(ev: PointerEvent): void {
@@ -1637,9 +1964,16 @@ export class SigwxDraw {
       this.didDrag = false;
       return;
     }
-    const fid = ev.hit?.props["featureId"];
+    // A widget card hit carries its feature id as `id`; every other overlay uses `featureId`.
+    const fid = ev.hit?.overlay === "widget" ? ev.hit.props["id"] : ev.hit?.props["featureId"];
     if (ev.hit && typeof fid === "string" && ev.hit.overlay !== "handles") {
       if (fid !== this.selectedId) this.select(fid);
+      else if (!ev.shiftKey && (ev.hit.overlay === "edge" || ev.hit.overlay === "area-fill" || ev.hit.overlay === "decoration")) {
+        // Plain CLICK (no drag — didDrag returned above) on an area of the already-selected
+        // multi-area feature → narrow the selection to that area (a PRESS keeps the set).
+        const f = this.doc.get(fid);
+        if (f?.geometry.type === "MultiPolygon") this.setSelectedAreas([nearestArea(f.geometry, [ev.lngLat.lon, ev.lngLat.lat])]);
+      }
     } else if (!ev.hit) {
       if (this.selectedId) this.select(null);
     }
@@ -1775,13 +2109,35 @@ export class SigwxDraw {
     const defs = options.tools
       ? options.tools.map((t) => all.find((d) => d.type === t)).filter((d): d is PhenomenonDef => !!d)
       : all;
-    const items: ToolbarItem[] = defs.map((def) => ({
+    const drawItem = (def: PhenomenonDef, top: boolean): ToolbarItem => ({
       id: def.type,
       title: def.label,
       ...(def.icon ? { svg: def.icon } : {}),
-      toggle: true,
+      ...(top ? { toggle: true } : {}),
       onClick: () => this.draw(def.type),
-    }));
+    });
+    // Point markers (TC / volcano / radioactive — less common) are grouped into ONE split-button
+    // submenu (toggle): hover reveals the set, the trigger mirrors the last-picked marker and re-draws
+    // it on click; picking a child adopts it. Everything else stays a flat toggle button, in order.
+    const markerDefs = defs.filter(isPointMarker);
+    const items: ToolbarItem[] = [];
+    let markersDone = false;
+    for (const def of defs) {
+      if (isPointMarker(def)) {
+        if (!markersDone) {
+          markersDone = true;
+          items.push({
+            id: "markers",
+            title: "Point markers",
+            ...(markerDefs[0]?.icon ? { svg: markerDefs[0]!.icon } : {}),
+            toggle: true,
+            children: markerDefs.map((d) => drawItem(d, false)),
+          });
+        }
+        continue;
+      }
+      items.push(drawItem(def, true));
+    }
     if (options.clear !== false) {
       items.push({ id: "clear", title: "Clear all", svg: CLEAR_ICON, onClick: () => this.clear() });
     }
@@ -1820,7 +2176,6 @@ function toAnnReq(featureId: string, feat: RenderFeature): AnnReq {
     content: p.content ?? p.text ?? "",
     leader: p.leader !== false,
     ...(p.arrow ? { arrow: true } : {}),
-    ...(p.cycleField ? { cycleField: p.cycleField } : {}),
     ...(p.leaderStyle ? { leaderStyle: p.leaderStyle } : {}),
     ...(p.symbol ? { symbol: p.symbol } : {}),
     ...(p.symbolColor ? { symbolColor: p.symbolColor } : {}),
@@ -1835,18 +2190,104 @@ function toAnnReq(featureId: string, feat: RenderFeature): AnnReq {
   };
 }
 
+/** A ring's UNIQUE vertices (drops the closing duplicate). */
+function openRing(ring: Position[]): Position[] {
+  return ring.length > 1 && samePoint(ring[0]!, ring[ring.length - 1]!) ? ring.slice(0, -1) : ring;
+}
+
+/** Mean of a ring's unique vertices — the default arrow-tip target of an area. */
+function ringMean(ring: Position[]): [number, number] {
+  const u = openRing(ring);
+  let x = 0;
+  let y = 0;
+  for (const p of u) {
+    x += p[0]!;
+    y += p[1]!;
+  }
+  return u.length ? [x / u.length, y / u.length] : [0, 0];
+}
+
+/** On-screen significance of an area vs the view: its LARGEST ring's bbox diagonal over the
+ *  view span (both in degrees — a pure ratio, so no pixel API needed). Drives the call-out
+ *  declutter threshold. */
+function zoneSpanRatio(geom: Geometry, viewSpan: number): number {
+  const ring = coordsOf(geom); // MultiPolygon → the largest ring (the box-anchor area)
+  if (ring.length < 3 || !viewSpan) return 1;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of ring) {
+    if (p[0]! < minX) minX = p[0]!;
+    if (p[0]! > maxX) maxX = p[0]!;
+    if (p[1]! < minY) minY = p[1]!;
+    if (p[1]! > maxY) maxY = p[1]!;
+  }
+  return Math.hypot(maxX - minX, maxY - minY) / viewSpan;
+}
+
+/** Which AREA of a (Multi)Polygon a lon/lat refers to: the ring it falls INSIDE, else the
+ *  one with the nearest boundary — resolves an edge/fill/dblclick hit to an area index. */
+function nearestArea(geom: Geometry, at: Position): number {
+  const rings = outerRings(geom);
+  let best = 0;
+  let bestD = Infinity;
+  rings.forEach((ring, a) => {
+    if (ring.length < 2) return;
+    if (ring.length >= 3 && pointInRing([at[0]!, at[1]!], ring)) {
+      if (bestD > 0) {
+        bestD = 0;
+        best = a;
+      }
+      return;
+    }
+    const k = frameK(ring);
+    const planar = ring.map((c) => toPlanar(c, k));
+    const cur = toPlanar([at[0]!, at[1]!], k);
+    for (let i = 0; i < planar.length - 1; i++) {
+      const d = segDist(cur, planar[i]!, planar[i + 1]!);
+      if (d < bestD) {
+        bestD = d;
+        best = a;
+      }
+    }
+  });
+  return best;
+}
+
+/** First FLAT vertex index of area `a` (the flat indexing of vertices()/setVertex/removeVertex). */
+function flatStart(geom: Geometry, a: number): number {
+  if (geom.type !== "MultiPolygon") return 0;
+  let off = 0;
+  for (let i = 0; i < a && i < geom.coordinates.length; i++) off += openRing(geom.coordinates[i]![0] ?? []).length;
+  return off;
+}
+
+/** Which area a FLAT vertex index belongs to (Polygon → always 0). */
+function areaOfFlat(geom: Geometry, i: number): number {
+  if (geom.type !== "MultiPolygon") return 0;
+  let off = i;
+  for (let a = 0; a < geom.coordinates.length; a++) {
+    const n = openRing(geom.coordinates[a]![0] ?? []).length;
+    if (off < n) return a;
+    off -= n;
+  }
+  return 0;
+}
+
+/** Editable vertices, FLAT across areas for a MultiPolygon (area 0 first — `v${i}` roles,
+ *  setVertex/removeVertex share the same flat indexing). */
 function vertices(geom: Geometry): Position[] {
   if (geom.type === "LineString") return geom.coordinates;
   if (geom.type === "Point") return [geom.coordinates];
-  if (geom.type === "Polygon") {
-    const ring = geom.coordinates[0] ?? [];
-    return ring.length > 1 && samePoint(ring[0]!, ring[ring.length - 1]!) ? ring.slice(0, -1) : ring;
-  }
+  if (geom.type === "Polygon") return openRing(geom.coordinates[0] ?? []);
+  if (geom.type === "MultiPolygon") return geom.coordinates.flatMap((poly) => openRing(poly[0] ?? []));
   return [];
 }
 
 function outline(geom: Geometry): Geometry {
   if (geom.type === "Polygon") return { type: "LineString", coordinates: geom.coordinates[0] ?? [] };
+  if (geom.type === "MultiPolygon") return { type: "MultiLineString", coordinates: geom.coordinates.map((poly) => poly[0] ?? []) };
   return geom;
 }
 
@@ -1860,6 +2301,21 @@ function setVertex(geom: Geometry, i: number, p: Position): void {
     if (!ring || !ring[i]) return;
     ring[i] = p;
     if (i === 0 && ring.length > 1) ring[ring.length - 1] = p;
+  } else if (geom.type === "MultiPolygon") {
+    let off = i; // flat index → (area, local) — same walk as vertices()
+    for (const poly of geom.coordinates) {
+      const ring = poly[0];
+      if (!ring) continue;
+      const n = openRing(ring).length;
+      if (off >= n) {
+        off -= n;
+        continue;
+      }
+      if (!ring[off]) return;
+      ring[off] = p;
+      if (off === 0 && ring.length > 1) ring[ring.length - 1] = p;
+      return;
+    }
   }
 }
 

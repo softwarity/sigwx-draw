@@ -23,13 +23,13 @@ export interface AnnReq {
   anchor: LatLng;
   /** Where the leader/arrow POINTS (user-movable tip inside the zone); defaults to `anchor`. */
   arrowAnchor?: LatLng;
+  /** Multi-area phenomenon (CB MultiPolygon): ONE leader/arrow per entry, all from the same
+   *  box. Takes precedence over `arrowAnchor` when set. */
+  arrowAnchors?: LatLng[];
   content: string;
   leader: boolean;
   /** Draw an arrowhead at the anchor end of the leader (call-out pointing to a zone). */
   arrow?: boolean;
-  /** Schema enum key cycled when the box is TAPPED (on-map carousel) — when the type lives
-   *  in the box text (CB) rather than a separate glyph. Carried onto the text-box feature. */
-  cycleField?: string;
   /** "lightning" → a zigzag bolt leader attaching UNDER the box (convective/CB). */
   leaderStyle?: string;
   /** Keep the box at least this many px from the anchor (clears an area's extent). */
@@ -102,7 +102,9 @@ function lightningPath(a: [number, number], b: [number, number], proj: Projector
   const uy = dy / len;
   const lx = uy; // LEFT perpendicular of the a→b travel (screen y-down)
   const ly = -ux;
-  const k = len / 12; // backtrack + sideways = 1/12 of the length → "le N forme un carré"
+  // Kink size: proportional on a short leader (so the "Z" stays readable) but CAPPED in px —
+  // like the fixed-size arrowhead — else a long leader grows a huge, inelegant zigzag.
+  const k = Math.min(len / 12, 14);
   const mx = a[0] + dx * 0.5; // mid-way
   const my = a[1] + dy * 0.5;
   const h = k / 2;
@@ -129,9 +131,9 @@ export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<stri
   for (const req of ordered) {
     const anchorPx = proj.project(req.anchor);
     if (!anchorPx) continue;
-    // Box places from `anchor` (centroid, stable); the leader/arrow aims at `arrowAnchor`.
-    const arrowLL = req.arrowAnchor ?? req.anchor;
-    const arrowPx = proj.project(arrowLL) ?? anchorPx;
+    // Box places from `anchor` (centroid, stable); the leader(s)/arrow(s) aim at the arrow
+    // anchors — ONE per area for a multi-area phenomenon (CB MultiPolygon), all from this box.
+    const arrows = req.arrowAnchors?.length ? req.arrowAnchors : [req.arrowAnchor ?? req.anchor];
     const { w, h } = estimateBox(req.content, req.textSize);
     const pin = pins.get(key(req));
 
@@ -179,7 +181,6 @@ export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<stri
       // we forward `textBorder` to the box ONLY alongside a background. The leader below still
       // reads `req.textBorder` for its ink, so it stays coloured either way.
       ...(req.textBackground !== undefined ? { textBackground: req.textBackground, textBorder: req.textBorder } : {}),
-      ...(req.cycleField ? { cycleField: req.cycleField } : {}),
     };
     boxes.push({ type: "Feature", properties: props, geometry: { type: "Point", coordinates: [centerLL.lon, centerLL.lat] } });
 
@@ -209,35 +210,38 @@ export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<stri
     // boxed text, or icing's glyph INSIDE the box) → attach at the CENTRE. Lightning + straight obey this.
     const topGlyph = !!req.symbol && !req.symbolInside;
     const calloutPx: [number, number] = [cx, topGlyph ? cy - h / 2 : cy];
-    const leaderLen = Math.hypot(arrowPx[0] - calloutPx[0], arrowPx[1] - calloutPx[1]) || 1;
-    const ux = (arrowPx[0] - calloutPx[0]) / leaderLen;
-    const uy = (arrowPx[1] - calloutPx[1]) / leaderLen;
-    // Base gap (px), plus the glyph's vertical extent when the leader heads UP toward it
-    // (the symbol sits above the box, so only an upward leader runs through it).
-    const pad = topGlyph ? 8 + 18 * Math.max(0, -uy) : 6;
     // The call-out's occupied zone = the box PLUS the glyph band above it (only when the glyph
-    // sits ABOVE). Hide the leader + arrow when the arrow anchor falls under that zone.
+    // sits ABOVE). Hide a leader + arrow whose arrow anchor falls under that zone.
     const occupied: Rect = topGlyph ? { x: rect.x, y: rect.y - 22, w: rect.w, h: rect.h + 22 } : rect;
-    if (req.leader && !contains(occupied, arrowPx[0], arrowPx[1]) && leaderLen >= pad + LEADER_STUB) {
-      const startPx: [number, number] = [calloutPx[0] + ux * pad, calloutPx[1] + uy * pad];
-      const startLL = proj.unproject(startPx) ?? centerLL;
-      leaders.push({
-        type: "Feature",
-        properties: { layer: "leaders", featureId: req.featureId, stroke: req.textBorder, strokeWidth: 1 },
-        geometry: { type: "LineString", coordinates: bolt ? lightningPath(startPx, arrowPx, proj) : [[arrowLL.lon, arrowLL.lat], [startLL.lon, startLL.lat]] },
-      });
-      // Arrowhead at the arrow anchor (pointing into the zone), as an open "V".
-      if (req.arrow) {
-        const L = 9;
-        const W = 5;
-        const wingA = proj.unproject([arrowPx[0] - L * ux + W * -uy, arrowPx[1] - L * uy + W * ux]);
-        const wingB = proj.unproject([arrowPx[0] - L * ux - W * -uy, arrowPx[1] - L * uy - W * ux]);
-        if (wingA && wingB) {
-          leaders.push({
-            type: "Feature",
-            properties: { layer: "leaders", featureId: req.featureId, stroke: req.textBorder, strokeWidth: 1.5 },
-            geometry: { type: "LineString", coordinates: [[wingA.lon, wingA.lat], [arrowLL.lon, arrowLL.lat], [wingB.lon, wingB.lat]] },
-          });
+    for (const arrowLL of arrows) {
+      const arrowPx = proj.project(arrowLL) ?? anchorPx;
+      const leaderLen = Math.hypot(arrowPx[0] - calloutPx[0], arrowPx[1] - calloutPx[1]) || 1;
+      const ux = (arrowPx[0] - calloutPx[0]) / leaderLen;
+      const uy = (arrowPx[1] - calloutPx[1]) / leaderLen;
+      // Base gap (px), plus the glyph's vertical extent when the leader heads UP toward it
+      // (the symbol sits above the box, so only an upward leader runs through it).
+      const pad = topGlyph ? 8 + 18 * Math.max(0, -uy) : 6;
+      if (req.leader && !contains(occupied, arrowPx[0], arrowPx[1]) && leaderLen >= pad + LEADER_STUB) {
+        const startPx: [number, number] = [calloutPx[0] + ux * pad, calloutPx[1] + uy * pad];
+        const startLL = proj.unproject(startPx) ?? centerLL;
+        leaders.push({
+          type: "Feature",
+          properties: { layer: "leaders", featureId: req.featureId, stroke: req.textBorder, strokeWidth: 1 },
+          geometry: { type: "LineString", coordinates: bolt ? lightningPath(startPx, arrowPx, proj) : [[arrowLL.lon, arrowLL.lat], [startLL.lon, startLL.lat]] },
+        });
+        // Arrowhead at the arrow anchor (pointing into the zone), as an open "V".
+        if (req.arrow) {
+          const L = 9;
+          const W = 5;
+          const wingA = proj.unproject([arrowPx[0] - L * ux + W * -uy, arrowPx[1] - L * uy + W * ux]);
+          const wingB = proj.unproject([arrowPx[0] - L * ux - W * -uy, arrowPx[1] - L * uy - W * ux]);
+          if (wingA && wingB) {
+            leaders.push({
+              type: "Feature",
+              properties: { layer: "leaders", featureId: req.featureId, stroke: req.textBorder, strokeWidth: 1.5 },
+              geometry: { type: "LineString", coordinates: [[wingA.lon, wingA.lat], [arrowLL.lon, arrowLL.lat], [wingB.lon, wingB.lat]] },
+            });
+          }
         }
       }
     }

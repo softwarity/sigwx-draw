@@ -262,6 +262,66 @@ ${pOn}    style: {
         <code-binding key="pEdge" type="color" value="#0b6bcb"></code-binding>
       </interactive-code>
     </div>
+
+    <div class="pheno-card" (change)="onPhenoChange('volcano', $event)">
+      <header><span class="ic" [innerHTML]="icon('volcano')"></span> Volcanic eruption</header>
+      <interactive-code language="typescript" show-copy>
+        <textarea>phenomena: {
+  volcano: {
+${vOn}    style: {
+      // ink: glyph + name/coord + card frame
+      color: "${vColor}",
+      // name/coord: own colour (drop it to follow the ink) + font px
+      text: { color: "${vText}", size: ${vSize} },
+    },${/vOn}
+  },
+},</textarea>
+        <code-binding key="vOn" type="comment" value="false"></code-binding>
+        <code-binding key="vColor" type="color" value="#9a3412"></code-binding>
+        <code-binding key="vText" type="color" value="#0969da"></code-binding>
+        <code-binding key="vSize" type="number" value="16" min="10" max="20" step="1"></code-binding>
+      </interactive-code>
+    </div>
+
+    <div class="pheno-card" (change)="onPhenoChange('tropicalCyclone', $event)">
+      <header><span class="ic" [innerHTML]="icon('tropicalCyclone')"></span> Tropical cyclone</header>
+      <interactive-code language="typescript" show-copy>
+        <textarea>phenomena: {
+  tropicalCyclone: {
+${yOn}    style: {
+      // ink: spiral glyph + the editable name
+      color: "${yColor}",
+      // name: own colour (drop it to follow the ink) + font px
+      text: { color: "${yText}", size: ${ySize} },
+    },${/yOn}
+  },
+},</textarea>
+        <code-binding key="yOn" type="comment" value="false"></code-binding>
+        <code-binding key="yColor" type="color" value="#0b6bcb"></code-binding>
+        <code-binding key="yText" type="color" value="#d1242f"></code-binding>
+        <code-binding key="ySize" type="number" value="16" min="10" max="20" step="1"></code-binding>
+      </interactive-code>
+    </div>
+
+    <div class="pheno-card" (change)="onPhenoChange('radioactive', $event)">
+      <header><span class="ic" [innerHTML]="icon('radioactive')"></span> Radioactive spot</header>
+      <interactive-code language="typescript" show-copy>
+        <textarea>phenomena: {
+  radioactive: {
+${rOn}    style: {
+      // ink: trefoil glyph + name/coord + card frame
+      color: "${rColor}",
+      // name/coord: own colour (drop it to follow the ink) + font px
+      text: { color: "${rText}", size: ${rSize} },
+    },${/rOn}
+  },
+},</textarea>
+        <code-binding key="rOn" type="comment" value="false"></code-binding>
+        <code-binding key="rColor" type="color" value="#b45309"></code-binding>
+        <code-binding key="rText" type="color" value="#1f883d"></code-binding>
+        <code-binding key="rSize" type="number" value="16" min="10" max="20" step="1"></code-binding>
+      </interactive-code>
+    </div>
   </div>
 
   <h2 class="api">Every phenomenon is one call</h2>

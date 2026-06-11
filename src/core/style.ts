@@ -80,6 +80,14 @@ export interface TropopauseStyle {
   text?: TextStyle;
 }
 
+/** Point markers (TC / volcano / radioactive) — `color` inks the GLYPH and the card frame;
+ *  `text.color` lets the name/coord text deviate (defaults to the ink, so one `color`
+ *  restyles everything together); `text.size` is the name/coord font (px). */
+export interface MarkerStyle {
+  color: string;
+  text?: TextStyle;
+}
+
 /**
  * The superset of every phenomenon's style fields — what {@link DecorateFn} receives
  * and {@link mergePhenomenonStyle} operates on. Each specific style ({@link JetStyle},

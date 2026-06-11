@@ -12,18 +12,50 @@ import type { Geometry } from "geojson";
 export const D2R = Math.PI / 180;
 export type Pt = [number, number];
 
-/** The working coordinate list of a geometry (polygon → outer ring). */
+/** The working coordinate list of a geometry (polygon → outer ring; multi-polygon →
+ *  the LARGEST outer ring, i.e. the "main" area — centroid/clamp defaults read it). */
 export function coordsOf(geometry: Geometry): Pt[] {
   switch (geometry.type) {
     case "LineString":
       return geometry.coordinates as Pt[];
     case "Polygon":
       return (geometry.coordinates[0] ?? []) as Pt[];
+    case "MultiPolygon": {
+      let best: Pt[] = [];
+      let bestA = -1;
+      for (const r of outerRings(geometry)) {
+        const a = Math.abs(shoelace(r));
+        if (a > bestA) {
+          bestA = a;
+          best = r;
+        }
+      }
+      return best;
+    }
     case "Point":
       return [geometry.coordinates as Pt];
     default:
       return [];
   }
+}
+
+/** The outer ring of EACH area of a polygonal geometry (Polygon → 1; MultiPolygon → N).
+ *  A multi-area phenomenon (CB extended with its `+` button) decorates each one. */
+export function outerRings(geometry: Geometry): Pt[][] {
+  if (geometry.type === "Polygon") return [(geometry.coordinates[0] ?? []) as Pt[]];
+  if (geometry.type === "MultiPolygon") return geometry.coordinates.map((p) => (p[0] ?? []) as Pt[]);
+  return [];
+}
+
+/** Signed shoelace sum in raw lon/lat — only used to COMPARE ring sizes. */
+function shoelace(ring: Pt[]): number {
+  let s = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i]!;
+    const b = ring[(i + 1) % ring.length]!;
+    s += a[0] * b[1] - b[0] * a[1];
+  }
+  return s / 2;
 }
 
 /** Ray-casting: is point `p` inside the polygon `ring` (lon/lat; open or closed)? */
