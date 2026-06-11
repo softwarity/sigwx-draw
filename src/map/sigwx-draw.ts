@@ -14,6 +14,7 @@
 import type { Feature, FeatureCollection, Geometry, Position } from "geojson";
 
 import { ringCentroid } from "../core/phenomena/util.js";
+import { WAFS_SWH } from "../profiles/wafs-swh.js"; // the FILE, not the index — the core must not drag every preset
 
 import {
   catmullRom,
@@ -162,6 +163,28 @@ export interface TurbulenceType {
   svg: string;
 }
 
+/**
+ * A chart PROFILE — a declarative preset for ONE chart type (WAFS SWH, TEMSI EUROC,
+ * TEMSI France, or a host-defined one). Pure DATA: the engine, the phenomenon defs and
+ * the controller stay profile-agnostic; `new SigwxDraw({ profile })` just unfolds the
+ * bundle onto the existing options (explicit options always win). Presets ship as the
+ * OPTIONAL `@softwarity/sigwx-draw/profiles` entry.
+ */
+export interface SigwxProfile {
+  /** Chart-type id — tagged onto `save()`'s FeatureCollection (foreign member `profile`). */
+  id: string;
+  /** The tool palette offered to the forecaster (toolbar order). `toolbar.tools` wins. */
+  tools?: string[];
+  /** Per-phenomenon catalogues / bounds / styles for this chart type. `phenomena` wins per type. */
+  phenomena?: PhenomenaConfig;
+  /** The chart's vertical reference: bounds + display unit — `"fl"` renders `FL310`
+   *  (flight levels / 1013) and `"hft-amsl"` TEMSI France's hundreds of feet AMSL
+   *  (`065`). A declarative token (NOT a callback) so a profile stays plain JSON —
+   *  storable, servable, host-editable. Informative for now: the per-phenomenon
+   *  `flightLevel` carries the working bounds; the unit plumbs into rendering later. */
+  vertical?: { min: number; max: number; unit?: "fl" | "hft-amsl" };
+}
+
 export interface SigwxDrawOptions {
   adapter: MapAdapter;
   registry?: PhenomenonRegistry;
@@ -179,6 +202,8 @@ export interface SigwxDrawOptions {
    *  The shape itself (outline/fill) still marks it; zooming toward it (or selecting
    *  it) brings everything back. `0` ⇒ never hide. */
   callouts?: { minZoneFraction?: number };
+  /** Chart-type preset (palette + catalogues + bounds) — see {@link SigwxProfile}. */
+  profile?: SigwxProfile;
 }
 
 const fc = (features: Feature[]): FeatureCollection => ({ type: "FeatureCollection", features });
@@ -299,6 +324,10 @@ export class SigwxDraw {
   /** Merged sprite catalogue (defaults + host overrides + turbulence extensions) — the
    *  widget builders resolve their glyph carousel options from it. */
   private readonly spriteCatalog: SymbolSprites = {};
+  /** Chart-type id from the profile — tagged onto `save()`'s FeatureCollection. */
+  private readonly profileId: string | undefined;
+  /** Profile tool palette — the toolbar default when `toolbar.tools` is not given. */
+  private readonly profileTools: string[] | undefined;
   /** Call-out declutter threshold (fraction of the view span; 0 = never hide). */
   private readonly calloutFraction: number;
   /** Last visibility per feature (the ±10% hysteresis needs the previous state). */
@@ -314,7 +343,14 @@ export class SigwxDraw {
   constructor(opts: SigwxDrawOptions) {
     this.adapter = opts.adapter;
     this.registry = opts.registry ?? defaultRegistry();
-    this.phenomena = opts.phenomena ?? {};
+    // A chart profile is pure declarative sugar: unfold it onto the options, the
+    // EXPLICIT options winning (per phenomenon for `phenomena`, wholesale for tools).
+    // No profile given ⇒ the fallback IS a profile (WAFS SWH) — the source of truth for
+    // chart-specific numbers is always a profile, never scattered hard-coded values.
+    const profile = opts.profile ?? WAFS_SWH;
+    this.profileId = profile.id;
+    this.profileTools = profile.tools;
+    this.phenomena = { ...profile.phenomena, ...opts.phenomena };
     this.calloutFraction = opts.callouts?.minZoneFraction ?? 0.15;
     this.style = mergeStyle(DEFAULT_STYLE, opts.style);
 
@@ -695,7 +731,9 @@ export class SigwxDraw {
   }
 
   save(): FeatureCollection {
-    return toFeatureCollection(this.order.map((id) => this.doc.get(id)!));
+    const out = toFeatureCollection(this.order.map((id) => this.doc.get(id)!)) as FeatureCollection & { profile?: string };
+    if (this.profileId) out.profile = this.profileId; // chart-type tag (GeoJSON foreign member)
+    return out;
   }
 
   load(fcIn: FeatureCollection): void {
@@ -2106,8 +2144,9 @@ export class SigwxDraw {
   private buildToolbar(options: ToolbarOptions): void {
     // `tools` picks which phenomena (and their order); defaults to all registered.
     const all = this.registry.all();
-    const defs = options.tools
-      ? options.tools.map((t) => all.find((d) => d.type === t)).filter((d): d is PhenomenonDef => !!d)
+    const toolIds = options.tools ?? this.profileTools; // explicit > profile > every registered def
+    const defs = toolIds
+      ? toolIds.map((t) => all.find((d) => d.type === t)).filter((d): d is PhenomenonDef => !!d)
       : all;
     const drawItem = (def: PhenomenonDef, top: boolean): ToolbarItem => ({
       id: def.type,

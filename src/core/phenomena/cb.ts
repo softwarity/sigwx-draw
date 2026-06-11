@@ -12,10 +12,7 @@ import type { MarkerWidget } from "@softwarity/draw-adapter";
 
 import { coordsOf, frameK, lineFeature, outerRings, pointFeature, polygonFeature, polylineLength, scallopRing, toPlanar } from "../decorate/index.js";
 import type { DecorateFn, PhenomenonDef, RenderFeature, WidgetInput } from "../phenomenon.js";
-import { fl, num, regularPolygon, ringCentroid, str, textBoxProps } from "./util.js";
-
-/** A `+` glyph for CB's transient edge action buttons. */
-const CB_PLUS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 6 V18 M6 12 H18"/></svg>';
+import { fl, num, PLUS_GLYPH, regularPolygon, ringCentroid, str, textBoxProps } from "./util.js";
 
 /** One CB coverage amount: `code` (stored in metadata), `label`, and the WMO BUFR
  *  0-20-008 figure for IWXXM export. The cloud type is always CB ({@link CB_CLOUD_TYPE_BUFR}). */
@@ -174,7 +171,7 @@ export function makeCb(coverages: CbCoverage[] = DEFAULT_CB_COVERAGE): Phenomeno
             ...tail.map((value) => ({ kind: "text" as const, value })),
           ],
         },
-        buttons: [{ event: "draw-more", place: ["top", "left", "bottom"], svg: CB_PLUS, bordered: true, title: "Draw a linked area" }],
+        buttons: [{ event: "draw-more", place: ["top", "left", "bottom"], svg: PLUS_GLYPH, bordered: true, title: "Draw a linked area" }],
       };
     },
     // Red scalloped edge (PNG convention). The ink drives edge + fill tint + glyph + FL text.

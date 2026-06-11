@@ -674,6 +674,49 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
     expect(lastMeta(sigwx)["symbol"]).toBe("ICE_SEV");
   });
 
+  it("turbulence 'draw-more' (+) appends an EXTRA AREA — MultiPolygon, per-ring edges, one arrow per area", () => {
+    const id = stroke(sigwx, adapter, "turbulence", POLY);
+    const edges = () => (adapter.overlays.get("edge")?.features ?? []).filter((e) => e.properties?.["featureId"] === id).length;
+    const before = edges();
+    appendArea(id);
+    const fc = sigwx.save();
+    expect(fc.features).toHaveLength(1); // ONE logical zone…
+    const g = fc.features[0]!.geometry;
+    expect(g.type).toBe("MultiPolygon"); // …now holding TWO areas
+    expect((g as MultiPolygon).coordinates).toHaveLength(2);
+    expect(adapter.widget(id)).toBeDefined(); // back selected on the same zone — its card is live again
+    expect(edges()).toBeGreaterThan(before); // a dashed balloon edge PER ring
+    // TWO leaders, each with its arrowhead "V" (2 features per area), all from the one call-out.
+    const leaders = (adapter.overlays.get("leaders")?.features ?? []).filter((l) => l.properties?.["featureId"] === id);
+    expect(leaders).toHaveLength(4);
+  });
+
+  it("icing 'draw-more' (+) appends an EXTRA AREA — MultiPolygon, per-ring edges + ticks, one arrow per area", () => {
+    const id = stroke(sigwx, adapter, "icing", POLY);
+    const edges = () => (adapter.overlays.get("edge")?.features ?? []).filter((e) => e.properties?.["featureId"] === id).length;
+    const before = edges();
+    appendArea(id);
+    const fc = sigwx.save();
+    expect(fc.features).toHaveLength(1); // ONE logical zone…
+    const g = fc.features[0]!.geometry;
+    expect(g.type).toBe("MultiPolygon"); // …now holding TWO areas
+    expect((g as MultiPolygon).coordinates).toHaveLength(2);
+    expect(adapter.widget(id)).toBeDefined(); // back selected on the same zone — its card is live again
+    expect(edges()).toBeGreaterThan(before); // a dashed edge + tick MultiLineString PER ring
+    // TWO leaders, each with its arrowhead "V" (2 features per area), all from the one panel.
+    const leaders = (adapter.overlays.get("leaders")?.features ?? []).filter((l) => l.properties?.["featureId"] === id);
+    expect(leaders).toHaveLength(4);
+  });
+
+  it("turbulence and icing cards carry the '+' edge buttons (multi-area, like CB)", () => {
+    for (const type of ["turbulence", "icing"]) {
+      const id = stroke(sigwx, adapter, type, POLY);
+      const b = adapter.widget(id)!.buttons?.[0];
+      expect(b?.event).toBe("draw-more");
+      expect(b?.title).toBe("Draw a linked area");
+    }
+  });
+
   it("declutter: a tiny UNSELECTED zone hides its call-out; selecting (or a big zone) shows it", () => {
     // span = 10 (mock) → threshold 15% = 1.5°; this zone's diag ≈ 0.14° → insignificant
     sigwx.load({ type: "FeatureCollection", features: [{ type: "Feature", properties: { id: "tiny", phenomenon: "cb", metadata: { coverage: "OCNL", baseFL: 250, topFL: 400 } },
@@ -751,6 +794,38 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
     const after = adapter.widget(id)!.anchor;
     expect(after.lon).toBeCloseTo(before.lon, 5); // the box stayed put
     expect(after.lat).toBeCloseTo(before.lat, 5);
+  });
+
+  it("a chart PROFILE unfolds onto the options: palette, phenomena config, save() tag — explicit options win", async () => {
+    const { WAFS_SWH } = await import("../src/profiles/index.js");
+    const a = new MockAdapter();
+    const s = new SigwxDraw({
+      adapter: a,
+      toolbar: true, // no explicit tools → the profile's palette drives the toolbar
+      profile: { ...WAFS_SWH, phenomena: { cb: { flightLevel: { default: [260, 410] } } } },
+    });
+    await s.ready();
+    const ids = a.toolbarItems.map((i) => i.id);
+    expect(ids).toContain("jetStream");
+    expect(ids).toContain("markers"); // the marker submenu builds from the profile palette too
+    stroke(s, a, "cb", POLY);
+    expect(lastMeta(s)["baseFL"]).toBe(260); // the profile's phenomena config applied…
+    const fc = s.save() as { profile?: string };
+    expect(fc.profile).toBe("wafs-swh"); // …and the document carries its chart type
+
+    // NO profile given ⇒ the fallback IS a profile (WAFS SWH), not scattered values
+    expect((sigwx.save() as { profile?: string }).profile).toBe("wafs-swh");
+
+    // explicit options WIN over the profile (per phenomenon)
+    const a2 = new MockAdapter();
+    const s2 = new SigwxDraw({
+      adapter: a2,
+      profile: { ...WAFS_SWH, phenomena: { cb: { flightLevel: { default: [260, 410] } } } },
+      phenomena: { cb: { flightLevel: { default: [300, 450] } } },
+    });
+    await s2.ready();
+    stroke(s2, a2, "cb", POLY);
+    expect(lastMeta(s2)["baseFL"]).toBe(300);
   });
 
   it("the toolbar groups the markers into ONE toggle submenu (children); others stay flat", async () => {

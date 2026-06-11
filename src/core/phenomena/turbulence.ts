@@ -7,10 +7,9 @@
  */
 import type { MarkerWidget } from "@softwarity/draw-adapter";
 
-import { catmullRomClosed, coordsOf, lineFeature, pointFeature, polygonFeature } from "../decorate/index.js";
-import type { Pt } from "../decorate/index.js";
+import { catmullRomClosed, coordsOf, lineFeature, outerRings, pointFeature, polygonFeature } from "../decorate/index.js";
 import type { DecorateFn, PhenomenonDef, RenderFeature, WidgetInput } from "../phenomenon.js";
-import { fl, num, regularPolygon, ringCentroid, str } from "./util.js";
+import { fl, num, PLUS_GLYPH, regularPolygon, ringCentroid, str } from "./util.js";
 
 /** One entry of the turbulence symbol catalogue: a `code` (also the sprite id) + label. */
 export interface TurbulenceSymbol {
@@ -38,9 +37,11 @@ export function makeTurbulence(symbols: TurbulenceSymbol[] = DEFAULT_TURBULENCE_
   const first = symbols[0]?.code ?? "MOD";
 
   const decorate: DecorateFn = ({ geometry, metadata, style, flightLevel }) => {
-    const ring = coordsOf(geometry);
-    if (ring.length < 3) return [];
-    const smooth = catmullRomClosed(ring as Pt[], 16); // soft "balloon" outline, not angular
+    // A turbulence zone may be MULTI-AREA (drawn with the card's `+` button): one logical
+    // zone — one call-out, one metadata set — whose geometry holds several polygons.
+    // Smooth + fill EACH.
+    const rings = outerRings(geometry).filter((r) => r.length >= 3);
+    if (!rings.length) return [];
     const out: RenderFeature[] = [];
 
     // Chart vertical bounds (FL250–600 by default; overridable via `flightLevel`).
@@ -59,24 +60,29 @@ export function makeTurbulence(symbols: TurbulenceSymbol[] = DEFAULT_TURBULENCE_
     // the edge, the fill tint, the glyph AND the FL text — so the whole call-out reads as
     // MOD vs SEV. The `text` style carries only a halo (its colour IS the severity ink).
     const ink = (sym === "SEV" ? style.sev : style.mod)?.color ?? style.color;
-    if (style.area) {
-      out.push(polygonFeature(smooth, { layer: "area-fill", fillColor: style.area.color ?? ink, fillOpacity: style.area.opacity ?? 0.18 }));
+    for (const ring of rings) {
+      const smooth = catmullRomClosed(ring, 16); // soft "balloon" outline, not angular
+      if (style.area) {
+        out.push(polygonFeature(smooth, { layer: "area-fill", fillColor: style.area.color ?? ink, fillOpacity: style.area.opacity ?? 0.18 }));
+      }
+      // Dashed boundary (the `dash` prop tells the adapters to draw it dashed).
+      out.push(
+        lineFeature(smooth, {
+          layer: "edge",
+          stroke: style.edge?.color ?? ink,
+          strokeWidth: style.edge?.width ?? 3,
+          dash: style.edge?.dash ?? [3, 2],
+        }),
+      );
     }
-    // Dashed boundary (the `dash` prop tells the adapters to draw it dashed).
-    out.push(
-      lineFeature(smooth, {
-        layer: "edge",
-        stroke: style.edge?.color ?? ink,
-        strokeWidth: style.edge?.width ?? 3,
-        dash: style.edge?.dash ?? [3, 2],
-      }),
-    );
 
     // WAFC Washington "direct" call-out: arrow back to the zone, box with the chosen
     // glyph ABOVE the FL range (one bound may be XXX). Click the glyph on the map to
-    // pick another from the catalogue.
+    // pick another from the catalogue. ONE call-out, anchored at the LARGEST area's
+    // centroid (`coordsOf` of a MultiPolygon = its largest ring); the controller aims
+    // one leader/arrow at EACH area.
     out.push(
-      pointFeature(ringCentroid(ring), {
+      pointFeature(ringCentroid(coordsOf(geometry)), {
         layer: "annotations",
         labelId: "turb",
         content: `${flx(metadata["topFL"], false)}\n${flx(metadata["baseFL"], true)}`,
@@ -130,7 +136,8 @@ export function makeTurbulence(symbols: TurbulenceSymbol[] = DEFAULT_TURBULENCE_
     decorate,
     // When SELECTED, the call-out (glyph above the FL text) is REPLACED by a DOM card at
     // the same placed spot — UNFRAMED like the canvas call-out — whose severity glyph is a
-    // `"carousel"` control (click = next, shift-click = previous; emits name:"symbol").
+    // `"carousel"` control (click = next, shift-click = previous; emits name:"symbol"),
+    // plus `+` buttons straddling its edges (`onWidgetAction("draw-more")` — multi-area).
     // Returns null when unselected ⇒ the canvas call-out (tap-the-glyph cycle) renders as usual.
     widget: ({ id, metadata, editable, style, callout, sprite }: WidgetInput): MarkerWidget | null => {
       if (!editable || !callout) return null;
@@ -161,6 +168,7 @@ export function makeTurbulence(symbols: TurbulenceSymbol[] = DEFAULT_TURBULENCE_
             ...callout.content.split("\n").map((value) => ({ kind: "text" as const, value })),
           ],
         },
+        buttons: [{ event: "draw-more", place: ["top", "left", "bottom"], svg: PLUS_GLYPH, bordered: true, title: "Draw a linked area" }],
       };
     },
     // Grey shading per the WAFC norm — MOD light grey, SEV darker grey (the ink drives

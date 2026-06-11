@@ -7,10 +7,9 @@
  */
 import type { MarkerWidget } from "@softwarity/draw-adapter";
 
-import { catmullRomClosed, coordsOf, frameK, inwardTicks, lineFeature, pointFeature, polygonFeature, polylineLength, toPlanar } from "../decorate/index.js";
-import type { Pt } from "../decorate/index.js";
+import { catmullRomClosed, coordsOf, frameK, inwardTicks, lineFeature, outerRings, pointFeature, polygonFeature, polylineLength, toPlanar } from "../decorate/index.js";
 import type { DecorateFn, PhenomenonDef, RenderFeature, WidgetInput } from "../phenomenon.js";
-import { fl, num, regularPolygon, ringCentroid, str, textBoxProps } from "./util.js";
+import { fl, num, PLUS_GLYPH, regularPolygon, ringCentroid, str, textBoxProps } from "./util.js";
 
 /** One icing intensity: a `code` (which IS the sprite id, e.g. `ICE_MOD`) + a display label. */
 export interface IcingSymbol {
@@ -38,9 +37,11 @@ export function makeIcing(symbols: IcingSymbol[] = DEFAULT_ICING_SYMBOLS): Pheno
   const first = symbols[0]?.code ?? "ICE_MOD";
 
   const decorate: DecorateFn = ({ geometry, metadata, style, flightLevel, leaderThunderbolt }) => {
-    const ring = coordsOf(geometry);
-    if (ring.length < 3) return [];
-    const smooth = catmullRomClosed(ring as Pt[], 16); // soft "balloon" outline
+    // An icing zone may be MULTI-AREA (drawn with the card's `+` button): one logical
+    // zone — one panel, one metadata set — whose geometry holds several polygons.
+    // Smooth + fill + tick EACH.
+    const rings = outerRings(geometry).filter((r) => r.length >= 3);
+    if (!rings.length) return [];
 
     // Chart vertical bounds (FL250–600 by default; overridable via `flightLevel`). A base
     // BELOW min or top ABOVE max → "XXX" (the off-chart sentinel, per WAFC).
@@ -58,27 +59,32 @@ export function makeIcing(symbols: IcingSymbol[] = DEFAULT_ICING_SYMBOLS): Pheno
     // (box / glyph / FL / leader) — decoupled from the purple area, per the WAFC visuals.
     const ink = (sym === "ICE_SEV" ? style.sev : style.mod)?.color ?? style.color;
     const callout = style.text?.color ?? "#1f2328";
-    const out: RenderFeature[] = [];
-    if (style.area) {
-      out.push(polygonFeature(smooth, { layer: "area-fill", fillColor: style.area.color ?? ink, fillOpacity: style.area.opacity ?? 0.18 }));
-    }
-    // Purple boundary + small INWARD ticks at regular spacing (the WAFC icing-area convention) —
-    // NOT a scallop (CB). A short perpendicular tick toward the interior every ~1/44 of the perimeter.
     const edgeInk = style.edge?.color ?? ink;
     const edgeW = style.edge?.width ?? 2.5;
-    out.push(lineFeature(smooth, { layer: "edge", stroke: edgeInk, strokeWidth: edgeW, dash: style.edge?.dash ?? [4, 2] }));
-    const fk = frameK(smooth);
-    const perim = polylineLength(smooth.map((c) => toPlanar(c, fk)));
-    const spacing = Math.max(0.05, perim / 44);
-    const ticks = inwardTicks(smooth, { spacing, length: spacing * 0.26 });
-    if (ticks.length) {
-      out.push({ type: "Feature", properties: { layer: "edge", stroke: edgeInk, strokeWidth: edgeW }, geometry: { type: "MultiLineString", coordinates: ticks } });
+    const out: RenderFeature[] = [];
+    for (const ring of rings) {
+      const smooth = catmullRomClosed(ring, 16); // soft "balloon" outline
+      if (style.area) {
+        out.push(polygonFeature(smooth, { layer: "area-fill", fillColor: style.area.color ?? ink, fillOpacity: style.area.opacity ?? 0.18 }));
+      }
+      // Purple boundary + small INWARD ticks at regular spacing (the WAFC icing-area convention) —
+      // NOT a scallop (CB). A short perpendicular tick toward the interior every ~1/44 of the perimeter.
+      out.push(lineFeature(smooth, { layer: "edge", stroke: edgeInk, strokeWidth: edgeW, dash: style.edge?.dash ?? [4, 2] }));
+      const fk = frameK(smooth);
+      const perim = polylineLength(smooth.map((c) => toPlanar(c, fk)));
+      const spacing = Math.max(0.05, perim / 44);
+      const ticks = inwardTicks(smooth, { spacing, length: spacing * 0.26 });
+      if (ticks.length) {
+        out.push({ type: "Feature", properties: { layer: "edge", stroke: edgeInk, strokeWidth: edgeW }, geometry: { type: "MultiLineString", coordinates: ticks } });
+      }
     }
 
     // Call-out: the fork glyph above the FL range (one bound may be XXX), in a black & white
-    // box. Tap the glyph on the map to cycle the intensity.
+    // box. Tap the glyph on the map to cycle the intensity. ONE panel, anchored at the
+    // LARGEST area's centroid (`coordsOf` of a MultiPolygon = its largest ring); the
+    // controller aims one leader/arrow at EACH area.
     out.push(
-      pointFeature(ringCentroid(ring), {
+      pointFeature(ringCentroid(coordsOf(geometry)), {
         layer: "annotations",
         labelId: "icing",
         // Two leading blank lines reserve room for the glyph INSIDE the box (its top half).
@@ -135,7 +141,8 @@ export function makeIcing(symbols: IcingSymbol[] = DEFAULT_ICING_SYMBOLS): Pheno
     decorate,
     // When SELECTED, the black & white call-out panel is REPLACED by a DOM card at the same
     // placed spot, whose fork glyph is a `"carousel"` control (click = next, shift-click =
-    // previous; emits name:"symbol"). The canvas content's leading BLANK lines (reserved for
+    // previous; emits name:"symbol"), plus `+` buttons straddling its edges
+    // (`onWidgetAction("draw-more")` — multi-area). The canvas content's leading BLANK lines (reserved for
     // the inside glyph) are dropped — the glyph is its own card item. Returns null when
     // unselected ⇒ the canvas call-out (tap-the-glyph cycle) renders as usual.
     widget: ({ id, metadata, editable, style, callout, sprite }: WidgetInput): MarkerWidget | null => {
@@ -163,6 +170,7 @@ export function makeIcing(symbols: IcingSymbol[] = DEFAULT_ICING_SYMBOLS): Pheno
             ...callout.content.split("\n").filter((l) => l.trim() !== "").map((value) => ({ kind: "text" as const, value })),
           ],
         },
+        buttons: [{ event: "draw-more", place: ["top", "left", "bottom"], svg: PLUS_GLYPH, bordered: true, title: "Draw a linked area" }],
       };
     },
     // Purple shading per the WAFC norm — MOD lighter, SEV darker (the ink drives edge + fill);

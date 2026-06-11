@@ -4,6 +4,9 @@ import type { Geometry, Position } from "geojson";
 import type { LatLng } from "../coord.js";
 import type { PhenomenonStyle } from "../style.js";
 
+/** A `+` glyph for a selected area card's transient edge action buttons ("draw-more"). */
+export const PLUS_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 6 V18 M6 12 H18"/></svg>';
+
 export const num = (v: unknown, d = 0): number => (typeof v === "number" && isFinite(v) ? v : d);
 export const str = (v: unknown, d = ""): string => (typeof v === "string" ? v : d);
 export const fl = (v: unknown): string => `FL${String(Math.round(num(v))).padStart(3, "0")}`;
