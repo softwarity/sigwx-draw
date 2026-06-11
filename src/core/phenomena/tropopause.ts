@@ -9,10 +9,12 @@
  * over its whole length). The H/L maximum/minimum markers are deliberately NOT
  * modelled — "no longer included" (§3.9.1).
  */
+import type { MarkerWidget } from "@softwarity/draw-adapter";
+
 import { catmullRom, frameK, lineFeature, pointAtFraction, pointFeature, toLonLat, toPlanar } from "../decorate/index.js";
 import type { Pt } from "../decorate/index.js";
-import type { DecorateFn, PhenomenonDef, RenderFeature } from "../phenomenon.js";
-import { fl } from "./util.js";
+import type { DecorateFn, PhenomenonDef, RenderFeature, WidgetInput } from "../phenomenon.js";
+import { fl, flGaugeNode, num } from "./util.js";
 
 /** Tropopause FL gauge clamp (FL250–600, the SWH chart range). The FL is shown
  *  EXPLICITLY even off-chart (Annex 3) — no "XXX" sentinel, hence no `flBeyond`. */
@@ -81,6 +83,35 @@ export const tropopause: PhenomenonDef = {
   },
   schema: [{ type: "fl", key: "fl", label: "Flight level", default: 380, min: FL_MIN, max: FL_MAX }],
   decorate,
+  // When SELECTED, a small SATELLITE card (just the 1-cursor FL gauge) floats beside the
+  // FL label — the canvas box/label itself stays rendered (the card does not replace it).
+  // The widget sibling of the old canvas single-FL gauge.
+  widget: ({ id, geometry, metadata, editable, flightLevel, flRef, chrome }: WidgetInput): MarkerWidget | null => {
+    if (!editable) return null;
+    let at: Pt;
+    if (geometry.type === "Point") {
+      at = geometry.coordinates as Pt;
+    } else if (geometry.type === "LineString" && geometry.coordinates.length >= 2) {
+      // The contour's arc-length middle — where the FL label sits.
+      const dense = catmullRom(geometry.coordinates as Pt[], 16);
+      const k = frameK(dense);
+      at = toLonLat(pointAtFraction(dense.map((c) => toPlanar(c, k)), 0.5).p, k);
+    } else {
+      return null;
+    }
+    const gauge = flGaugeNode(metadata, flightLevel, FL_MIN, FL_MAX, ["fl"], chrome);
+    // Pin the card so the SELECTION-TIME level sits at the anchor's screen height (the
+    // old canvas gauge's behaviour) — drag-stable since flRef is frozen at selection.
+    const ref = typeof flRef === "number" ? flRef : num(metadata["fl"], (gauge.min + gauge.max) / 2);
+    const yPin = 1 - (Math.max(gauge.min, Math.min(gauge.max, ref)) - gauge.min) / (gauge.max - gauge.min);
+    return {
+      id,
+      anchor: { lon: at[0]!, lat: at[1]! },
+      // x < 0 ⇒ the card floats just right of the label, clear of it.
+      origin: { x: -0.5, y: yPin },
+      child: { dir: "v", items: [gauge] },
+    };
+  },
   // A thin blue dotted iso-line; the FL label is the same blue (boxed only for a spot).
   style: {
     color: "#0b6bcb",

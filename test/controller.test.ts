@@ -72,6 +72,8 @@ class MockAdapter implements MapAdapter {
     this.keyCb?.({ key, code: key, ctrl: false, meta: false, shift: false, alt: false, preventDefault: () => {} });
   }
   editWidget(id: string, value: string, name?: string): void { this.widgetEditCb?.({ id, value, ...(name != null ? { name } : {}) }); }
+  /** Simulate a gauge/dial cursor drag ⇒ onWidgetEdit({ id, name, value: String(v) }). */
+  dragGauge(id: string, name: string, value: number): void { this.widgetEditCb?.({ id, name, value: String(value) }); }
   deleteWidget(id: string): void { this.widgetDeleteCb?.({ id }); }
   actionWidget(id: string, event: string): void { this.widgetActionCb?.({ id, event }); }
   widget(id: string): MarkerWidget | undefined { return this.widgets.find((w) => w.id === id); }
@@ -154,6 +156,30 @@ describe("SigwxDraw controller (draw mode)", () => {
     expect(pts.every((p) => p.fl === 320)).toBe(true);
   });
 
+  it("a jet break point's editor is TWO cards: a speed dial ON the point + an FL gauge beside (3 cursors past 120 kt)", () => {
+    const id = stroke(sigwx, adapter, "jetStream", JET);
+    expect(adapter.widget(`${id}#dial`)).toBeUndefined(); // no sub-selection → no cards
+    sigwx.selectSubItem(1); // an interior break point
+    expect(adapter.widget(`${id}#dial`)!.origin).toBeUndefined(); // default "center" — the dial rings the point
+    const dial = () => adapter.widget(`${id}#dial`)!.child.items[0] as { kind: string; name: string; min: number; label?: string };
+    const gauge = () => adapter.widget(`${id}#gauge`)!.child.items[0] as { kind: string; cursors: { name: string }[] };
+    expect(dial().kind).toBe("dial");
+    expect(dial().min).toBe(80); // the WAFC depiction floor
+    expect(gauge().kind).toBe("gauge");
+    expect(gauge().cursors).toHaveLength(1); // below 120 kt → the core FL only
+    const pts = (): Record<string, unknown>[] => lastMeta(sigwx)["points"] as Record<string, unknown>[];
+    adapter.dragGauge(id, "points.1.speed", 173); // dial drag → rounded to 5 kt, persisted
+    expect(pts()[1]!["speed"]).toBe(175);
+    expect(dial().label).toBe("175KT"); // the card re-rendered live
+    adapter.dragGauge(id, "points.1.speed", 220); // past 120 → the isotach extent cursors appear
+    expect(gauge().cursors).toHaveLength(3);
+    adapter.dragGauge(id, "points.1.base", 99999); // base can never pass the core FL
+    expect(pts()[1]!["base"]).toBe(300);
+    sigwx.selectSubItem(null); // sub-deselection drops the cards
+    expect(adapter.widget(`${id}#dial`)).toBeUndefined();
+    expect(adapter.widget(`${id}#gauge`)).toBeUndefined();
+  });
+
   it("renders NO on-map ✕ control; Backspace (via adapter.onKey) deletes the selection", () => {
     stroke(sigwx, adapter, "jetStream", JET); // selected on commit
     expect(sigwx.save().features).toHaveLength(1);
@@ -163,11 +189,13 @@ describe("SigwxDraw controller (draw mode)", () => {
   });
 
   it("draws a CB polygon: scalloped fill + edge + call-out + leader", () => {
-    stroke(sigwx, adapter, "cb", POLY);
+    const id = stroke(sigwx, adapter, "cb", POLY);
     expect(adapter.count("area-fill")).toBe(1);
     expect(adapter.count("edge")).toBe(1);
-    expect(adapter.count("text-boxes")).toBeGreaterThan(0); // placed call-out (+ FL-gauge labels while selected)
-    expect(adapter.count("leaders")).toBeGreaterThan(0); // leader to the anchor (+ gauge axis)
+    expect(adapter.widget(id)).toBeDefined(); // SELECTED ⇒ the card replaces the call-out box
+    expect(adapter.count("leaders")).toBeGreaterThan(0); // leader to the anchor
+    sigwx.select(null);
+    expect(adapter.count("text-boxes")).toBeGreaterThan(0); // unselected ⇒ the canvas call-out
   });
 
   it("dragging a jet's body (axis/barbs) translates the whole jet, like an area", () => {
@@ -194,13 +222,59 @@ describe("SigwxDraw controller (draw mode)", () => {
     expect(lastMeta(sigwx)["coverage"]).toBe("FRQ");
   });
 
-  it("tapping the CB central handle flips the scallop bumps (scallopInvert)", () => {
+  it("the ERASER rubs a clear HOLE (interior ring) — inverted border, arrow re-clamped outside it", () => {
+    const id = stroke(sigwx, adapter, "cb", POLY); // (0,0)…(4,4)
+    adapter.actionWidget(id, "erase"); // the card's − button arms the eraser
+    adapter.ev("down", 2, 2); // rub the middle…
+    adapter.ev("move", 2.4, 2);
+    adapter.ev("up", 2.4, 2);
+    const g = sigwx.save().features[0]!.geometry as { type: string; coordinates: Position[][] };
+    expect(g.type).toBe("Polygon");
+    expect(g.coordinates.length).toBe(2); // outer ring + ONE hole
+    // the arrow tip is clamped OUTSIDE the hole (still inside the outer ring)
+    sigwx.select(null);
+    expect((sigwx.save().features[0]!.geometry as { coordinates: Position[][] }).coordinates).toHaveLength(2);
+  });
+
+  it("HOLE vertices edit like the others: flat handles, drag, delete-to-collapse", () => {
+    const id = stroke(sigwx, adapter, "cb", POLY); // outer: 4 unique vertices (flat 0..3)
+    adapter.actionWidget(id, "erase");
+    adapter.ev("down", 2, 2); // tap → a round hole
+    adapter.ev("up", 2, 2);
+    adapter.key("Escape");
+    const rings = () => (sigwx.save().features[0]!.geometry as { coordinates: Position[][] }).coordinates;
+    expect(rings().length).toBe(2);
+    const holeN = rings()[1]!.length - 1; // unique hole vertices
+    // handles cover outer + hole (flat indexing)
+    const handles = adapter.overlays.get("handles")!.features.filter((h) => h.properties?.["hClass"] === "vertex");
+    expect(handles.length).toBe(4 + holeN);
+    // DRAG a hole vertex (flat index 4 = the hole's first) → the hole moves with it
+    const before = JSON.stringify(rings()[1]);
+    adapter.ev("down", 0, 0, { overlay: "handles", props: { featureId: id, hClass: "vertex", role: "v4" } });
+    adapter.ev("move", 2.2, 2.2);
+    adapter.ev("up", 2.2, 2.2);
+    expect(JSON.stringify(rings()[1])).not.toEqual(before);
+    // DELETE hole vertices one by one — at the 3-vertex minimum the hole closes up
+    for (let i = 0; i < holeN; i++) adapter.ev("dblclick", 0, 0, { overlay: "handles", props: { featureId: id, hClass: "vertex", role: "v4" } });
+    expect(rings().length).toBe(1); // the hole is gone, the zone is whole again
+  });
+
+  it("the ERASER bites through the border (reshape) and CUTS an area in two (MultiPolygon)", () => {
     const id = stroke(sigwx, adapter, "cb", POLY);
-    expect(lastMeta(sigwx)["scallopInvert"]).toBeUndefined(); // default → style (outward)
-    // A TAP (down + up, no drag) on the central anchor handle flips the bump direction.
-    adapter.ev("down", 5, 5, { overlay: "handles", props: { featureId: id, hClass: "control", role: "anchor" } });
-    adapter.ev("up", 5, 5);
-    expect(lastMeta(sigwx)["scallopInvert"]).toBe(true); // outward → inward
+    adapter.actionWidget(id, "erase");
+    // a vertical rub straight across the middle, edge to edge → split in two
+    adapter.ev("down", 2, -1);
+    adapter.ev("move", 2, 2);
+    adapter.ev("move", 2, 5);
+    adapter.ev("up", 2, 5);
+    const g = sigwx.save().features[0]!.geometry;
+    expect(g.type).toBe("MultiPolygon"); // the patate is now TWO areas…
+    const leaders = (adapter.overlays.get("leaders")?.features ?? []).filter((l) => l.properties?.["featureId"] === id);
+    expect(leaders.length).toBeGreaterThanOrEqual(2); // …each with its own arrow (selected ⇒ card replaces the box)
+    adapter.key("Escape"); // exits the eraser
+    adapter.ev("down", 1, 1); // a fresh down no longer rubs
+    adapter.ev("up", 1, 1);
+    expect(sigwx.save().features[0]!.geometry.type).toBe("MultiPolygon"); // unchanged
   });
 
   it("emits a form spec with a list section for the jet", () => {
@@ -264,13 +338,13 @@ describe("SigwxDraw controller (draw mode)", () => {
   it("dragging the call-out symbol repositions the indicator (call-out), NOT the zone", () => {
     const id = stroke(sigwx, adapter, "turbulence", [[0, 0], [4, 0], [4, 4], [0, 4]]);
     const geom = () => JSON.stringify(sigwx.save().features[0]!.geometry);
-    const box = () => JSON.stringify(adapter.overlays.get("text-boxes")?.features.map((f) => f.geometry));
-    const geom0 = geom(), box0 = box();
+    const card = () => JSON.stringify(adapter.widget(id)!.anchor); // the card sits at the placed call-out
+    const geom0 = geom(), card0 = card();
     adapter.ev("down", 1, 1, { overlay: "symbols", props: { featureId: id, labelId: "turb" } });
     adapter.ev("move", 10, 10);
     adapter.ev("up", 10, 10);
     expect(geom()).toEqual(geom0); // the zone itself does NOT move
-    expect(box()).not.toEqual(box0); // the call-out (indicator) is repositioned
+    expect(card()).not.toEqual(card0); // the call-out (indicator) is repositioned
   });
 
   it("clicking the turbulence symbol does NOT cycle anymore — editing lives on the card's carousel", () => {
@@ -283,18 +357,17 @@ describe("SigwxDraw controller (draw mode)", () => {
     expect((sigwx.save().features[0]!.properties!["metadata"] as Record<string, unknown>)["symbol"]).toBe("SEV");
   });
 
-  it("turbulence FL gauge: base drags to the off-chart (XXX) notch below the floor; flightLevel moves it live", () => {
+  it("turbulence FL gauge (card): base drags to the off-chart (XXX) notch below the floor; flightLevel moves it live", () => {
     const id = stroke(sigwx, adapter, "turbulence", [[0, 0], [4, 0], [4, 4], [0, 4]]);
     const baseFL = (): unknown => (sigwx.save().features[0]!.properties!["metadata"] as Record<string, unknown>)["baseFL"];
-    const dragBaseDown = (): void => {
-      adapter.ev("down", 1, 1, { overlay: "handles", props: { featureId: id, hClass: "control", role: "mBase" } });
-      adapter.ev("move", 1, -99999); // far DOWN (low lat → high screen-y → low FL), past the floor
-      adapter.ev("up", 1, -99999);
-    };
-    dragBaseDown();
-    expect(baseFL()).toBe(245); // norm floor 250 − 5 = the off-chart notch (shown XXX)
+    const gauge = () => (adapter.widget(`${id}#gauge`)!.child.items[0] as { kind: string; beyond?: { below?: boolean }; cursors: { name: string; value: number; label?: string }[] });
+    expect(gauge().kind).toBe("gauge"); // a SATELLITE card beside the call-out carries the gauge
+    expect(gauge().beyond?.below).toBe(true); // areas default to the off-chart XXX notch
+    adapter.dragGauge(id, "baseFL", -99999); // way past the floor → clamps to the notch
+    expect(baseFL()).toBe(245); // norm floor 250 − 5 = the off-chart notch…
+    expect(gauge().cursors[0]!.label).toBe("XXX"); // …labelled XXX on the re-rendered card
     sigwx.setPhenomenonFlightLevel("turbulence", { min: 100 }); // lower the floor live
-    dragBaseDown();
+    adapter.dragGauge(id, "baseFL", -99999);
     expect(baseFL()).toBe(95); // notch follows the new floor (100 − 5)
   });
 
@@ -359,18 +432,15 @@ describe("tropopause (one button → spot or contour by gesture)", () => {
     expect(sigwx.save().features[0]!.geometry.type).toBe("Point");
   });
 
-  it("the single-FL gauge drags the contour's fl, clamped to the field range", () => {
+  it("the single-FL gauge (satellite card) drags the contour's fl, clamped to the field range", () => {
     const id = stroke(sigwx, adapter, "tropopause", [[0, 0], [2, 1], [4, 0]]);
     expect(lastMeta(sigwx)["fl"]).toBe(380); // default
-    // Drag the mFL handle's cursor far UP (high lat) → saturates at the field max.
-    adapter.ev("down", 0, 0, { overlay: "handles", props: { featureId: id, hClass: "control", role: "mFL" } });
-    adapter.ev("move", 0, 50);
-    adapter.ev("up", 0, 50);
+    const g = adapter.widget(id)!.child.items[0] as { kind: string; cursors: { name: string }[] };
+    expect(g.kind).toBe("gauge"); // a satellite card beside the FL label, 1 cursor
+    expect(g.cursors).toHaveLength(1);
+    adapter.dragGauge(id, "fl", 99999); // way up → saturates at the field max (clamp, no notch)
     expect(lastMeta(sigwx)["fl"]).toBe(600);
-    // …and far DOWN → the field min.
-    adapter.ev("down", 0, 0, { overlay: "handles", props: { featureId: id, hClass: "control", role: "mFL" } });
-    adapter.ev("move", 0, -50);
-    adapter.ev("up", 0, -50);
+    adapter.dragGauge(id, "fl", -99999); // …and way down → the field min
     expect(lastMeta(sigwx)["fl"]).toBe(250);
   });
 
@@ -495,7 +565,9 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
     const id = stroke(sigwx, adapter, "cb", POLY); // drawn ⇒ selected
     const w = adapter.widget(id)!;
     expect(w.buttons?.[0]?.event).toBe("draw-more");
-    expect(w.buttons?.[0]?.place).toEqual(["top", "left", "bottom"]);
+    expect(w.buttons?.[0]?.place).toBe("h-edges"); // + on top/bottom…
+    expect(w.buttons?.[1]?.event).toBe("erase"); // …the ERASER (−) takes the left edge
+    expect(w.buttons?.[1]?.place).toBe("left");
     sigwx.select(null);
     expect(adapter.widget(id)).toBeUndefined(); // the control card exists ONLY while selected
     const vid = sigwx.draw("volcano"); // markers no longer carry edge buttons
@@ -646,6 +718,7 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
     expect(w.bg).toBeUndefined(); // unframed, like the canvas call-out
     expect(w.border).toBeUndefined();
     const sev = w.child.items[0] as { control?: string; name?: string; value?: string; options?: { value: string; svg?: string }[] };
+    expect((adapter.widget(`${id}#gauge`)!.child.items[0] as { kind?: string }).kind).toBe("gauge"); // satellite gauge card
     expect(sev.control).toBe("carousel");
     expect(sev.name).toBe("symbol");
     expect(sev.value).toBe("MOD");
@@ -751,6 +824,19 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
     sigwx.select(null);
     expect(of("decoration")).toHaveLength(0); // fully decluttered way out
     expect(of("edge").length).toBeGreaterThan(0);
+  });
+
+  it("a tiny accidental '+' stroke does NOT append a ghost micro-area (the double-arrow bug)", () => {
+    const id = stroke(sigwx, adapter, "cb", POLY);
+    adapter.actionWidget(id, "draw-more"); // enter append mode…
+    adapter.ev("down", 6, 6);
+    adapter.ev("move", 6.05, 6.05); // …but the gesture is ~3 px of jitter, not a shape
+    adapter.ev("up", 6.05, 6.05);
+    expect(sigwx.save().features[0]!.geometry.type).toBe("Polygon"); // no ghost second area
+    expect(sigwx.save().features).toHaveLength(1);
+    // and the aborted append must not capture the NEXT (normal) draw
+    stroke(sigwx, adapter, "cb", [[10, 10], [12, 10], [12, 12], [10, 12]]);
+    expect(sigwx.save().features).toHaveLength(2); // a NEW feature, not an appended area
   });
 
   it("pressing an area already IN the multi-set keeps the set — the drag moves ALL of it", () => {

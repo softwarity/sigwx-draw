@@ -128,6 +128,21 @@ export interface WidgetInput {
    *  host extensions included) — lets a widget build GLYPH carousel options (the
    *  turbulence/icing severity pickers). */
   sprite?: (id: string) => string | undefined;
+  /** Resolved chart FL bounds + off-chart behaviour (same shape the decorate receives) —
+   *  feeds the card's FL gauge (min/max, the "XXX" beyond notches, cursor labels). */
+  flightLevel?: { min?: number; max?: number; beyond?: [string, string] };
+  /** Selected SUB-ITEM index of the feature's list field (a jet break point) — lets the
+   *  builder raise the per-point editor card. Absent ⇒ no sub-selection. */
+  sub?: number;
+  /** Resolved numeric bounds of a schema field (config over schema, e.g. the jet speed
+   *  dial range) — the controller's `numLimit`. */
+  limit?: (key: string) => { min: number; max: number };
+  /** FL the gauge is centred on, captured at SELECTION time (stable during drags) — pins
+   *  the gauge card so the reference level sits at the anchor's screen height. */
+  flRef?: number;
+  /** The editing-chrome styles (`SigwxStyle.control`) — gauges/dials wear them: `line.color`
+   *  = track/arc ink, `text` = label colour + halo, `handle` = knob fill/stroke. */
+  chrome?: { line?: { color?: string }; handle?: { fill?: string; stroke?: string }; text?: { color?: string; halo?: string } };
 }
 
 // ── Metadata schema ────────────────────────────────────────────────────────
@@ -245,11 +260,11 @@ export interface PhenomenonDef {
   schema: FieldSchema[];
   /** geometry + metadata → derived decoration features. The heart of SIGWX. */
   decorate: DecorateFn;
-  /** Build a `MarkerWidget` (a DOM card) for this feature — a point marker (TC / volcano /
-   *  radioactive), OR a transient control panel for another phenomenon (e.g. CB's edge `+`
-   *  buttons). Return `null` to emit no widget for the current state (e.g. when unselected).
-   *  The controller collects the non-null ones and calls `adapter.setWidgets(...)`. */
-  widget?: (input: WidgetInput) => MarkerWidget | null;
+  /** Build the feature's DOM card(s) — a point marker (TC / volcano / radioactive), a
+   *  transient control panel (CB's `+` card), or SEVERAL cards (the jet's dial + gauge —
+   *  ids suffixed `featureId#part`; every widget event strips the suffix back to the
+   *  feature). Return `null` to emit nothing for the current state (e.g. unselected). */
+  widget?: (input: WidgetInput) => MarkerWidget | MarkerWidget[] | null;
   /** Default per-phenomenon style (host can override via the aggregate style). */
   style: PhenomenonStyle;
   /** Optional one-line human summary (label/tooltip). */

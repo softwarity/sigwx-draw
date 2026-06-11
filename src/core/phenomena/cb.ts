@@ -9,10 +9,12 @@
  * coverage was discontinued in January 2025, so the default catalogue is OCNL / FRQ.
  */
 import type { MarkerWidget } from "@softwarity/draw-adapter";
+import type { Position } from "geojson";
 
-import { coordsOf, frameK, lineFeature, outerRings, pointFeature, polygonFeature, polylineLength, scallopRing, toPlanar } from "../decorate/index.js";
+import { areaRings, coordsOf, frameK, lineFeature, pointFeature, polygonFeature, polylineLength, scallopRing, toPlanar } from "../decorate/index.js";
+import type { Pt } from "../decorate/index.js";
 import type { DecorateFn, PhenomenonDef, RenderFeature, WidgetInput } from "../phenomenon.js";
-import { fl, num, PLUS_GLYPH, regularPolygon, ringCentroid, str, textBoxProps } from "./util.js";
+import { fl, flGaugeNode, num, MINUS_GLYPH, PLUS_GLYPH, regularPolygon, ringCentroid, str, textBoxProps } from "./util.js";
 
 /** One CB coverage amount: `code` (stored in metadata), `label`, and the WMO BUFR
  *  0-20-008 figure for IWXXM export. The cloud type is always CB ({@link CB_CLOUD_TYPE_BUFR}). */
@@ -46,13 +48,12 @@ export function makeCb(coverages: CbCoverage[] = DEFAULT_CB_COVERAGE): Phenomeno
   const first = coverages[0]?.code ?? "OCNL";
 
   const decorate: DecorateFn = ({ geometry, metadata, style, flightLevel, leaderThunderbolt }) => {
-    // A CB may be MULTI-AREA (drawn with the call-out's `+` button): one logical CB — one
-    // box, one metadata set — whose geometry holds several polygons. Scallop + fill EACH.
-    const rings = outerRings(geometry).filter((r) => r.length >= 3);
-    if (!rings.length) return [];
-    // Bump direction is per-feature: toggled ON THE MAP (tap the central handle) via the
-    // `scallopInvert` metadata flag; falls back to the style default. true → bumps point INWARD.
-    const invert = metadata["scallopInvert"] != null ? Boolean(metadata["scallopInvert"]) : style.edge?.scallopSide === "in";
+    // A CB may be MULTI-AREA (the call-out's `+` button) and each area may carry HOLES
+    // (the eraser): one logical CB — one box, one metadata set. Scallop + fill EACH area;
+    // a hole's scallops run the other way (bumps INTO the clear zone) — the "inverted
+    // border" is a geometric consequence of being an interior ring, not a state.
+    const areas = areaRings(geometry).filter((a) => a.outer.length >= 3);
+    if (!areas.length) return [];
     const out: RenderFeature[] = [];
 
     // Chart vertical bounds (FL250–600 by default; overridable via `flightLevel`). A base
@@ -68,17 +69,42 @@ export function makeCb(coverages: CbCoverage[] = DEFAULT_CB_COVERAGE): Phenomeno
 
     const ink = style.edge?.color ?? style.color; // red — the scalloped EDGE (the area outline)
     const callout = style.text?.color ?? "#1f2328"; // black — the call-out panel, per the WAFC visuals
-    for (const ring of rings) {
-      // Scallop each boundary — real geometry; bumps point OUTWARD (away from the fill), so a
-      // concave edge / hole naturally reads as bumps "into" it. `scallopRing` orients by the ring.
+    // ONE bump size for the whole feature (from its MAIN outer ring) — a small hole must
+    // NOT get miniature bumps, the scallop wavelength is a chart convention, not a ratio.
+    const mainRing = coordsOf(geometry);
+    const mk = frameK(mainRing);
+    const wavelength = Math.max(0.05, polylineLength(mainRing.map((c) => toPlanar(c, mk))) / 36);
+    // `scallopRing` lays AT LEAST one bump per edge — an eraser-produced ring is dense in
+    // tiny edges (brush-capsule arcs), which would multiply the bumps. Decimate vertices
+    // closer than ~0.8 wavelength first (hand-drawn rings, long-edged, pass unchanged).
+    const decimate = (ring: Pt[]): Pt[] => {
       const k = frameK(ring);
-      const perim = polylineLength(ring.map((c) => toPlanar(c, k)));
-      const wavelength = Math.max(0.05, perim / 36);
-      const scalloped = scallopRing(ring, { wavelength, amplitude: wavelength * 0.6, invert });
-      if (style.area) {
-        out.push(polygonFeature(scalloped, { layer: "area-fill", fillColor: style.area.color ?? style.color, fillOpacity: style.area.opacity ?? 0.12 }));
+      const minEdge = wavelength * 0.8;
+      const out2: Pt[] = [];
+      for (const c of ring) {
+        const last = out2[out2.length - 1];
+        if (!last) {
+          out2.push(c);
+          continue;
+        }
+        const a = toPlanar(last, k);
+        const b = toPlanar(c, k);
+        if (Math.hypot(b[0] - a[0], b[1] - a[1]) >= minEdge) out2.push(c);
       }
-      out.push(lineFeature(scalloped, { layer: "edge", stroke: ink, strokeWidth: style.edge?.width ?? 2 }));
+      return out2.length >= 3 ? out2 : ring;
+    };
+    const scallop = (ring: Pt[], invert: boolean): Position[] =>
+      scallopRing(decimate(ring), { wavelength, amplitude: wavelength * 0.6, invert });
+    for (const area of areas) {
+      // Scallop each boundary — real geometry; outer bumps point OUTWARD (away from the
+      // fill), hole bumps point INTO the hole (`invert`, relative to the hole's centroid).
+      const outer = scallop(area.outer, false);
+      const holes = area.holes.filter((h) => h.length >= 3).map((h) => scallop(h, true));
+      if (style.area) {
+        out.push(polygonFeature(outer, { layer: "area-fill", fillColor: style.area.color ?? style.color, fillOpacity: style.area.opacity ?? 0.12 }, holes));
+      }
+      out.push(lineFeature(outer, { layer: "edge", stroke: ink, strokeWidth: style.edge?.width ?? 2 }));
+      for (const h of holes) out.push(lineFeature(h, { layer: "edge", stroke: ink, strokeWidth: style.edge?.width ?? 2 }));
     }
 
     // Call-out: ONE framed box "{coverage} / CB / {top} / {base}" — black text + white box + black
@@ -146,7 +172,7 @@ export function makeCb(coverages: CbCoverage[] = DEFAULT_CB_COVERAGE): Phenomeno
     // emits `onWidgetEdit({id, name:"coverage", value})`) — it replaces the old tap-the-box
     // cycle while selected. The leader/arrow still points at the card. Returns null when
     // unselected (or before the first placement) ⇒ the canvas call-out renders as usual.
-    widget: ({ id, metadata, editable, style, callout }: WidgetInput): MarkerWidget | null => {
+    widget: ({ id, metadata, editable, style, callout, flightLevel, chrome, flRef }: WidgetInput): MarkerWidget[] | null => {
       if (!editable || !callout) return null;
       const ink = style.text?.color ?? "#1f2328"; // black & white, like the canvas call-out
       // The canvas content is `{coverage (multi-word = multi-line)}\nCB\n{top}\n{base}` — keep
@@ -154,7 +180,13 @@ export function makeCb(coverages: CbCoverage[] = DEFAULT_CB_COVERAGE): Phenomeno
       // carousel as a stacked multi-line label (mirrors the canvas; needs the adapter's
       // `white-space: pre-line` on the control, else it degrades to one line).
       const tail = callout.content.split("\n").slice(-2);
-      return {
+      const gauge = flGaugeNode(metadata, flightLevel, FL_MIN, FL_MAX, ["baseFL", "topFL"], chrome);
+      // The FL gauge floats BESIDE the panel (a satellite card, like the old canvas gauge —
+      // the framed card itself mimics the printed WAFC panel, no editing chrome inside),
+      // pinned so the selection-time mid level sits at the box height.
+      const ref = typeof flRef === "number" ? flRef : (gauge.min + gauge.max) / 2;
+      const yPin = 1 - (Math.max(gauge.min, Math.min(gauge.max, ref)) - gauge.min) / (gauge.max - gauge.min);
+      return [{
         id,
         anchor: { lon: callout.at[0]!, lat: callout.at[1]! },
         bg: style.text?.background ?? "#ffffff",
@@ -171,8 +203,16 @@ export function makeCb(coverages: CbCoverage[] = DEFAULT_CB_COVERAGE): Phenomeno
             ...tail.map((value) => ({ kind: "text" as const, value })),
           ],
         },
-        buttons: [{ event: "draw-more", place: ["top", "left", "bottom"], svg: PLUS_GLYPH, bordered: true, title: "Draw a linked area" }],
-      };
+        buttons: [
+          { event: "draw-more", place: "h-edges", svg: PLUS_GLYPH, bordered: true, title: "Draw a linked area" },
+          { event: "erase", place: "left", svg: MINUS_GLYPH, bordered: true, title: "Eraser — rub a clear hole" },
+        ],
+      }, {
+        id: `${id}#gauge`,
+        anchor: { lon: callout.at[0]!, lat: callout.at[1]! },
+        origin: { x: -1.0, y: yPin },
+        child: { dir: "v", items: [gauge] },
+      }];
     },
     // Red scalloped edge (PNG convention). The ink drives edge + fill tint + glyph + FL text.
     style: {

@@ -30,7 +30,9 @@ import {
   windBarbFeatures,
 } from "../decorate/index.js";
 import type { Pt } from "../decorate/index.js";
-import type { DecorateFn, Metadata, PhenomenonDef, RenderFeature } from "../phenomenon.js";
+import type { MarkerWidget, WidgetCursor } from "@softwarity/draw-adapter";
+
+import type { DecorateFn, Metadata, PhenomenonDef, RenderFeature, WidgetInput } from "../phenomenon.js";
 import { fl, num, textBoxProps } from "./util.js";
 
 /** High-level SIGWX (SWH) chart FL bounds — the default jet FL gauge clamp (FL250–600,
@@ -273,6 +275,57 @@ export const jetStream: PhenomenonDef = {
     },
   ],
   decorate,
+  // The SELECTED break point's editor card — the widget sibling of the old canvas
+  // speedometer + vertical FL gauge: a DIAL (wind speed) beside an FL GAUGE (the core
+  // FL; plus the 80 kt-isotach base/top cursors once the speed reaches 120 kt, fig 9).
+  // Anchored just right of the point, on the SMOOTHED curve the sliders ride. A bare
+  // terminator (t≈0/1) has nothing to edit (§3.5.1 — jets start/end at the floor).
+  widget: ({ id, geometry, metadata, editable, sub, limit, flightLevel, flRef, chrome }: WidgetInput): MarkerWidget[] | null => {
+    if (!editable || sub == null || geometry.type !== "LineString") return null;
+    const items = (metadata["points"] as Metadata[] | undefined) ?? [];
+    const item = items[sub];
+    if (!item) return null;
+    const t = num(item["t"], 0);
+    if (t <= 0.001 || t >= 0.999) return null;
+    const dense = catmullRom(geometry.coordinates as Pt[], 16);
+    const k = frameK(dense);
+    const at = toLonLat(pointAtFraction(dense.map((c) => toPlanar(c, k)), t).p, k);
+    const sp = limit?.("speed") ?? { min: 80, max: 250 };
+    const speed = num(item["speed"], sp.min);
+    const flMin = num(flightLevel?.min, FL_MIN);
+    const flMax = num(flightLevel?.max, FL_MAX);
+    const flv = num(item["fl"], 300);
+    const pad3 = (v: number): string => String(Math.round(v)).padStart(3, "0");
+    const cursors: WidgetCursor[] = [{ name: `points.${sub}.fl`, value: flv, label: `FL${pad3(flv)}` }];
+    if (speed >= 120) {
+      // Extent cursors appear at ≥120 kt; unset top/base seed at fl ± 40 — a drag persists them.
+      const top = num(item["top"], Math.min(flMax, flv + 40));
+      const base = num(item["base"], Math.max(flMin, flv - 40));
+      cursors.unshift({ name: `points.${sub}.base`, value: base, label: pad3(base) });
+      cursors.push({ name: `points.${sub}.top`, value: top, label: pad3(top) });
+    }
+    // TWO cards, like the old canvas controls: the DIAL centred ON the break point, and
+    // the FL gauge floating right of it, PINNED so the selection-time level sits at the
+    // point's screen height (drag-stable — flRef is frozen at selection).
+    const anchor = { lon: at[0]!, lat: at[1]! };
+    const gaugeLen = Math.round((flMax - flMin) * 0.5); // ≈ the old 0.6 px/FL density
+    const ref = typeof flRef === "number" ? flRef : flv;
+    const yPin = 1 - (Math.max(flMin, Math.min(flMax, ref)) - flMin) / (flMax - flMin);
+    return [
+      {
+        id: `${id}#dial`,
+        anchor,
+        child: { dir: "v", items: [{ kind: "dial", name: `points.${sub}.speed`, min: sp.min, max: sp.max, value: speed, label: `${Math.round(speed)}KT`, step: 5, ...(chrome?.line?.color ? { color: chrome.line.color } : {}), ...(chrome?.text?.color ? { labelColor: chrome.text.color } : {}), ...(chrome?.text?.halo ? { labelHalo: chrome.text.halo } : {}) }] },
+      },
+      {
+        id: `${id}#gauge`,
+        anchor,
+        // x < 0 ⇒ the gauge floats clear, right of the dial ring.
+        origin: { x: -1.6, y: yPin },
+        child: { dir: "v", items: [{ kind: "gauge", min: flMin, max: flMax, step: 5, length: gaugeLen, cursors, ...(chrome?.line?.color ? { color: chrome.line.color } : {}), ...(chrome?.text?.color ? { labelColor: chrome.text.color } : {}), ...(chrome?.text?.halo ? { labelHalo: chrome.text.halo } : {}), ...(chrome?.handle?.fill ? { knobFill: chrome.handle.fill } : {}), ...(chrome?.handle?.stroke ? { knobStroke: chrome.handle.stroke } : {}) }] },
+      },
+    ];
+  },
   // A jet is just an arrow (axis + feathers + pennants + arrowhead) and FL text.
   style: {
     color: "#1f2328",

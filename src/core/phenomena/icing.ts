@@ -6,10 +6,11 @@
  * intensity (MOD lighter, SEV darker purple). Tap the glyph on the map to cycle MOD ↔ SEV.
  */
 import type { MarkerWidget } from "@softwarity/draw-adapter";
+import type { Position } from "geojson";
 
-import { catmullRomClosed, coordsOf, frameK, inwardTicks, lineFeature, outerRings, pointFeature, polygonFeature, polylineLength, toPlanar } from "../decorate/index.js";
+import { areaRings, catmullRomClosed, coordsOf, frameK, inwardTicks, lineFeature, pointFeature, polygonFeature, polylineLength, toPlanar } from "../decorate/index.js";
 import type { DecorateFn, PhenomenonDef, RenderFeature, WidgetInput } from "../phenomenon.js";
-import { fl, num, PLUS_GLYPH, regularPolygon, ringCentroid, str, textBoxProps } from "./util.js";
+import { fl, flGaugeNode, num, MINUS_GLYPH, PLUS_GLYPH, regularPolygon, ringCentroid, str, textBoxProps } from "./util.js";
 
 /** One icing intensity: a `code` (which IS the sprite id, e.g. `ICE_MOD`) + a display label. */
 export interface IcingSymbol {
@@ -40,8 +41,8 @@ export function makeIcing(symbols: IcingSymbol[] = DEFAULT_ICING_SYMBOLS): Pheno
     // An icing zone may be MULTI-AREA (drawn with the card's `+` button): one logical
     // zone — one panel, one metadata set — whose geometry holds several polygons.
     // Smooth + fill + tick EACH.
-    const rings = outerRings(geometry).filter((r) => r.length >= 3);
-    if (!rings.length) return [];
+    const areas = areaRings(geometry).filter((a) => a.outer.length >= 3);
+    if (!areas.length) return [];
 
     // Chart vertical bounds (FL250–600 by default; overridable via `flightLevel`). A base
     // BELOW min or top ABOVE max → "XXX" (the off-chart sentinel, per WAFC).
@@ -62,21 +63,28 @@ export function makeIcing(symbols: IcingSymbol[] = DEFAULT_ICING_SYMBOLS): Pheno
     const edgeInk = style.edge?.color ?? ink;
     const edgeW = style.edge?.width ?? 2.5;
     const out: RenderFeature[] = [];
-    for (const ring of rings) {
-      const smooth = catmullRomClosed(ring, 16); // soft "balloon" outline
-      if (style.area) {
-        out.push(polygonFeature(smooth, { layer: "area-fill", fillColor: style.area.color ?? ink, fillOpacity: style.area.opacity ?? 0.18 }));
-      }
-      // Purple boundary + small INWARD ticks at regular spacing (the WAFC icing-area convention) —
-      // NOT a scallop (CB). A short perpendicular tick toward the interior every ~1/44 of the perimeter.
-      out.push(lineFeature(smooth, { layer: "edge", stroke: edgeInk, strokeWidth: edgeW, dash: style.edge?.dash ?? [4, 2] }));
-      const fk = frameK(smooth);
-      const perim = polylineLength(smooth.map((c) => toPlanar(c, fk)));
-      const spacing = Math.max(0.05, perim / 44);
-      const ticks = inwardTicks(smooth, { spacing, length: spacing * 0.26 });
+    // ONE tick size/spacing for the whole feature (from its MAIN outer ring) — a hole's
+    // ticks keep the chart-wide rhythm, never a miniature one.
+    const mainRing = coordsOf(geometry);
+    const mfk = frameK(mainRing);
+    const spacing = Math.max(0.05, polylineLength(mainRing.map((c) => toPlanar(c, mfk))) / 44);
+    const tickedRing = (ring: Position[], invert: boolean): void => {
+      out.push(lineFeature(ring, { layer: "edge", stroke: edgeInk, strokeWidth: edgeW, dash: style.edge?.dash ?? [4, 2] }));
+      const ticks = inwardTicks(ring, { spacing, length: spacing * 0.26, invert });
       if (ticks.length) {
         out.push({ type: "Feature", properties: { layer: "edge", stroke: edgeInk, strokeWidth: edgeW }, geometry: { type: "MultiLineString", coordinates: ticks } });
       }
+    };
+    for (const area of areas) {
+      const smooth = catmullRomClosed(area.outer, 16); // soft "balloon" outline
+      const holes = area.holes.filter((h) => h.length >= 3).map((h) => catmullRomClosed(h, 16));
+      if (style.area) {
+        out.push(polygonFeature(smooth, { layer: "area-fill", fillColor: style.area.color ?? ink, fillOpacity: style.area.opacity ?? 0.18 }, holes));
+      }
+      // Purple boundary + small INWARD ticks (the WAFC icing-area convention). A HOLE's
+      // ticks point the other way — into the surrounding fill, not into the clear zone.
+      tickedRing(smooth, false);
+      for (const h of holes) tickedRing(h, true);
     }
 
     // Call-out: the fork glyph above the FL range (one bound may be XXX), in a black & white
@@ -145,7 +153,7 @@ export function makeIcing(symbols: IcingSymbol[] = DEFAULT_ICING_SYMBOLS): Pheno
     // (`onWidgetAction("draw-more")` — multi-area). The canvas content's leading BLANK lines (reserved for
     // the inside glyph) are dropped — the glyph is its own card item. Returns null when
     // unselected ⇒ the canvas call-out (tap-the-glyph cycle) renders as usual.
-    widget: ({ id, metadata, editable, style, callout, sprite }: WidgetInput): MarkerWidget | null => {
+    widget: ({ id, metadata, editable, style, callout, sprite, flightLevel, chrome, flRef }: WidgetInput): MarkerWidget[] | null => {
       if (!editable || !callout) return null;
       const ink = style.text?.color ?? "#1f2328"; // black & white, like the canvas panel
       const sym = str(metadata["symbol"], first);
@@ -153,7 +161,11 @@ export function makeIcing(symbols: IcingSymbol[] = DEFAULT_ICING_SYMBOLS): Pheno
         const svg = sprite?.(s.code);
         return svg ? { value: s.code, svg } : { value: s.code, label: s.code.replace("ICE_", "") };
       });
-      return {
+      const gauge = flGaugeNode(metadata, flightLevel, FL_MIN, FL_MAX, ["baseFL", "topFL"], chrome);
+      // Satellite gauge beside the b&w panel (the panel mimics the printed call-out).
+      const ref = typeof flRef === "number" ? flRef : (gauge.min + gauge.max) / 2;
+      const yPin = 1 - (Math.max(gauge.min, Math.min(gauge.max, ref)) - gauge.min) / (gauge.max - gauge.min);
+      return [{
         id,
         anchor: { lon: callout.at[0]!, lat: callout.at[1]! },
         bg: style.text?.background ?? "#ffffff",
@@ -170,8 +182,16 @@ export function makeIcing(symbols: IcingSymbol[] = DEFAULT_ICING_SYMBOLS): Pheno
             ...callout.content.split("\n").filter((l) => l.trim() !== "").map((value) => ({ kind: "text" as const, value })),
           ],
         },
-        buttons: [{ event: "draw-more", place: ["top", "left", "bottom"], svg: PLUS_GLYPH, bordered: true, title: "Draw a linked area" }],
-      };
+        buttons: [
+          { event: "draw-more", place: "h-edges", svg: PLUS_GLYPH, bordered: true, title: "Draw a linked area" },
+          { event: "erase", place: "left", svg: MINUS_GLYPH, bordered: true, title: "Eraser — rub a clear hole" },
+        ],
+      }, {
+        id: `${id}#gauge`,
+        anchor: { lon: callout.at[0]!, lat: callout.at[1]! },
+        origin: { x: -1.0, y: yPin },
+        child: { dir: "v", items: [gauge] },
+      }];
     },
     // Purple shading per the WAFC norm — MOD lighter, SEV darker (the ink drives edge + fill);
     // the call-out is black & white (see `decorate`).

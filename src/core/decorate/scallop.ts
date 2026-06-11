@@ -29,6 +29,17 @@ const perpRight = (u: Pt): Pt => [u[1], -u[0]];
  * Build a scalloped ring from a polygon outer ring (lon/lat, closed or not).
  * Returns a closed lon/lat ring suitable for a Polygon's coordinates[0].
  */
+/** Signed area of a planar ring (positive = CCW). */
+function signedArea(ring: Pt[]): number {
+  let s = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i]!;
+    const b = ring[(i + 1) % ring.length]!;
+    s += a[0] * b[1] - b[0] * a[1];
+  }
+  return s / 2;
+}
+
 export function scallopRing(ring: Position[], opts: ScallopOptions): Position[] {
   const pts = ring.map((c) => [c[0], c[1]] as Pt);
   if (pts.length && pts.length >= 2) {
@@ -40,13 +51,13 @@ export function scallopRing(ring: Position[], opts: ScallopOptions): Position[] 
 
   const k = frameK(pts);
   const planar = pts.map((c) => toPlanar(c, k));
-  // Bumps point AWAY from the ring's centroid → reliably OUTWARD whatever the draw winding
-  // (freehand is CW or CCW unpredictably, so a signed-area test isn't enough — the user sees
-  // it flip with their stroke direction). `invert` flips them inward (e.g. a hole). Per-edge,
-  // so each bump faces out — fine for the convex-ish areas SIGWX draws.
+  // Orientation by NORMALIZED WINDING, not by centroid: normalize the ring to CCW, then
+  // the outward side is ALWAYS to the right of travel — correct even along a deeply
+  // concave "canal" carved by the eraser, where the centroid sits on the wrong side of
+  // some edges. (Freehand draw direction doesn't matter: we re-wind here.) `invert`
+  // flips the bumps inward (a hole's border).
+  if (signedArea(planar) < 0) planar.reverse();
   const n = planar.length;
-  const cx = planar.reduce((s, p) => s + p[0], 0) / n;
-  const cy = planar.reduce((s, p) => s + p[1], 0) / n;
   const S = Math.max(2, opts.samplesPerBump ?? 6);
 
   const out: Pt[] = [];
@@ -57,9 +68,7 @@ export function scallopRing(ring: Position[], opts: ScallopOptions): Position[] 
     const segLen = len(seg);
     if (segLen === 0) continue;
     const dir = unit(seg);
-    const mid: Pt = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-    let nrm = perpRight(dir);
-    if (nrm[0] * (mid[0] - cx) + nrm[1] * (mid[1] - cy) < 0) nrm = [-nrm[0], -nrm[1]]; // face away from centroid
+    const nrm = perpRight(dir); // CCW ring ⇒ right of travel = outward
     const outward = scale(nrm, (opts.invert ? -1 : 1) * opts.amplitude);
     const nBumps = Math.max(1, Math.round(segLen / opts.wavelength));
     for (let bump = 0; bump < nBumps; bump++) {
@@ -81,6 +90,9 @@ export interface TickOptions {
   spacing: number;
   /** Tick length pointing INWARD (toward the centroid), in planar degrees. */
   length: number;
+  /** Flip the ticks OUTWARD (away from the centroid) — a HOLE's boundary ticks point
+   *  into the surrounding fill, not into the clear zone. */
+  invert?: boolean;
 }
 
 /**
@@ -98,9 +110,10 @@ export function inwardTicks(ring: Position[], opts: TickOptions): Position[][] {
   if (pts.length < 3) return [];
   const k = frameK(pts);
   const planar = pts.map((c) => toPlanar(c, k));
+  // Same winding-normalized orientation as the scallop (concavity-proof): CCW ⇒ the
+  // interior is to the LEFT of travel.
+  if (signedArea(planar) < 0) planar.reverse();
   const n = planar.length;
-  const cx = planar.reduce((s, p) => s + p[0], 0) / n;
-  const cy = planar.reduce((s, p) => s + p[1], 0) / n;
   const ticks: Position[][] = [];
   let total = 0; // arc length walked so far
   for (let i = 0; i < n; i++) {
@@ -114,9 +127,9 @@ export function inwardTicks(ring: Position[], opts: TickOptions): Position[][] {
     const firstTick = Math.ceil(total / opts.spacing) * opts.spacing;
     for (let t = firstTick; t < total + segLen; t += opts.spacing) {
       const base = add(a, scale(dir, t - total));
-      let nrm = perpRight(dir);
-      // face TOWARD the centroid (inward).
-      if (nrm[0] * (base[0] - cx) + nrm[1] * (base[1] - cy) > 0) nrm = [-nrm[0], -nrm[1]];
+      // CCW ring ⇒ LEFT of travel = inward (the fill); `invert` (a hole) flips outward.
+      let nrm: Pt = [-perpRight(dir)[0], -perpRight(dir)[1]];
+      if (opts.invert) nrm = [-nrm[0], -nrm[1]];
       const inner = add(base, scale(nrm, opts.length));
       ticks.push([toLonLat(base, k), toLonLat(inner, k)]);
     }

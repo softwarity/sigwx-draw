@@ -1,8 +1,14 @@
 /** Shared helpers for the built-in phenomenon defs. */
+import type { WidgetCursor, WidgetGauge } from "@softwarity/draw-adapter";
+
 import type { Geometry, Position } from "geojson";
 
 import type { LatLng } from "../coord.js";
+import type { Metadata } from "../phenomenon.js";
 import type { PhenomenonStyle } from "../style.js";
+
+/** A `−` glyph for the card's ERASER button ("erase" — rub a clear hole into the area). */
+export const MINUS_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 12 H18"/></svg>';
 
 /** A `+` glyph for a selected area card's transient edge action buttons ("draw-more"). */
 export const PLUS_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 6 V18 M6 12 H18"/></svg>';
@@ -78,4 +84,42 @@ export function regularPolygon(c: LatLng, span: number, n = 5): Geometry {
   }
   ring.push(ring[0]!); // close
   return { type: "Polygon", coordinates: [ring] };
+}
+
+/** Card FL gauge (1–2 cursors), the widget sibling of the old canvas gauge: 5-FL steps,
+ *  chart bounds from the resolved `flightLevel` (falling back to the def's own range),
+ *  an off-chart "XXX" notch per `beyond` side, labels following the call-out convention. */
+export function flGaugeNode(
+  metadata: Metadata,
+  flightLevel: { min?: number; max?: number; beyond?: [string, string] } | undefined,
+  defMin: number,
+  defMax: number,
+  keys: [string] | [string, string],
+  chrome?: { line?: { color?: string }; handle?: { fill?: string; stroke?: string }; text?: { color?: string; halo?: string } },
+): WidgetGauge {
+  const min = num(flightLevel?.min, defMin);
+  const max = num(flightLevel?.max, defMax);
+  const xxx = (i: 0 | 1): boolean => (flightLevel?.beyond?.[i] ?? "clamp") === "xxx";
+  const lbl = (v: number): string => (v < min || v > max ? "XXX" : String(Math.round(v)).padStart(3, "0"));
+  const cursor = (key: string, fallback: number): WidgetCursor => {
+    const v = num(metadata[key], fallback);
+    return { name: key, value: v, label: lbl(v) };
+  };
+  return {
+    kind: "gauge",
+    min,
+    max,
+    step: 5,
+    // ≈ 0.5 px/FL — the old canvas density, consistent across every gauge card.
+    length: Math.min(200, Math.max(110, Math.round((max - min) * 0.5))),
+    beyond: { below: xxx(0), above: xxx(1) },
+    cursors: keys.length === 2 ? [cursor(keys[0], min), cursor(keys[1]!, max)] : [cursor(keys[0], Math.round((min + max) / 2))],
+    // The editing-chrome styles, like the old canvas controls: track = line ink, labels =
+    // control text colour + halo, knobs = the control-handle fill/stroke.
+    ...(chrome?.line?.color ? { color: chrome.line.color } : {}),
+    ...(chrome?.text?.color ? { labelColor: chrome.text.color } : {}),
+    ...(chrome?.text?.halo ? { labelHalo: chrome.text.halo } : {}),
+    ...(chrome?.handle?.fill ? { knobFill: chrome.handle.fill } : {}),
+    ...(chrome?.handle?.stroke ? { knobStroke: chrome.handle.stroke } : {}),
+  };
 }

@@ -53,8 +53,9 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@softwarity/draw-adapter": "^0.3.2",
-    "@types/geojson": "^7946.0.14"
+    "@softwarity/draw-adapter": "^0.3.3",
+    "@types/geojson": "^7946.0.14",
+    "polyclip-ts": "^0.16.8"
   },
   "peerDependencies": {
     "leaflet": ">=1.9",

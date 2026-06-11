@@ -13,32 +13,35 @@
  */
 import type { Feature, FeatureCollection, Geometry, Position } from "geojson";
 
+import * as polyclip from "polyclip-ts";
+
 import { ringCentroid } from "../core/phenomena/util.js";
 import { WAFS_SWH } from "../profiles/wafs-swh.js"; // the FILE, not the index — the core must not drag every preset
 
 import {
-  catmullRom,
-  catmullRomClosed,
-  clampInRing,
-  coordsOf,
-  outerRings,
-  pointInRing,
-  isSimpleRing,
-  radialSortRing,
-  defaultMetadata,
-  defaultRegistry,
   DEFAULT_CB_COVERAGE,
   DEFAULT_TURBULENCE_SYMBOLS,
-  fromFeatureCollection,
+  PhenomenonRegistry,
+  areaRings,
+  catmullRom,
+  catmullRomClosed,
+  clampInArea,
+  coordsOf,
+  defaultMetadata,
+  defaultRegistry,
   frameK,
+  fromFeatureCollection,
+  interactionOf,
+  isSimpleRing,
+  isVisible,
   makeCb,
   makeTurbulence,
-  interactionOf,
-  isVisible,
   mergePhenomenonStyle,
-  PhenomenonRegistry,
+  outerRings,
   pointAtFraction,
+  pointInRing,
   projectToFraction,
+  radialSortRing,
   simplify,
   toFeatureCollection,
   toLonLat,
@@ -49,7 +52,6 @@ import type {
   CbCoverage,
   CbStyle,
   FieldSchema,
-  FlightLevelField,
   FlMode,
   IcingStyle,
   InteractionSpec,
@@ -211,35 +213,9 @@ const fc = (features: Feature[]): FeatureCollection => ({ type: "FeatureCollecti
 const CLEAR_ICON =
   '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 
-/** Fine "sync" glyph (two inverted curved arrows) drawn ON the central handle of a scalloped
- *  phenomenon (CB): drag it to move the call-out, TAP it to flip the bumps in/out. Data-URI so
- *  the adapter rasterises it straight onto the handle (per-feature handle icon). */
-const SYNC_ICON = `data:image/svg+xml,${encodeURIComponent(
-  // Explicit width/height: an SVG data-URI WITHOUT intrinsic dimensions rasterizes at the
-  // browser default 300×150 (OL `Icon` uses the intrinsic size × scale → a giant glyph).
-  '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1f2328" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>',
-)}`;
 /** Editing-chrome overlays hidden during a snapshot, so the PNG shows the clean chart
  *  (no selection highlight / edit + control handles). The chart decoration stays. */
 const SNAPSHOT_HIDE = ["selection", "handles", "controls"];
-/** On-map speed dial (speedometer): fixed radius + angular sweep (deg, screen y-down). */
-const SPEED_R = 52;
-const SPEED_A0 = 150; // min-speed angle (down-left)
-const SPEED_SWEEP = 240; // sweep to max-speed (over the top, gap at the bottom)
-/** Speed → dial angle (deg). */
-const angleForSpeed = (sp: number, min: number, max: number): number => SPEED_A0 + (max > min ? (sp - min) / (max - min) : 0) * SPEED_SWEEP;
-/** Cursor angle (deg, 0–360, screen y-down) → speed, clamping the bottom gap to the nearer end. */
-const speedForAngle = (deg: number, min: number, max: number): number => {
-  const d = ((deg % 360) + 360) % 360;
-  let f: number;
-  if (d >= SPEED_A0) f = (d - SPEED_A0) / SPEED_SWEEP;
-  else if (d <= SPEED_A0 + SPEED_SWEEP - 360) f = (d + 360 - SPEED_A0) / SPEED_SWEEP;
-  else f = d < 90 ? 1 : 0; // bottom gap → snap to max / min
-  return min + Math.max(0, Math.min(1, f)) * (max - min);
-};
-/** Vertical FL gauge: reference level (gauge centre) and screen pixels per FL. */
-const FL_REF = 350;
-const FL_PX = 0.6;
 /** A freehand stroke whose on-screen extent (bbox diagonal) is below this collapses to a
  *  POINT instead of a line (`pointWhenShort`) — ≈ 1.5× the "FLxxx" label box, so a contour
  *  must be visibly longer than its own label to count as a line (tropopause spot vs contour). */
@@ -255,13 +231,6 @@ function listFieldOf(def: PhenomenonDef): ListField | undefined {
   return def.schema.find((f): f is ListField => f.type === "list");
 }
 
-/** A phenomenon whose ONLY level is a single `fl` field (no list, no top/base) → the
- *  tropopause-style single-FL on-map gauge (vs the jet break gauge / area top-base gauge). */
-function singleFlFieldOf(def: PhenomenonDef): FlightLevelField | undefined {
-  if (listFieldOf(def)) return undefined;
-  if (def.schema.some((s) => s.key === "topFL" || s.key === "baseFL")) return undefined;
-  return def.schema.find((f): f is FlightLevelField => f.type === "fl" && f.key === "fl");
-}
 
 /** A point marker (TC / volcano / radioactive): its widget IS the whole rendering — so it's
  *  grouped under the toolbar submenu and shows no vertex handle (the card covers the point).
@@ -295,9 +264,6 @@ export class SigwxDraw {
   private dragTarget:
     | { kind: "vertex"; featureId: string; index: number }
     | { kind: "slider"; featureId: string; index: number }
-    | { kind: "speed"; featureId: string; index: number }
-    | { kind: "level"; featureId: string; index: number; field: "fl" | "top" | "base" }
-    | { kind: "metaLevel"; featureId: string; field: string }
     | { kind: "callout"; featureId: string; labelId: string; grab: [number, number] }
     | { kind: "anchor"; featureId: string; area: number }
     | { kind: "translate"; featureId: string; lastPx: [number, number] }
@@ -305,7 +271,6 @@ export class SigwxDraw {
   private didDrag = false;
   /** FL the vertical gauge is centred on (the selected point's FL at selection time),
    *  so its core-FL handle starts level with the point. */
-  private flRef = FL_REF;
   /** While dragging a slider off the line: its free cursor position + delete arming. */
   private dragFree: Position | null = null;
   private willDelete = false;
@@ -324,6 +289,12 @@ export class SigwxDraw {
   /** Merged sprite catalogue (defaults + host overrides + turbulence extensions) — the
    *  widget builders resolve their glyph carousel options from it. */
   private readonly spriteCatalog: SymbolSprites = {};
+  /** ERASER mode (the card's `−` button): rubbing gnaws the feature LIVE — each pointer
+   *  step subtracts a brush capsule. `r` (px) is sized to the area at rub start; `lastPx`
+   *  null = armed, not rubbing. Exited via Escape / deselection. */
+  private erasing: { featureId: string; r: number; lastPx: [number, number] | null; cursorPx?: [number, number] } | null = null;
+  /** FL reference captured at selection time — pins the gauge cards (stable during drags). */
+  private flRef: number | null = null;
   /** Chart-type id from the profile — tagged onto `save()`'s FeatureCollection. */
   private readonly profileId: string | undefined;
   /** Profile tool palette — the toolbar default when `toolbar.tools` is not given. */
@@ -380,22 +351,85 @@ export class SigwxDraw {
       // Widget edits → metadata. The control's `name` says WHICH field changed (the CB
       // coverage carousel emits name:"coverage"); a nameless control is the markers' name
       // input. The coord line is decimal degrees, lat then lon (e.g. "1.7N 127.9E").
-      this.adapter.onWidgetEdit((e) => this.updateMetadata(e.id, { [e.name ?? "name"]: e.value }));
+      this.adapter.onWidgetEdit((e) => {
+        const fid = widgetFeatureId(e.id);
+        const f = this.doc.get(fid);
+        if (!f) return;
+        const key = e.name ?? "name";
+        const def = this.registry.get(f.properties.phenomenon);
+        // LIST-scoped control (`points.2.speed` — a jet break point's dial/gauge): coerce,
+        // clamp and pair like the old canvas controls, then update the list item.
+        const lm = /^(\w+)\.(\d+)\.(\w+)$/.exec(key);
+        if (lm) {
+          const lf = def.schema.find((s): s is ListField => s.type === "list" && s.key === lm[1]);
+          const idx = Number(lm[2]);
+          const fieldKey = lm[3]!;
+          const item = lf ? ((f.properties.metadata[lf.key] as Metadata[] | undefined) ?? [])[idx] : undefined;
+          if (!lf || !item) return;
+          const fld = lf.itemSchema.find((s) => s.key === fieldKey);
+          if (fld?.type === "number") {
+            // The speed dial: clamp to the configured range, rounded to 5 kt.
+            const { min, max } = this.numLimit(def, fieldKey);
+            const v = Math.max(min, Math.min(max, Math.round(Number(e.value) / 5) * 5));
+            this.updateListItem(fid, lf.key, idx, { [fieldKey]: v });
+          } else if (fld?.type === "fl") {
+            // The break-point FL gauge: chart clamp + keep top ≥ FL ≥ base.
+            const { lo, hi } = this.flGaugeRange(f.properties.phenomenon, fieldKey);
+            let v = Math.max(lo, Math.min(hi, Math.round(Number(e.value) / 5) * 5));
+            const flCore = typeof item["fl"] === "number" ? (item["fl"] as number) : 300;
+            if (fieldKey === "fl") {
+              if (typeof item["base"] === "number") v = Math.max(item["base"] as number, v);
+              if (typeof item["top"] === "number") v = Math.min(item["top"] as number, v);
+            } else if (fieldKey === "top") {
+              v = Math.max(flCore, v);
+            } else if (fieldKey === "base") {
+              v = Math.min(flCore, v);
+            }
+            this.updateListItem(fid, lf.key, idx, { [fieldKey]: v });
+          } else {
+            this.updateListItem(fid, lf.key, idx, { [fieldKey]: e.value });
+          }
+          return;
+        }
+        const field = def.schema.find((s) => s.key === key);
+        if (field?.type === "fl") {
+          // FL gauge cursor: same semantics as the old canvas gauge — 5-FL steps, clamped to
+          // the chart bounds (one 5-FL "XXX" notch past a bound when `beyond` allows), and
+          // base/top kept paired (base ≤ top).
+          const { lo, hi } = this.flGaugeRange(f.properties.phenomenon, key);
+          let v = Math.max(lo, Math.min(hi, Math.round(Number(e.value) / 5) * 5));
+          const m = f.properties.metadata;
+          if (key === "topFL" && typeof m["baseFL"] === "number") v = Math.max(v, m["baseFL"] as number);
+          else if (key === "baseFL" && typeof m["topFL"] === "number") v = Math.min(v, m["topFL"] as number);
+          this.updateMetadata(fid, { [key]: v });
+        } else if (field?.type === "number") {
+          this.updateMetadata(fid, { [key]: Number(e.value) });
+        } else {
+          this.updateMetadata(fid, { [key]: e.value });
+        }
+      });
       this.adapter.setCoordFormat((ll) => `${Math.abs(ll.lat).toFixed(1)}${ll.lat >= 0 ? "N" : "S"} ${Math.abs(ll.lon).toFixed(1)}${ll.lon >= 0 ? "E" : "W"}`);
       // The card's delete ✕ (the input swallows Delete/Backspace) → same routing as the
       // Delete key: an area-narrowed selection drops THAT area, else the whole feature.
       this.adapter.onWidgetDelete((e) => {
-        const f = this.doc.get(e.id);
-        if (f?.geometry.type === "MultiPolygon" && e.id === this.selectedId && this.selectedAreas.length) this.removeAreas(e.id, this.selectedAreas);
-        else this.delete(e.id);
+        const fid = widgetFeatureId(e.id);
+        const f = this.doc.get(fid);
+        if (f?.geometry.type === "MultiPolygon" && fid === this.selectedId && this.selectedAreas.length) this.removeAreas(fid, this.selectedAreas);
+        else this.delete(fid);
       });
       // The card's edge "+" button ("draw-more") → draw an EXTRA AREA appended to THIS
       // feature (one CB, several zones, one box, one arrow per zone).
       this.adapter.onWidgetAction((e) => {
-        const f = this.doc.get(e.id);
+        const fid = widgetFeatureId(e.id);
+        const f = this.doc.get(fid);
         if (e.event === "draw-more" && f) {
           this.draw(f.properties.phenomenon);
-          this.appendTo = e.id; // set AFTER draw() — it resets stale state via cancelDrawing
+          this.appendTo = fid; // set AFTER draw() — it resets stale state via cancelDrawing
+        } else if (e.event === "erase" && f) {
+          // ERASER: rub over the area — it gnaws LIVE (a hole inside, a reshaped border on
+          // a bite, a split on a cut-through). Escape exits.
+          this.erasing = { featureId: fid, r: this.brushRadiusPx(fid), lastPx: null };
+          this.adapter.setCursor("crosshair");
         }
       });
       if (opts.toolbar) this.buildToolbar(opts.toolbar === true ? {} : opts.toolbar);
@@ -431,6 +465,94 @@ export class SigwxDraw {
     return "";
   }
 
+  /** Brush radius (px) for the eraser — proportional to the area's on-screen extent
+   *  ("la taille de la patate"), captured at rub start, clamped to a sane range. */
+  private brushRadiusPx(featureId: string): number {
+    const f = this.doc.get(featureId);
+    if (!f) return 14;
+    const ring = coordsOf(f.geometry);
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const c of ring) {
+      const px = this.adapter.project({ lon: c[0]!, lat: c[1]! });
+      if (!px) continue;
+      minX = Math.min(minX, px[0]); maxX = Math.max(maxX, px[0]);
+      minY = Math.min(minY, px[1]); maxY = Math.max(maxY, px[1]);
+    }
+    return Math.max(8, Math.min(28, 0.06 * Math.hypot(maxX - minX, maxY - minY)));
+  }
+
+  /** One LIVE eraser step: subtract a brush CAPSULE (the stadium swept from `a` to `b`,
+   *  in px) from the feature — true boolean difference. A hole inside, a reshaped border
+   *  on a bite, a SPLIT (MultiPolygon) on a cut-through; gnawing it all deletes the
+   *  feature. The capsule is analytic (two arcs + straight flanks): no spikes, ever. */
+  private eraseStep(a: [number, number], b: [number, number]): void {
+    const er = this.erasing;
+    if (!er) return;
+    const f = this.doc.get(er.featureId);
+    if (!f || (f.geometry.type !== "Polygon" && f.geometry.type !== "MultiPolygon")) return;
+    const r = er.r;
+    const capsulePx: [number, number][] = [];
+    const d = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const ARC = 8; // segments per half-circle
+    if (d < 0.5) {
+      for (let i = 0; i < ARC * 2; i++) {
+        const t = (i / (ARC * 2)) * 2 * Math.PI;
+        capsulePx.push([a[0] + Math.cos(t) * r, a[1] + Math.sin(t) * r]);
+      }
+    } else {
+      const ux = (b[0] - a[0]) / d;
+      const uy = (b[1] - a[1]) / d;
+      const base = Math.atan2(uy, ux);
+      for (let i = 0; i <= ARC; i++) {
+        const t = base - Math.PI / 2 + (i / ARC) * Math.PI; // half-circle around b (leading)
+        capsulePx.push([b[0] + Math.cos(t) * r, b[1] + Math.sin(t) * r]);
+      }
+      for (let i = 0; i <= ARC; i++) {
+        const t = base + Math.PI / 2 + (i / ARC) * Math.PI; // half-circle around a (trailing)
+        capsulePx.push([a[0] + Math.cos(t) * r, a[1] + Math.sin(t) * r]);
+      }
+    }
+    const capsule: Position[] = [];
+    for (const p of capsulePx) {
+      const u = this.adapter.unproject(p);
+      if (u) capsule.push([u.lon, u.lat]);
+    }
+    if (capsule.length < 4) return;
+    capsule.push(capsule[0]!);
+    const subject = (f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates) as polyclip.Geom;
+    let result: polyclip.Geom;
+    try {
+      result = polyclip.difference(subject, [[capsule]] as polyclip.Geom);
+    } catch {
+      return; // a degenerate step must never corrupt the chart — skip it
+    }
+    // The capsule arcs leave DENSE vertex chains — simplify every ring (a light, px-scale
+    // tolerance) so the geometry stays lean and the vertex handles stay a readable set.
+    const span = this.adapter.getViewSpan();
+    const lean = (rg: number[][]): number[][] => {
+      const open = rg.length > 1 && rg[0]![0] === rg[rg.length - 1]![0] && rg[0]![1] === rg[rg.length - 1]![1] ? rg.slice(0, -1) : rg.slice();
+      const s = simplify(open as Pt[], span * 0.004);
+      if (s.length < 3) return rg;
+      s.push(s[0]!);
+      return s;
+    };
+    const polys = (result as unknown as number[][][][])
+      .map((poly) => poly.filter((rg) => rg.length >= 4).map(lean))
+      .filter((poly) => poly.length > 0 && poly[0]!.length >= 4);
+    if (!polys.length) {
+      this.erasing = null; // gnawed it all out
+      this.adapter.setCursor("");
+      this.delete(er.featureId);
+      return;
+    }
+    f.geometry = polys.length === 1
+      ? { type: "Polygon", coordinates: polys[0]! as Position[][] }
+      : { type: "MultiPolygon", coordinates: polys as Position[][][] };
+    this.anchorPins.delete(er.featureId); // areas may shift/split — tips re-derive
+    this.selectedAreas = [];
+    this.scheduleRender(); // LIVE gnawing; the change event fires once, on pointer-up
+  }
+
   /** Remove the given AREAS of a multi-area feature. The feature — and its info box —
    *  survives while other areas remain; the last remaining area demotes back to a simple
    *  Polygon; removing EVERY area deletes the whole feature. */
@@ -460,18 +582,19 @@ export class SigwxDraw {
   }
 
   select(id: string | null): void {
+    if (this.erasing && id !== this.erasing.featureId) {
+      this.erasing = null; // leaving the erased feature exits the eraser
+      this.adapter.setCursor("");
+    }
     this.selectedId = id != null && this.doc.has(id) ? id : null;
     this.selectedSub = null;
     this.selectedAreas = []; // whole-feature selection; an AREA click then narrows it
-    // Centre the FL gauge of an AREA on its top/base midpoint (so the slider sits
-    // level with the call-out, not hanging below).
+    // Gauge reference: captured ONCE at selection so the card pinning is drag-stable.
     const f = this.selectedId ? this.doc.get(this.selectedId) : undefined;
     const m = f?.properties.metadata;
-    if (m && typeof m["topFL"] === "number" && typeof m["baseFL"] === "number") {
-      this.flRef = ((m["topFL"] as number) + (m["baseFL"] as number)) / 2;
-    } else if (m && typeof m["fl"] === "number") {
-      this.flRef = m["fl"] as number; // single-FL phenomenon (tropopause) → centre the gauge on it
-    }
+    if (m && typeof m["fl"] === "number") this.flRef = m["fl"] as number;
+    else if (m && typeof m["topFL"] === "number" && typeof m["baseFL"] === "number") this.flRef = ((m["topFL"] as number) + (m["baseFL"] as number)) / 2;
+    else this.flRef = null;
     this.syncDblClickZoom();
     this.renderAll();
     this.emitSelect();
@@ -486,7 +609,7 @@ export class SigwxDraw {
   /** Select a sub-element (list item index, e.g. a jet break point), or clear it. */
   selectSubItem(index: number | null): void {
     this.selectedSub = index;
-    // Centre the FL gauge on the point's current FL → its handle starts level with it.
+    // Centre the break-point gauge on the point's CURRENT FL (drag-stable reference).
     if (index != null && this.selectedId) {
       const f = this.doc.get(this.selectedId);
       const def = f ? this.registry.get(f.properties.phenomenon) : undefined;
@@ -557,41 +680,33 @@ export class SigwxDraw {
       } else {
         g.coordinates.splice(index, 1);
       }
-    } else if (g.type === "Polygon") {
-      const ring = g.coordinates[0];
-      if (!ring) return;
-      const uniq = ring.length > 1 && samePoint(ring[0]!, ring[ring.length - 1]!) ? ring.slice(0, -1) : ring.slice();
-      if (uniq.length <= 3 || !uniq[index]) return;
-      uniq.splice(index, 1);
-      uniq.push(uniq[0]!);
-      g.coordinates[0] = uniq;
-    } else if (g.type === "MultiPolygon") {
-      // Flat index → (area, local), same walk as vertices(). An area already at its
-      // 3-vertex minimum loses the WHOLE area instead; a single remaining area demotes
-      // the geometry back to a simple Polygon.
-      let off = index;
-      let done = false;
-      for (let a = 0; a < g.coordinates.length && !done; a++) {
-        const ring = g.coordinates[a]?.[0];
-        if (!ring) continue;
-        const uniq = ring.length > 1 && samePoint(ring[0]!, ring[ring.length - 1]!) ? ring.slice(0, -1) : ring.slice();
-        if (off >= uniq.length) {
-          off -= uniq.length;
-          continue;
-        }
-        if (uniq.length <= 3) {
-          g.coordinates.splice(a, 1);
-          this.anchorPins.get(id)?.splice(a, 1); // keep the other areas' moved tips aligned
+    } else if (g.type === "Polygon" || g.type === "MultiPolygon") {
+      // Flat index → ring (outer OR hole) + local, same walk as vertices().
+      //  • a HOLE at its 3-vertex minimum disappears entirely (delete its vertices one by
+      //    one — the erased clear zone closes back up);
+      //  • a MultiPolygon OUTER at the minimum loses the whole AREA (a single remaining
+      //    area demotes back to a simple Polygon);
+      //  • a simple Polygon's outer keeps ≥ 3 (can't delete the zone vertex-by-vertex).
+      const hit = ringOfFlat(g, index);
+      if (!hit) return;
+      const uniq = openRing(hit.ring).slice();
+      if (uniq.length <= 3) {
+        if (hit.ringIndex > 0) {
+          hit.poly.splice(hit.ringIndex, 1); // the hole closes up
+        } else if (g.type === "MultiPolygon") {
+          g.coordinates.splice(hit.area, 1);
+          this.anchorPins.get(id)?.splice(hit.area, 1); // keep the other areas' moved tips aligned
           if (g.coordinates.length === 1) f.geometry = { type: "Polygon", coordinates: g.coordinates[0]! };
           this.selectedAreas = [];
         } else {
-          uniq.splice(off, 1);
-          uniq.push(uniq[0]!);
-          g.coordinates[a]![0] = uniq;
+          return;
         }
-        done = true;
+      } else {
+        if (!uniq[hit.local]) return;
+        uniq.splice(hit.local, 1);
+        uniq.push(uniq[0]!);
+        hit.poly[hit.ringIndex] = uniq;
       }
-      if (!done) return;
     } else {
       return;
     }
@@ -635,24 +750,33 @@ export class SigwxDraw {
     // would bridge areas). The same per-ring path serves the simple Polygon (area 0).
     if (g.type === "Polygon" || g.type === "MultiPolygon") {
       const a = g.type === "MultiPolygon" ? nearestArea(g, at) : 0;
-      const poly = g.type === "MultiPolygon" ? g.coordinates[a] : g.coordinates;
-      const uniq = openRing(poly?.[0] ?? []).slice();
-      if (uniq.length < 2) return;
-      const k = frameK(uniq as Pt[]);
-      const planar = uniq.map((c) => toPlanar(c as Pt, k));
-      const cur = toPlanar([at[0]!, at[1]!], k);
-      let best = 0;
+      const poly = (g.type === "MultiPolygon" ? g.coordinates[a] : g.coordinates) as Position[][] | undefined;
+      if (!poly) return;
+      // The clicked area's NEAREST ring wins — a dbl-click on a hole's edge adds a vertex
+      // to the hole, exactly like the outer boundary.
+      let bestRing = 0;
+      let bestSeg = 0;
       let bestD = Infinity;
-      for (let i = 0; i < planar.length; i++) {
-        const d = segDist(cur, planar[i]!, planar[(i + 1) % planar.length]!);
-        if (d < bestD) {
-          bestD = d;
-          best = i;
+      poly.forEach((ring, ri) => {
+        const uniq = openRing(ring);
+        if (uniq.length < 2) return;
+        const k = frameK(uniq as Pt[]);
+        const planar = uniq.map((c) => toPlanar(c as Pt, k));
+        const cur = toPlanar([at[0]!, at[1]!], k);
+        for (let i = 0; i < planar.length; i++) {
+          const d = segDist(cur, planar[i]!, planar[(i + 1) % planar.length]!);
+          if (d < bestD) {
+            bestD = d;
+            bestRing = ri;
+            bestSeg = i;
+          }
         }
-      }
-      uniq.splice(best + 1, 0, at);
+      });
+      if (bestD === Infinity) return;
+      const uniq = openRing(poly[bestRing]!).slice();
+      uniq.splice(bestSeg + 1, 0, at);
       uniq.push(uniq[0]!);
-      poly![0] = uniq;
+      poly[bestRing] = uniq;
     } else if (g.type === "LineString") {
       const verts = vertices(g);
       if (verts.length < 2) return;
@@ -963,6 +1087,14 @@ export class SigwxDraw {
       this.renderAll();
       return;
     }
+    // An accidental tap/jitter must NOT commit a micro-polygon — especially in `+` append
+    // mode, where a near-invisible extra area grows a GHOST second leader/arrow (the
+    // "double arrow" bug). Under ~24 px of screen extent it's noise: cancel the stroke.
+    if (it.primitive === "polygon" && this.strokeExtentPx(d.coords) < 24) {
+      this.cancelDrawing();
+      this.renderAll();
+      return;
+    }
     const span = this.adapter.getViewSpan();
     let simplified = simplify(d.coords.map((c) => [c[0]!, c[1]!]), span * 0.012);
     const min = it.primitive === "polygon" ? 3 : 2;
@@ -1084,10 +1216,11 @@ export class SigwxDraw {
             // ONE arrow per AREA, each tip user-movable and clamped inside ITS ring (re-clamped
             // every render so a reshape keeps it valid). The box stays put — only the arrows re-aim.
             const tips = this.anchorPins.get(id);
-            req.arrowAnchors = outerRings(f.geometry)
-              .filter((r) => r.length >= 3)
-              .map((ring, k) => {
-                const a = clampInRing(tips?.[k] ?? ringMean(ring), ring);
+            req.arrowAnchors = areaRings(f.geometry)
+              .filter((ar) => ar.outer.length >= 3)
+              .map((ar, k) => {
+                // Hole-aware: the tip must point at CLOUD — never into an erased clear zone.
+                const a = clampInArea(tips?.[k] ?? ringMean(ar.outer), ar);
                 return { lon: a[0], lat: a[1] };
               });
             if (id === this.selectedId) selAnchors = req.arrowAnchors.map((p) => [p.lon, p.lat]);
@@ -1102,6 +1235,19 @@ export class SigwxDraw {
 
     if (this.mode === "drawing" && this.drawing) this.renderPreview(buckets);
     if (this.selectedId) this.renderSelection(buckets, resolution);
+    // ERASER brush preview: the brush footprint follows the pointer on the map.
+    if (this.erasing?.cursorPx) {
+      const [bx, by] = this.erasing.cursorPx;
+      const ring: Position[] = [];
+      for (let i = 0; i <= 24; i++) {
+        const t = (i / 24) * 2 * Math.PI;
+        const u = this.adapter.unproject([bx + Math.cos(t) * this.erasing.r, by + Math.sin(t) * this.erasing.r]);
+        if (u) ring.push([u.lon, u.lat]);
+      }
+      if (ring.length > 2) {
+        buckets["selection"]!.push({ type: "Feature", properties: { layer: "selection", stroke: this.style.selection.color, strokeWidth: 1.5, dash: [4, 3] }, geometry: { type: "LineString", coordinates: ring } });
+      }
+    }
 
     this.lastAnnReqs = annReqs;
     const placed = placeAnnotations(annReqs, this.adapter, this.pins);
@@ -1111,14 +1257,10 @@ export class SigwxDraw {
     // Arrow-tip handle — only while its leader is VISIBLE, so it vanishes WITH the arrow
     // when the call-out sits over the tip (no lone handle without an arrow).
     if (selAnchors.length && placed.leaders.some((l) => l.properties["featureId"] === this.selectedId)) {
-      // Scalloped phenomena (CB): the central handle wears a sync glyph — drag to move, TAP to
-      // flip the bumps in/out. A white dot under the dark glyph makes it read as a button.
-      // One handle PER AREA (`area` index) — each drags its own arrow tip.
-      const selF = this.doc.get(this.selectedId!);
-      const scallop = !!selF && this.styleOf(selF.properties.phenomenon).edge?.decorator === "scallop";
+      // One arrow-tip handle PER AREA (`area` index) — each drags its own tip. (The old
+      // scallop-flip tap is gone: bump direction is a geometric fact now — holes invert.)
       selAnchors.forEach((a, k) => {
-        // The scallop-flip button doubles as a TAP target → pointer cursor (plain tips stay "grab").
-        buckets["handles"]!.push({ type: "Feature", properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: "anchor", area: k, ...(scallop ? { icon: SYNC_ICON, size: 0.8, fill: "#ffffff", cursor: "pointer" } : {}) }, geometry: { type: "Point", coordinates: a } });
+        buckets["handles"]!.push({ type: "Feature", properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: "anchor", area: k }, geometry: { type: "Point", coordinates: a } });
       });
     }
 
@@ -1153,8 +1295,6 @@ export class SigwxDraw {
         }
       }
     }
-    if (this.selectedId) this.renderAreaGauge(buckets);
-    if (this.selectedId) this.renderSingleFlGauge(buckets);
 
     // `decorate` bakes the resolved style into the `handles` props (the generic
     // adapter is dumb); every other overlay is passed through unchanged.
@@ -1184,89 +1324,20 @@ export class SigwxDraw {
         style: this.styleOf(f.properties.phenomenon),
         ...(at && req ? { callout: { at, content: req.content } } : {}),
         sprite: (sid: string) => this.spriteCatalog[sid],
+        flightLevel: this.flResolved(f.properties.phenomenon),
+        ...(id === this.selectedId && this.selectedSub != null ? { sub: this.selectedSub } : {}),
+        ...(id === this.selectedId && this.flRef != null ? { flRef: this.flRef } : {}),
+        chrome: this.style.control,
+        limit: (key: string) => this.numLimit(def, key),
       });
-      if (w) out.push(w); // a builder may return null (no widget for this state, e.g. CB unselected)
+      // A builder may return null (no widget for this state) or SEVERAL cards (jet).
+      if (Array.isArray(w)) out.push(...w);
+      else if (w) out.push(w);
     }
     return out;
   }
 
-  /** FL gauge (top/base) for a selected AREA phenomenon (turbulence/CB), placed
-   *  beside its call-out box — a connecting line between the two draggable levels. */
-  private renderAreaGauge(buckets: Record<string, Feature[]>): void {
-    const f = this.doc.get(this.selectedId!);
-    if (!f) return;
-    const def = this.registry.get(f.properties.phenomenon);
-    if (listFieldOf(def)) return; // jet handles its own gauge
-    if (!def.schema.some((s) => s.key === "topFL") || !def.schema.some((s) => s.key === "baseFL")) return;
-    const at = this.placedAt.get(this.selectedId!);
-    if (!at) return;
-    const bc = this.adapter.project({ lon: at[0], lat: at[1] });
-    if (!bc) return;
-    const m = f.properties.metadata;
-    const top = typeof m["topFL"] === "number" ? (m["topFL"] as number) : 350;
-    const base = typeof m["baseFL"] === "number" ? (m["baseFL"] as number) : 200;
-    const gx = bc[0] + 30; // just right of the call-out box
-    const un = (x: number, y: number): Position | null => {
-      const u = this.adapter.unproject([x, y]);
-      return u ? [u.lon, u.lat] : null;
-    };
-    const yOf = (lvl: number): number => bc[1] - (lvl - this.flRef) * FL_PX;
-    // Same look as the jet FL gauge: a thin axis + a translucent band between top/base.
-    const aTop = un(gx, yOf(top) - 12);
-    const aBot = un(gx, yOf(base) + 12);
-    if (aTop && aBot) buckets["leaders"]!.push({ type: "Feature", properties: { layer: "leaders", stroke: this.style.control.line.color, strokeWidth: this.style.control.line.width }, geometry: { type: "LineString", coordinates: [aTop, aBot] } });
-    const bt = un(gx, yOf(top));
-    const bb = un(gx, yOf(base));
-    if (bt && bb) buckets["selection"]!.push({ type: "Feature", properties: { layer: "selection", stroke: this.style.control.line.color, strokeWidth: 9 }, geometry: { type: "LineString", coordinates: [bt, bb] } });
-    const mk = (lvl: number, role: string, label: string): void => {
-      const hp = un(gx, yOf(lvl));
-      const lp = un(gx + 24, yOf(lvl));
-      if (hp) buckets["handles"]!.push({ type: "Feature", properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role }, geometry: { type: "Point", coordinates: hp } });
-      if (lp) buckets["text-boxes"]!.push({ type: "Feature", properties: { layer: "text-boxes", text: label, textColor: this.style.control.text.color, textSize: 12, textHalo: this.style.control.text.halo }, geometry: { type: "Point", coordinates: lp } });
-    };
-    // Off-chart bounds → "XXX" (per WAFC), matching the call-out box labels.
-    const baseMin = this.numLimit(def, "baseFL").min;
-    const topMax = this.numLimit(def, "topFL").max;
-    const lbl = (v: number, off: boolean): string => (off ? "XXX" : String(Math.round(v)).padStart(3, "0"));
-    mk(top, "mTop", lbl(top, top > topMax));
-    mk(base, "mBase", lbl(base, base < baseMin));
-  }
 
-  /** Single-FL gauge (tropopause) — a short vertical track + a draggable handle beside the
-   *  spot point or the contour's midpoint. Sets `placedAt` so the `metaLevel` drag (field
-   *  "fl") reads the same anchor. */
-  private renderSingleFlGauge(buckets: Record<string, Feature[]>): void {
-    const f = this.doc.get(this.selectedId!);
-    if (!f) return;
-    if (!singleFlFieldOf(this.registry.get(f.properties.phenomenon))) return;
-    // Anchor: the spot point itself, or the contour's arc-length midpoint (where the FL sits).
-    let anchor: Position | null = null;
-    if (f.geometry.type === "Point") anchor = f.geometry.coordinates;
-    else if (f.geometry.type === "LineString" && f.geometry.coordinates.length >= 2) {
-      const dense = catmullRom(f.geometry.coordinates as Pt[], 16);
-      const k = frameK(dense);
-      anchor = toLonLat(pointAtFraction(dense.map((c) => toPlanar(c, k)), 0.5).p, k);
-    }
-    if (!anchor) return;
-    this.placedAt.set(this.selectedId!, [anchor[0]!, anchor[1]!]); // the metaLevel drag reads this anchor
-    const bc = this.adapter.project({ lon: anchor[0]!, lat: anchor[1]! });
-    if (!bc) return;
-    const lvl = typeof f.properties.metadata["fl"] === "number" ? (f.properties.metadata["fl"] as number) : this.flRef;
-    const gx = bc[0] + 30; // just right of the label
-    const un = (x: number, y: number): Position | null => {
-      const u = this.adapter.unproject([x, y]);
-      return u ? [u.lon, u.lat] : null;
-    };
-    const yOf = (l: number): number => bc[1] - (l - this.flRef) * FL_PX;
-    // A short track around the level + the draggable handle + a value label (orange chrome).
-    const aTop = un(gx, yOf(lvl) - 34);
-    const aBot = un(gx, yOf(lvl) + 34);
-    if (aTop && aBot) buckets["leaders"]!.push({ type: "Feature", properties: { layer: "leaders", stroke: this.style.control.line.color, strokeWidth: this.style.control.line.width }, geometry: { type: "LineString", coordinates: [aTop, aBot] } });
-    const hp = un(gx, yOf(lvl));
-    const lp = un(gx + 24, yOf(lvl));
-    if (hp) buckets["handles"]!.push({ type: "Feature", properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: "mFL" }, geometry: { type: "Point", coordinates: hp } });
-    if (lp) buckets["text-boxes"]!.push({ type: "Feature", properties: { layer: "text-boxes", text: `FL${String(Math.round(lvl)).padStart(3, "0")}`, textColor: this.style.control.text.color, textSize: 12, textHalo: this.style.control.text.halo }, geometry: { type: "Point", coordinates: lp } });
-  }
 
   /** Screen radius from a call-out anchor to the farthest polygon vertex (capped) so
    *  the box clears the zone; 0 for non-areas. Very large zones stay near (capped). */
@@ -1315,20 +1386,25 @@ export class SigwxDraw {
     // polyline), so there's no stray straight "construction" line under a jet.
     // An AREA-narrowed selection (areas of a MultiPolygon clicked / shift-toggled)
     // highlights THOSE rings only.
-    const allRings = outerRings(f.geometry);
+    // Every ring (outer + HOLES) with its running FLAT offset — holes highlight and edit
+    // exactly like outer boundaries.
+    let flatOff = 0;
+    const ringsWithOff = flatRings(f.geometry).map((fr) => {
+      const e = { ...fr, off: flatOff };
+      flatOff += openRing(fr.ring).length;
+      return e;
+    });
     const selRings =
       f.geometry.type === "MultiPolygon" && this.selectedAreas.length
-        ? this.selectedAreas.map((a) => ({ a, ring: allRings[a] })).filter((x): x is { a: number; ring: Pt[] } => !!x.ring && x.ring.length >= 3)
+        ? ringsWithOff.filter((fr) => this.selectedAreas.includes(fr.area) && fr.ring.length >= 3)
         : undefined;
     const selGeom: Geometry = selRings
-      ? { type: "MultiLineString", coordinates: selRings.map(({ ring }) => (it.smooth ? catmullRomClosed(ring, 16) : ring)) }
+      ? { type: "MultiLineString", coordinates: selRings.map((fr) => (it.smooth ? catmullRomClosed(fr.ring as Pt[], 16) : fr.ring)) }
       : it.smooth && f.geometry.type === "LineString"
         ? { type: "LineString", coordinates: catmullRom(f.geometry.coordinates as Pt[], 16) }
-        : it.smooth && f.geometry.type === "Polygon"
-          ? { type: "LineString", coordinates: catmullRomClosed(f.geometry.coordinates[0] as Pt[], 16) }
-          : it.smooth && f.geometry.type === "MultiPolygon"
-            ? { type: "MultiLineString", coordinates: outerRings(f.geometry).filter((r) => r.length >= 3).map((r) => catmullRomClosed(r, 16)) }
-            : outline(f.geometry);
+        : it.smooth && (f.geometry.type === "Polygon" || f.geometry.type === "MultiPolygon")
+          ? { type: "MultiLineString", coordinates: ringsWithOff.filter((fr) => fr.ring.length >= 3).map((fr) => catmullRomClosed(fr.ring as Pt[], 16)) }
+          : outline(f.geometry);
     buckets["selection"]!.push({
       type: "Feature",
       properties: { layer: "selection", featureId: this.selectedId, stroke: this.style.selection.color, strokeWidth: this.style.selection.width, ...(this.style.selection.dash ? { dash: [...this.style.selection.dash] } : {}) },
@@ -1342,7 +1418,7 @@ export class SigwxDraw {
     // (`v${flatStart+i}`) so setVertex/removeVertex address the right vertex.
     if (!isPointMarker(def)) {
       const groups = selRings
-        ? selRings.map(({ a, ring }) => ({ off: flatStart(f.geometry, a), verts: openRing(ring) }))
+        ? selRings.map((fr) => ({ off: fr.off, verts: openRing(fr.ring) }))
         : [{ off: 0, verts: vertices(f.geometry) }];
       for (const { off, verts } of groups) {
         verts.forEach((v, i) => {
@@ -1380,82 +1456,6 @@ export class SigwxDraw {
         });
       });
 
-      // Radial speed control on the selected break point: a ring + handle whose
-      // distance from the point sets the wind speed (further out = more barbs).
-      const sub = this.selectedSub;
-      if (sub != null && items[sub]) {
-        const ptLL = toLonLat(pointAtFraction(planar, Number(items[sub]!["t"] ?? 0)).p, k);
-        const c = this.adapter.project({ lon: ptLL[0]!, lat: ptLL[1]! });
-        if (c) {
-          const item = items[sub]!;
-          const speed = typeof item["speed"] === "number" ? (item["speed"] as number) : 0;
-          const tt = Number(item["t"] ?? 0);
-          const isEnd = tt <= 0.001 || tt >= 0.999;
-          const { min: spMin, max: spMax } = this.numLimit(def, "speed");
-          // Speedometer dial: the handle's ANGLE around a fixed ring sets the speed.
-          // Skipped on an extremity — a jet starts/ends at the floor (§3.5.1 / fig 11),
-          // so the end speed is fixed and only double-click (add a point) applies there.
-          if (!isEnd) {
-            const arc: Position[] = [];
-            for (let a = 0; a <= 40; a++) {
-              const deg = ((SPEED_A0 + (a / 40) * SPEED_SWEEP) * Math.PI) / 180;
-              const u = this.adapter.unproject([c[0] + Math.cos(deg) * SPEED_R, c[1] + Math.sin(deg) * SPEED_R]);
-              if (u) arc.push([u.lon, u.lat]);
-            }
-            if (arc.length) buckets["leaders"]!.push({ type: "Feature", properties: { layer: "leaders", stroke: this.style.control.line.color, strokeWidth: this.style.control.line.width }, geometry: { type: "LineString", coordinates: arc } });
-            const ha = (angleForSpeed(speed, spMin, spMax) * Math.PI) / 180;
-            const h = this.adapter.unproject([c[0] + Math.cos(ha) * SPEED_R, c[1] + Math.sin(ha) * SPEED_R]);
-            if (h) buckets["handles"]!.push({ type: "Feature", properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: "speed" }, geometry: { type: "Point", coordinates: [h.lon, h.lat] } });
-            // Live speed readout near the handle while dragging the dial.
-            if (this.dragTarget?.kind === "speed") {
-              const lbl = this.adapter.unproject([c[0] + Math.cos(ha) * (SPEED_R + 22), c[1] + Math.sin(ha) * (SPEED_R + 22)]);
-              if (lbl) buckets["text-boxes"]!.push({ type: "Feature", properties: { layer: "text-boxes", text: `${Math.round(speed)}KT`, textColor: this.style.control.text.color, textSize: 13, textHalo: this.style.control.text.halo, textBackground: "#ffffff", textBorder: this.style.control.line.color }, geometry: { type: "Point", coordinates: [lbl.lon, lbl.lat] } });
-            }
-          }
-
-          // Vertical FL gauge beside the point: a draggable core-FL handle, plus a
-          // top/base extent band (≥120 kt). Screen y ↔ flight level. NOT on an
-          // extremity — the spec examples never label FL at the start/end, so a bare
-          // terminator has no FL to edit (only drag-reshape + double-click apply).
-          if (!isEnd) {
-          const flv = typeof item["fl"] === "number" ? item["fl"] : 300;
-          const gx = c[0] + SPEED_R + 14; // just outside the speed dial
-          const yOf = (lvl: number): number => c[1] - (lvl - this.flRef) * FL_PX;
-          const un = (x: number, y: number): Position | null => {
-            const u = this.adapter.unproject([x, y]);
-            return u ? [u.lon, u.lat] : null;
-          };
-          // Extent handles appear at ≥120 kt; if top/base aren't set yet, seed
-          // sensible defaults (fl ± 40) so they're draggable — the drag persists them.
-          const showExt = speed >= 120;
-          const topV = showExt ? (typeof item["top"] === "number" ? (item["top"] as number) : Math.min(600, flv + 40)) : null;
-          const baseV = showExt ? (typeof item["base"] === "number" ? (item["base"] as number) : Math.max(0, flv - 40)) : null;
-          // Axis connector.
-          const ys = showExt ? [yOf(flv), yOf(topV!), yOf(baseV!)] : [yOf(flv)];
-          const aTop = un(gx, Math.min(...ys) - 12);
-          const aBot = un(gx, Math.max(...ys) + 12);
-          if (aTop && aBot) buckets["leaders"]!.push({ type: "Feature", properties: { layer: "leaders", stroke: this.style.control.line.color, strokeWidth: this.style.control.line.width }, geometry: { type: "LineString", coordinates: [aTop, aBot] } });
-          // Extent band (translucent thick) between top and base.
-          if (showExt) {
-            const bt = un(gx, yOf(topV!));
-            const bb = un(gx, yOf(baseV!));
-            if (bt && bb) buckets["selection"]!.push({ type: "Feature", properties: { layer: "selection", stroke: this.style.control.line.color, strokeWidth: 9 }, geometry: { type: "LineString", coordinates: [bt, bb] } });
-          }
-          // Handles + value labels (orange control handles; role identifies the field).
-          const lvlHandle = (lvl: number, field: string, label: string): void => {
-            const hp = un(gx, yOf(lvl));
-            const lp = un(gx + 28, yOf(lvl)); // value label clear to the right of the handle
-            if (hp) buckets["handles"]!.push({ type: "Feature", properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: field }, geometry: { type: "Point", coordinates: hp } });
-            if (lp) buckets["text-boxes"]!.push({ type: "Feature", properties: { layer: "text-boxes", text: label, textColor: this.style.control.text.color, textSize: 12, textHalo: this.style.control.text.halo }, geometry: { type: "Point", coordinates: lp } });
-          };
-          lvlHandle(flv, "fl", `FL${String(Math.round(flv)).padStart(3, "0")}`);
-          if (showExt) {
-            lvlHandle(topV!, "top", String(Math.round(topV!)).padStart(3, "0"));
-            lvlHandle(baseV!, "base", String(Math.round(baseV!)).padStart(3, "0"));
-          }
-          }
-        }
-      }
 
       // Discreet pedagogical hints on each segment between meta points: the speed
       // transition, ordered by SCREEN position with a →/← arrow pointing in the
@@ -1518,6 +1518,12 @@ export class SigwxDraw {
       }
       return;
     }
+    if (ev.key === "Escape" && this.erasing) {
+      ev.preventDefault();
+      this.erasing = null;
+      this.adapter.setCursor("");
+      return;
+    }
     // Delete with Backspace (the Mac "delete" key) or Delete. An AREA-narrowed selection
     // (one area of a multi-area CB) removes THAT area — the feature and its info box live
     // on while other areas remain. Otherwise the whole selected feature goes.
@@ -1575,6 +1581,15 @@ export class SigwxDraw {
   }
 
   private onDown(ev: PointerEvent): void {
+    if (this.erasing) {
+      const px = this.adapter.project(ev.lngLat);
+      if (px) {
+        this.erasing.lastPx = px;
+        this.adapter.setPanEnabled(false);
+        this.eraseStep(px, px); // a tap punches a round hole right away
+      }
+      return;
+    }
     if (this.mode === "drawing") {
       if (this.isFreehand() && this.drawing) {
         this.stroking = true;
@@ -1596,14 +1611,6 @@ export class SigwxDraw {
       } else if (hClass === "slider" || hClass === "end") {
         this.dragTarget = { kind: "slider", featureId, index };
         if (featureId === this.selectedId) this.selectSubItem(index);
-      } else if (hClass === "control" && role === "speed" && this.selectedSub != null) {
-        this.dragTarget = { kind: "speed", featureId, index: this.selectedSub };
-      } else if (hClass === "control" && (role === "fl" || role === "top" || role === "base") && this.selectedSub != null) {
-        this.dragTarget = { kind: "level", featureId, index: this.selectedSub, field: role };
-      } else if (hClass === "control" && (role === "mTop" || role === "mBase")) {
-        this.dragTarget = { kind: "metaLevel", featureId, field: role === "mTop" ? "topFL" : "baseFL" };
-      } else if (hClass === "control" && role === "mFL") {
-        this.dragTarget = { kind: "metaLevel", featureId, field: "fl" };
       } else if (hClass === "control" && role === "anchor") {
         this.dragTarget = { kind: "anchor", featureId, area: Number(hit.props["area"] ?? 0) };
       }
@@ -1659,7 +1666,7 @@ export class SigwxDraw {
       // (the input captures its own clicks/keys for editing, so this fires only off the body).
       // An area's control card (selected CB — it replaces the call-out) reuses the CALL-OUT
       // gestures: drag repositions the box, a tap cycles the carousel enum (coverage).
-      const fid = hit.props["id"] as string;
+      const fid = widgetFeatureId(hit.props["id"] as string);
       if (fid !== this.selectedId) this.select(fid);
       const f = this.doc.get(fid);
       if (f) {
@@ -1679,6 +1686,25 @@ export class SigwxDraw {
   }
 
   private onMove(ev: PointerEvent): void {
+    if (this.erasing) {
+      this.adapter.setCursor("crosshair");
+      // Track the pointer: the brush footprint is PROJECTED on the map (renderAll), so the
+      // forecaster sees exactly what a rub will gnaw.
+      const cpx = this.adapter.project(ev.lngLat);
+      if (cpx) {
+        this.erasing.cursorPx = cpx;
+        this.scheduleRender();
+      }
+      if (this.erasing.lastPx) {
+        const cur = this.adapter.project(ev.lngLat);
+        // Gnaw LIVE: one brush capsule per decimated step (≥ r/3 px of travel).
+        if (cur && Math.hypot(cur[0] - this.erasing.lastPx[0], cur[1] - this.erasing.lastPx[1]) > this.erasing.r / 3) {
+          this.eraseStep(this.erasing.lastPx, cur);
+          this.erasing.lastPx = cur;
+        }
+      }
+      return;
+    }
     if (this.mode === "drawing") {
       this.adapter.setCursor("crosshair"); // re-assert over the adapter's hover cursor
       if (this.stroking && this.drawing) {
@@ -1704,13 +1730,11 @@ export class SigwxDraw {
         // an edge cross another (the vertex then "sticks" at the edge of validity).
         // Multi-area: the guard checks the ring the dragged FLAT index belongs to.
         const g = f.geometry;
-        const a = areaOfFlat(g, t.index);
-        const ring = (g.type === "MultiPolygon" ? g.coordinates[a]?.[0] : g.coordinates[0]) as Position[] | undefined;
-        const local = g.type === "MultiPolygon" ? t.index - flatStart(g, a) : t.index;
-        const v = ring?.[local];
+        const hit = ringOfFlat(g, t.index); // the precise ring — outer OR hole
+        const v = hit?.ring[hit.local];
         const prev = v ? ([...v] as Position) : null;
         setVertex(g, t.index, [ev.lngLat.lon, ev.lngLat.lat]);
-        if (prev && ring && !isSimpleRing(ring as Pt[])) setVertex(g, t.index, prev);
+        if (prev && hit && !isSimpleRing(hit.ring as Pt[])) setVertex(g, t.index, prev);
       } else {
         setVertex(f.geometry, t.index, [ev.lngLat.lon, ev.lngLat.lat]);
       }
@@ -1762,73 +1786,6 @@ export class SigwxDraw {
           }
         }
       }
-    } else if (t.kind === "speed") {
-      // Radial control: distance (px) from the break point → wind speed.
-      const def = this.registry.get(f.properties.phenomenon);
-      const lf = listFieldOf(def);
-      if (lf) {
-        const { planar, k } = this.renderPath(f.geometry, interactionOf(def));
-        const list = (f.properties.metadata[lf.key] as Metadata[]) ?? [];
-        const item = list[t.index];
-        if (item) {
-          const ptLL = toLonLat(pointAtFraction(planar, Number(item["t"] ?? 0)).p, k);
-          const c = this.adapter.project({ lon: ptLL[0]!, lat: ptLL[1]! });
-          const cur = this.adapter.project(ev.lngLat);
-          if (c && cur) {
-            // Speedometer: the cursor's ANGLE around the point maps to the speed
-            // (configurable bounds, default 80–250 per WAFC §3.5.1), rounded to 5.
-            const deg = (Math.atan2(cur[1] - c[1], cur[0] - c[0]) * 180) / Math.PI;
-            const { min, max } = this.numLimit(def, "speed");
-            const speed = Math.max(min, Math.min(max, Math.round(speedForAngle(deg, min, max) / 5) * 5));
-            list[t.index] = { ...item, speed };
-          }
-        }
-      }
-    } else if (t.kind === "level") {
-      // Vertical FL gauge: screen y relative to the break point → flight level.
-      const def = this.registry.get(f.properties.phenomenon);
-      const lf = listFieldOf(def);
-      if (lf) {
-        const { planar, k } = this.renderPath(f.geometry, interactionOf(def));
-        const list = (f.properties.metadata[lf.key] as Metadata[]) ?? [];
-        const item = list[t.index];
-        if (item) {
-          const ptLL = toLonLat(pointAtFraction(planar, Number(item["t"] ?? 0)).p, k);
-          const c = this.adapter.project({ lon: ptLL[0]!, lat: ptLL[1]! });
-          const cur = this.adapter.project(ev.lngLat);
-          if (c && cur) {
-            const { lo, hi } = this.flGaugeRange(f.properties.phenomenon, t.field);
-            let level = Math.max(lo, Math.min(hi, Math.round((this.flRef + (c[1] - cur[1]) / FL_PX) / 5) * 5));
-            // The core FL is always inside the ≥80 layer → keep top ≥ FL ≥ base.
-            const flCore = typeof item["fl"] === "number" ? (item["fl"] as number) : 300;
-            if (t.field === "fl") {
-              if (typeof item["base"] === "number") level = Math.max(item["base"] as number, level);
-              if (typeof item["top"] === "number") level = Math.min(item["top"] as number, level);
-            } else if (t.field === "top") {
-              level = Math.max(flCore, level); // top at or above the core
-            } else if (t.field === "base") {
-              level = Math.min(flCore, level); // base at or below the core
-            }
-            list[t.index] = { ...item, [t.field]: level };
-          }
-        }
-      }
-    } else if (t.kind === "metaLevel") {
-      // Area FL gauge sits at the call-out → map screen y relative to that box.
-      const at = this.placedAt.get(t.featureId);
-      const bc = at ? this.adapter.project({ lon: at[0], lat: at[1] }) : null;
-      const cur = this.adapter.project(ev.lngLat);
-      if (bc && cur) {
-        // Clamp to the field's chart bounds; a 5-FL "XXX" notch past a bound is allowed only
-        // when that side's `beyond` is "xxx" (areas default to xxx, so base→min−5, top→max+5).
-        const { lo, hi } = this.flGaugeRange(f.properties.phenomenon, t.field);
-        let level = Math.max(lo, Math.min(hi, Math.round((this.flRef + (bc[1] - cur[1]) / FL_PX) / 5) * 5));
-        const m = f.properties.metadata;
-        if (t.field === "topFL") level = Math.max(level, typeof m["baseFL"] === "number" ? (m["baseFL"] as number) : lo);
-        else if (t.field === "baseFL") level = Math.min(level, typeof m["topFL"] === "number" ? (m["topFL"] as number) : hi);
-        // else (a single `fl` field, tropopause): just the clamped level, no top/base pairing.
-        m[t.field] = level;
-      }
     } else if (t.kind === "callout") {
       const req = this.lastAnnReqs.find((r) => r.featureId === t.featureId && r.labelId === t.labelId);
       const anchorPx = req ? this.adapter.project(req.anchor) : null;
@@ -1837,12 +1794,13 @@ export class SigwxDraw {
       // (no first-move jump), then express that as the pin offset from the anchor.
       if (anchorPx && cursorPx) this.pins.set(`${t.featureId}:${t.labelId}`, { dx: cursorPx[0] - t.grab[0] - anchorPx[0], dy: cursorPx[1] - t.grab[1] - anchorPx[1] });
     } else if (t.kind === "anchor") {
-      // Move ONE leader anchor (this area's arrow tip), kept inside ITS zone (clamped to its ring).
-      const rings = outerRings(f.geometry).filter((r) => r.length >= 3);
-      const ring = rings[t.area] ?? rings[0];
-      if (ring) {
+      // Move ONE leader anchor (this area's arrow tip) — kept inside ITS zone AND outside
+      // its erased holes (the tip must always point at cloud).
+      const areas = areaRings(f.geometry).filter((ar) => ar.outer.length >= 3);
+      const area = areas[t.area] ?? areas[0];
+      if (area) {
         const tips = this.anchorPins.get(t.featureId) ?? [];
-        tips[t.area] = clampInRing([ev.lngLat.lon, ev.lngLat.lat], ring);
+        tips[t.area] = clampInArea([ev.lngLat.lon, ev.lngLat.lat], area);
         this.anchorPins.set(t.featureId, tips);
       }
     } else if (t.kind === "translate") {
@@ -1905,6 +1863,15 @@ export class SigwxDraw {
   }
 
   private onUp(): void {
+    if (this.erasing?.lastPx) {
+      this.erasing.lastPx = null; // stay in eraser mode (Escape exits) — rub again for gruyère
+      this.adapter.setPanEnabled(true);
+      if (this.doc.has(this.erasing.featureId)) {
+        this.emitChange(); // ONE change event per rub (the gnawing itself was live)
+        this.emitMetadata();
+      }
+      return;
+    }
     if (this.stroking) {
       // A freehand drag emits no trailing "click", so don't swallow the next one.
       this.finalizeFreehand();
@@ -1933,20 +1900,6 @@ export class SigwxDraw {
     this.willDelete = false;
     // (The old tap-a-glyph/box enum cycle is gone — enums are edited on the SELECTED
     // card's carousel control; a plain tap just selects, via onClick.)
-    // Tap (no drag) the central handle of a scalloped phenomenon (CB) → flip the bump direction.
-    if (t.kind === "anchor" && !dragged) {
-      const f = this.doc.get(t.featureId);
-      const st = f ? this.styleOf(f.properties.phenomenon) : undefined;
-      if (f && st?.edge?.decorator === "scallop") {
-        const cur = f.properties.metadata["scallopInvert"];
-        const eff = cur != null ? Boolean(cur) : st.edge?.scallopSide === "in";
-        f.properties.metadata["scallopInvert"] = !eff;
-        this.renderAll();
-        this.emitChange();
-        if (this.selectedId) this.emitMetadata();
-        return;
-      }
-    }
     if (dragged) {
       this.renderAll();
       this.emitChange();
@@ -2003,7 +1956,7 @@ export class SigwxDraw {
       return;
     }
     // A widget card hit carries its feature id as `id`; every other overlay uses `featureId`.
-    const fid = ev.hit?.overlay === "widget" ? ev.hit.props["id"] : ev.hit?.props["featureId"];
+    const fid = ev.hit?.overlay === "widget" ? widgetFeatureId(String(ev.hit.props["id"] ?? "")) : ev.hit?.props["featureId"];
     if (ev.hit && typeof fid === "string" && ev.hit.overlay !== "handles") {
       if (fid !== this.selectedId) this.select(fid);
       else if (!ev.shiftKey && (ev.hit.overlay === "edge" || ev.hit.overlay === "area-fill" || ev.hit.overlay === "decoration")) {
@@ -2197,6 +2150,9 @@ export class SigwxDraw {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+/** A widget id back to its FEATURE id (multi-card builders suffix `featureId#part`). */
+const widgetFeatureId = (id: string): string => id.split("#")[0]!;
+
 const raf =
   typeof requestAnimationFrame !== "undefined"
     ? requestAnimationFrame
@@ -2294,39 +2250,38 @@ function nearestArea(geom: Geometry, at: Position): number {
   return best;
 }
 
-/** First FLAT vertex index of area `a` (the flat indexing of vertices()/setVertex/removeVertex). */
-function flatStart(geom: Geometry, a: number): number {
-  if (geom.type !== "MultiPolygon") return 0;
-  let off = 0;
-  for (let i = 0; i < a && i < geom.coordinates.length; i++) off += openRing(geom.coordinates[i]![0] ?? []).length;
-  return off;
+/** Every editable RING of a polygonal geometry — outer + HOLES (eraser clear zones),
+ *  area by area. The FLAT vertex indexing (vertices()/setVertex/removeVertex/`v${i}`
+ *  roles) walks them ALL, so hole vertices edit exactly like outer ones. */
+function flatRings(geom: Geometry): { area: number; poly: Position[][]; ringIndex: number; ring: Position[] }[] {
+  if (geom.type === "Polygon") return geom.coordinates.map((ring, ringIndex) => ({ area: 0, poly: geom.coordinates, ringIndex, ring }));
+  if (geom.type === "MultiPolygon") return geom.coordinates.flatMap((poly, area) => poly.map((ring, ringIndex) => ({ area, poly, ringIndex, ring })));
+  return [];
 }
 
-/** Which area a FLAT vertex index belongs to (Polygon → always 0). */
-function areaOfFlat(geom: Geometry, i: number): number {
-  if (geom.type !== "MultiPolygon") return 0;
+
+/** Resolve a FLAT vertex index to its ring — outer or hole — plus the local index. */
+function ringOfFlat(geom: Geometry, i: number): { area: number; poly: Position[][]; ringIndex: number; ring: Position[]; local: number } | null {
   let off = i;
-  for (let a = 0; a < geom.coordinates.length; a++) {
-    const n = openRing(geom.coordinates[a]![0] ?? []).length;
-    if (off < n) return a;
+  for (const fr of flatRings(geom)) {
+    const n = openRing(fr.ring).length;
+    if (off < n) return { ...fr, local: off };
     off -= n;
   }
-  return 0;
+  return null;
 }
 
-/** Editable vertices, FLAT across areas for a MultiPolygon (area 0 first — `v${i}` roles,
- *  setVertex/removeVertex share the same flat indexing). */
+/** Editable vertices, FLAT across areas AND their holes (`v${i}` roles, setVertex/
+ *  removeVertex share the same flat indexing). */
 function vertices(geom: Geometry): Position[] {
   if (geom.type === "LineString") return geom.coordinates;
   if (geom.type === "Point") return [geom.coordinates];
-  if (geom.type === "Polygon") return openRing(geom.coordinates[0] ?? []);
-  if (geom.type === "MultiPolygon") return geom.coordinates.flatMap((poly) => openRing(poly[0] ?? []));
+  if (geom.type === "Polygon" || geom.type === "MultiPolygon") return flatRings(geom).flatMap((fr) => openRing(fr.ring));
   return [];
 }
 
 function outline(geom: Geometry): Geometry {
-  if (geom.type === "Polygon") return { type: "LineString", coordinates: geom.coordinates[0] ?? [] };
-  if (geom.type === "MultiPolygon") return { type: "MultiLineString", coordinates: geom.coordinates.map((poly) => poly[0] ?? []) };
+  if (geom.type === "Polygon" || geom.type === "MultiPolygon") return { type: "MultiLineString", coordinates: flatRings(geom).map((fr) => fr.ring) };
   return geom;
 }
 
@@ -2335,26 +2290,11 @@ function setVertex(geom: Geometry, i: number, p: Position): void {
     geom.coordinates = p;
   } else if (geom.type === "LineString") {
     if (geom.coordinates[i]) geom.coordinates[i] = p;
-  } else if (geom.type === "Polygon") {
-    const ring = geom.coordinates[0];
-    if (!ring || !ring[i]) return;
-    ring[i] = p;
-    if (i === 0 && ring.length > 1) ring[ring.length - 1] = p;
-  } else if (geom.type === "MultiPolygon") {
-    let off = i; // flat index → (area, local) — same walk as vertices()
-    for (const poly of geom.coordinates) {
-      const ring = poly[0];
-      if (!ring) continue;
-      const n = openRing(ring).length;
-      if (off >= n) {
-        off -= n;
-        continue;
-      }
-      if (!ring[off]) return;
-      ring[off] = p;
-      if (off === 0 && ring.length > 1) ring[ring.length - 1] = p;
-      return;
-    }
+  } else if (geom.type === "Polygon" || geom.type === "MultiPolygon") {
+    const hit = ringOfFlat(geom, i); // flat index → ring (outer OR hole) + local
+    if (!hit || !hit.ring[hit.local]) return;
+    hit.ring[hit.local] = p;
+    if (hit.local === 0 && hit.ring.length > 1) hit.ring[hit.ring.length - 1] = p;
   }
 }
 

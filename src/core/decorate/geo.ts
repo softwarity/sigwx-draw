@@ -47,6 +47,75 @@ export function outerRings(geometry: Geometry): Pt[][] {
   return [];
 }
 
+/** Every AREA of a polygonal geometry with its outer ring AND its holes (interior rings —
+ *  the eraser's clear zones; their decoration runs the other way: bumps INTO the hole). */
+export function areaRings(geometry: Geometry): { outer: Pt[]; holes: Pt[][] }[] {
+  if (geometry.type === "Polygon") return [{ outer: (geometry.coordinates[0] ?? []) as Pt[], holes: geometry.coordinates.slice(1) as Pt[][] }];
+  if (geometry.type === "MultiPolygon") return geometry.coordinates.map((p) => ({ outer: (p[0] ?? []) as Pt[], holes: p.slice(1) as Pt[][] }));
+  return [];
+}
+
+/** Hole-aware clamp: keep `p` INSIDE the outer ring and OUTSIDE every hole — the leader's
+ *  arrow tip must point at CLOUD, never into an erased clear zone. A point caught in a
+ *  hole is pushed out along the ray away from the hole's centre, to the MIDDLE of the
+ *  free corridor between the hole and whatever bounds it (the outer ring or another
+ *  hole) — comfortably into cloud, not hugging the hole's edge. */
+export function clampInArea(p: Pt, area: { outer: Pt[]; holes: Pt[][] }): Pt {
+  let q = clampInRing(p, area.outer);
+  const inCloud = (pt: Pt): boolean => pointInRing(pt, area.outer) && !area.holes.some((h) => h.length >= 3 && pointInRing(pt, h));
+  for (const hole of area.holes) {
+    if (hole.length >= 3 && pointInRing(q, hole)) {
+      const exit = nearestOnRing(q, hole); // nearest point ON the hole's boundary
+      // Ray direction: away from the hole centre, through the exit point.
+      let cx = 0;
+      let cy = 0;
+      for (const h of hole) {
+        cx += h[0];
+        cy += h[1];
+      }
+      cx /= hole.length;
+      cy /= hole.length;
+      let dx = exit[0] - cx;
+      let dy = exit[1] - cy;
+      const dl = Math.hypot(dx, dy) || 1;
+      dx /= dl;
+      dy /= dl;
+      // Walk the ray outward and measure the free corridor — the tip lands at its middle.
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const c of area.outer) {
+        minX = Math.min(minX, c[0]);
+        maxX = Math.max(maxX, c[0]);
+        minY = Math.min(minY, c[1]);
+        maxY = Math.max(maxY, c[1]);
+      }
+      const reach = Math.hypot(maxX - minX, maxY - minY) || 1;
+      const N = 48;
+      let lastGood = -1;
+      for (let i = 1; i <= N; i++) {
+        const t = (i / N) * reach;
+        const pt: Pt = [exit[0] + dx * t, exit[1] + dy * t];
+        if (!inCloud(pt)) {
+          if (lastGood >= 0) break; // the corridor just ended
+          continue; // not out of the hole yet (concave) — keep walking
+        }
+        lastGood = i;
+      }
+      if (lastGood > 0) {
+        const t = ((lastGood + 1) / 2 / N) * reach; // the corridor's middle
+        const mid: Pt = [exit[0] + dx * t, exit[1] + dy * t];
+        q = inCloud(mid) ? mid : [exit[0] + dx * (lastGood / N) * reach, exit[1] + dy * (lastGood / N) * reach];
+      } else {
+        // No free run on that ray (degenerate) — fall back to a nudge past the boundary.
+        q = clampInRing([exit[0] + dx * dl * 0.05, exit[1] + dy * dl * 0.05], area.outer);
+      }
+    }
+  }
+  return q;
+}
+
 /** Signed shoelace sum in raw lon/lat — only used to COMPARE ring sizes. */
 function shoelace(ring: Pt[]): number {
   let s = 0;

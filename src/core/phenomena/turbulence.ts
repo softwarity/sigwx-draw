@@ -7,9 +7,9 @@
  */
 import type { MarkerWidget } from "@softwarity/draw-adapter";
 
-import { catmullRomClosed, coordsOf, lineFeature, outerRings, pointFeature, polygonFeature } from "../decorate/index.js";
+import { areaRings, catmullRomClosed, coordsOf, lineFeature, pointFeature, polygonFeature } from "../decorate/index.js";
 import type { DecorateFn, PhenomenonDef, RenderFeature, WidgetInput } from "../phenomenon.js";
-import { fl, num, PLUS_GLYPH, regularPolygon, ringCentroid, str } from "./util.js";
+import { fl, flGaugeNode, num, MINUS_GLYPH, PLUS_GLYPH, regularPolygon, ringCentroid, str } from "./util.js";
 
 /** One entry of the turbulence symbol catalogue: a `code` (also the sprite id) + label. */
 export interface TurbulenceSymbol {
@@ -40,8 +40,8 @@ export function makeTurbulence(symbols: TurbulenceSymbol[] = DEFAULT_TURBULENCE_
     // A turbulence zone may be MULTI-AREA (drawn with the card's `+` button): one logical
     // zone — one call-out, one metadata set — whose geometry holds several polygons.
     // Smooth + fill EACH.
-    const rings = outerRings(geometry).filter((r) => r.length >= 3);
-    if (!rings.length) return [];
+    const areas = areaRings(geometry).filter((a) => a.outer.length >= 3);
+    if (!areas.length) return [];
     const out: RenderFeature[] = [];
 
     // Chart vertical bounds (FL250–600 by default; overridable via `flightLevel`).
@@ -60,20 +60,24 @@ export function makeTurbulence(symbols: TurbulenceSymbol[] = DEFAULT_TURBULENCE_
     // the edge, the fill tint, the glyph AND the FL text — so the whole call-out reads as
     // MOD vs SEV. The `text` style carries only a halo (its colour IS the severity ink).
     const ink = (sym === "SEV" ? style.sev : style.mod)?.color ?? style.color;
-    for (const ring of rings) {
-      const smooth = catmullRomClosed(ring, 16); // soft "balloon" outline, not angular
+    for (const area of areas) {
+      const smooth = catmullRomClosed(area.outer, 16); // soft "balloon" outline, not angular
+      const holes = area.holes.filter((h) => h.length >= 3).map((h) => catmullRomClosed(h, 16));
       if (style.area) {
-        out.push(polygonFeature(smooth, { layer: "area-fill", fillColor: style.area.color ?? ink, fillOpacity: style.area.opacity ?? 0.18 }));
+        out.push(polygonFeature(smooth, { layer: "area-fill", fillColor: style.area.color ?? ink, fillOpacity: style.area.opacity ?? 0.18 }, holes));
       }
-      // Dashed boundary (the `dash` prop tells the adapters to draw it dashed).
-      out.push(
-        lineFeature(smooth, {
-          layer: "edge",
-          stroke: style.edge?.color ?? ink,
-          strokeWidth: style.edge?.width ?? 3,
-          dash: style.edge?.dash ?? [3, 2],
-        }),
-      );
+      // Dashed boundary (the `dash` prop tells the adapters to draw it dashed) — holes too
+      // (a dashed border has no orientation, an erased clear zone just reads as a ring).
+      for (const ring of [smooth, ...holes]) {
+        out.push(
+          lineFeature(ring, {
+            layer: "edge",
+            stroke: style.edge?.color ?? ink,
+            strokeWidth: style.edge?.width ?? 3,
+            dash: style.edge?.dash ?? [3, 2],
+          }),
+        );
+      }
     }
 
     // WAFC Washington "direct" call-out: arrow back to the zone, box with the chosen
@@ -139,7 +143,7 @@ export function makeTurbulence(symbols: TurbulenceSymbol[] = DEFAULT_TURBULENCE_
     // `"carousel"` control (click = next, shift-click = previous; emits name:"symbol"),
     // plus `+` buttons straddling its edges (`onWidgetAction("draw-more")` — multi-area).
     // Returns null when unselected ⇒ the canvas call-out (tap-the-glyph cycle) renders as usual.
-    widget: ({ id, metadata, editable, style, callout, sprite }: WidgetInput): MarkerWidget | null => {
+    widget: ({ id, metadata, editable, style, callout, sprite, flightLevel, chrome, flRef }: WidgetInput): MarkerWidget[] | null => {
       if (!editable || !callout) return null;
       const sym = str(metadata["symbol"], first);
       const ink = (sym === "SEV" ? style.sev : style.mod)?.color ?? style.color;
@@ -154,7 +158,12 @@ export function makeTurbulence(symbols: TurbulenceSymbol[] = DEFAULT_TURBULENCE_
       const fontPx = style.text?.size ?? 13;
       const textH = callout.content.split("\n").length * fontPx * 1.3;
       const glyphH = 32; // sprite intrinsic px (the carousel renders it 1:1)
-      return {
+      // Pin the card at its TEXT block's centre (the canvas call-out centres the text box
+      // on the placed anchor with the glyph above), so select/unselect don't jump.
+      const gauge = flGaugeNode(metadata, flightLevel, FL_MIN, FL_MAX, ["baseFL", "topFL"], chrome);
+      const ref = typeof flRef === "number" ? flRef : (gauge.min + gauge.max) / 2;
+      const yPin = 1 - (Math.max(gauge.min, Math.min(gauge.max, ref)) - gauge.min) / (gauge.max - gauge.min);
+      return [{
         id,
         anchor: { lon: callout.at[0]!, lat: callout.at[1]! },
         origin: { x: 0.5, y: (glyphH + textH / 2) / (glyphH + textH) },
@@ -168,8 +177,18 @@ export function makeTurbulence(symbols: TurbulenceSymbol[] = DEFAULT_TURBULENCE_
             ...callout.content.split("\n").map((value) => ({ kind: "text" as const, value })),
           ],
         },
-        buttons: [{ event: "draw-more", place: ["top", "left", "bottom"], svg: PLUS_GLYPH, bordered: true, title: "Draw a linked area" }],
-      };
+        buttons: [
+          { event: "draw-more", place: "h-edges", svg: PLUS_GLYPH, bordered: true, title: "Draw a linked area" },
+          { event: "erase", place: "left", svg: MINUS_GLYPH, bordered: true, title: "Eraser — rub a clear hole" },
+        ],
+      }, {
+        // The FL gauge floats BESIDE the call-out (a satellite card, like the old canvas
+        // gauge), pinned so the selection-time mid level sits at the call-out height.
+        id: `${id}#gauge`,
+        anchor: { lon: callout.at[0]!, lat: callout.at[1]! },
+        origin: { x: -1.0, y: yPin },
+        child: { dir: "v", items: [gauge] },
+      }];
     },
     // Grey shading per the WAFC norm — MOD light grey, SEV darker grey (the ink drives
     // edge + fill + glyph + FL text; `text` carries only a halo). See `decorate`.

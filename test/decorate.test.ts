@@ -2,6 +2,7 @@ import type { Geometry } from "geojson";
 import { describe, expect, it } from "vitest";
 
 import {
+  clampInArea,
   barbCounts,
   cb,
   clampInRing,
@@ -316,5 +317,21 @@ describe("tropopause (single-FL spot / contour)", () => {
     const m = defaultMetadata(tropopause);
     expect(Object.keys(m)).toEqual(["fl"]);
     expect(m["fl"]).toBe(380);
+  });
+});
+
+describe("clampInArea (hole-aware arrow tip)", () => {
+  const outer: Pt[] = [[0, 0], [10, 0], [10, 10], [0, 10]];
+  const hole: Pt[] = [[4, 4], [6, 4], [6, 6], [4, 6]];
+
+  it("pushes a hole-trapped tip to the MIDDLE of the free corridor, not the hole's edge", () => {
+    const q = clampInArea([5, 5], { outer, holes: [hole] });
+    const d = Math.max(Math.abs(q[0] - 5), Math.abs(q[1] - 5)); // distance from the hole centre
+    expect(d).toBeGreaterThan(1.5); // clearly past the hole edge (at 1)…
+    expect(d).toBeLessThan(4.5); // …but not hugging the outer ring (at 5): mid-corridor ≈ 3
+  });
+
+  it("leaves a tip already in cloud untouched", () => {
+    expect(clampInArea([2, 2], { outer, holes: [hole] })).toEqual([2, 2]);
   });
 });
