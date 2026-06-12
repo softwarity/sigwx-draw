@@ -16,12 +16,16 @@ import type { Feature, FeatureCollection, Geometry, Position } from "geojson";
 import * as polyclip from "polyclip-ts";
 
 import { ringCentroid } from "../core/phenomena/util.js";
-import { WAFS_SWH } from "../profiles/wafs-swh.js"; // the FILE, not the index — the core must not drag every preset
 
 import {
   DEFAULT_CB_COVERAGE,
   DEFAULT_TURBULENCE_SYMBOLS,
   PhenomenonRegistry,
+  defFromDescriptor,
+  mergeDescriptor,
+  registerExtensions,
+  resolveGlyph,
+  resolveObjectSpec,
   areaRings,
   catmullRom,
   catmullRomClosed,
@@ -58,11 +62,13 @@ import type {
   JetStyle,
   ListField,
   Metadata,
+  ObjectSpec,
   PhenomenonDef,
   PhenomenonStyle,
   Pt,
   RenderFeature,
   SigwxFeature,
+  ToolSpec,
   TropopauseStyle,
   MarkerStyle,
   TurbulenceStyle,
@@ -173,17 +179,34 @@ export interface TurbulenceType {
  * OPTIONAL `@softwarity/sigwx-draw/profiles` entry.
  */
 export interface SigwxProfile {
+  schemaVersion?: 1;
   /** Chart-type id — tagged onto `save()`'s FeatureCollection (foreign member `profile`). */
   id: string;
-  /** The tool palette offered to the forecaster (toolbar order). `toolbar.tools` wins. */
-  tools?: string[];
-  /** Per-phenomenon catalogues / bounds / styles for this chart type. `phenomena` wins per type. */
+  /** The tool palette offered to the forecaster (toolbar order). An entry is a
+   *  phenomenon type OR a named GROUP (split-button submenu:
+   *  `{ "group": "Markers", "items": ["volcano", …] }`). When the list is FLAT
+   *  strings, the point markers are auto-grouped (legacy). `toolbar.tools` wins. */
+  tools?: ToolSpec[];
+  /** The chart's OBJECTS — the §2b composition rule, ONE entry each: a stock
+   *  descriptor name (`"cb"`), a stock reference + deep-merge PATCH
+   *  (`{ "extends": "cb", "style": { "color": "…" } }` — patch wins; keyed-array
+   *  patches address fields/options/satellites by id), or a FULL inline
+   *  descriptor (host-defined). Compiled by the interpreter at construction and
+   *  registered over the built-ins. Omitted ⇒ the stock registry as-is. */
+  objects?: ObjectSpec[];
+  /** Inline glyph-atlas additions (merged over the built-ins BEFORE the objects
+   *  compile, so an inline descriptor can reference `atlas:` names shipped here). */
+  glyphs?: Record<string, string>;
+  /** Chart-level chrome-declutter threshold (the option `callouts` wins). */
+  callouts?: { minZoneFraction?: number };
+  /** Per-phenomenon catalogues / bounds / styles for this chart type. `phenomena` wins
+   *  per type. TRANSITIONAL: converges into `objects` patches (descriptor spec §2b). */
   phenomena?: PhenomenaConfig;
   /** The chart's vertical reference: bounds + display unit — `"fl"` renders `FL310`
    *  (flight levels / 1013) and `"hft-amsl"` TEMSI France's hundreds of feet AMSL
    *  (`065`). A declarative token (NOT a callback) so a profile stays plain JSON —
-   *  storable, servable, host-editable. Informative for now: the per-phenomenon
-   *  `flightLevel` carries the working bounds; the unit plumbs into rendering later. */
+   *  storable, servable, host-editable. THE FL-bounds fallback: a phenomenon without
+   *  its own `flightLevel` config clamps to these; the unit plumbs into rendering later. */
   vertical?: { min: number; max: number; unit?: "fl" | "hft-amsl" };
 }
 
@@ -241,8 +264,11 @@ function isPointMarker(def: PhenomenonDef): boolean {
 
 export class SigwxDraw {
   private readonly adapter: MapAdapter;
-  private readonly registry: PhenomenonRegistry;
+  private registry: PhenomenonRegistry; // reassigned by setProfile (re-ingestion)
   private readonly phenomena: Record<string, PhenomenonConfig | undefined> = {};
+  /** The construction options — kept so `setProfile` can re-ingest with the same
+   *  injected registry / explicit `phenomena` / toolbar config. */
+  private readonly opts: SigwxDrawOptions;
   /** Host-added turbulence symbols/types (beyond the default MOD/SEV), by code. */
   private turbTypes: TurbulenceType[] = [];
   /** Host-added CB coverage amounts (beyond the default OCNL/FRQ). */
@@ -296,11 +322,13 @@ export class SigwxDraw {
   /** FL reference captured at selection time — pins the gauge cards (stable during drags). */
   private flRef: number | null = null;
   /** Chart-type id from the profile — tagged onto `save()`'s FeatureCollection. */
-  private readonly profileId: string | undefined;
+  private profileId: string | undefined;
   /** Profile tool palette — the toolbar default when `toolbar.tools` is not given. */
-  private readonly profileTools: string[] | undefined;
+  private profileTools: ToolSpec[] | undefined;
+  /** Chart vertical reference (profile) — the FL-bounds fallback of `flResolved`. */
+  private vertical: { min: number; max: number } | undefined;
   /** Call-out declutter threshold (fraction of the view span; 0 = never hide). */
-  private readonly calloutFraction: number;
+  private calloutFraction = 0.15;
   /** Last visibility per feature (the ±10% hysteresis needs the previous state). */
   private readonly calloutShown = new Map<string, boolean>();
   private idSeq = 0;
@@ -312,20 +340,21 @@ export class SigwxDraw {
   private readonly metadataListeners = new Set<(spec: FormSpec) => void>();
 
   constructor(opts: SigwxDrawOptions) {
+    this.opts = opts;
     this.adapter = opts.adapter;
     this.registry = opts.registry ?? defaultRegistry();
-    // A chart profile is pure declarative sugar: unfold it onto the options, the
-    // EXPLICIT options winning (per phenomenon for `phenomena`, wholesale for tools).
-    // No profile given ⇒ the fallback IS a profile (WAFS SWH) — the source of truth for
-    // chart-specific numbers is always a profile, never scattered hard-coded values.
-    const profile = opts.profile ?? WAFS_SWH;
-    this.profileId = profile.id;
-    this.profileTools = profile.tools;
-    this.phenomena = { ...profile.phenomena, ...opts.phenomena };
-    this.calloutFraction = opts.callouts?.minZoneFraction ?? 0.15;
     this.style = mergeStyle(DEFAULT_STYLE, opts.style);
 
     this.readyPromise = this.adapter.ready().then(async () => {
+      // Resolve the profile FIRST. No profile given ⇒ the WAFS SWH preset — the raw
+      // JSON FILE itself — is imported DYNAMICALLY: the core never bundles it (it is a
+      // code-split chunk, fetched only on this fallback path; an app shipping its own
+      // profile never loads it). It is plain JSON, not a JS module: the source of truth
+      // for chart-specific numbers is always a profile, never scattered hard-coded values.
+      const profile =
+        opts.profile ??
+        ((await import("../profiles/wafs.json", { with: { type: "json" } })).default as unknown as SigwxProfile);
+      this.applyProfile(profile, opts);
       // The generic adapter does NOT auto-register sprites — register the SIGWX
       // defaults (MOD/SEV turbulence glyphs); the host's overrides win. Keep the merged
       // catalogue: widget builders resolve their glyph carousel options from it.
@@ -1993,7 +2022,9 @@ export class SigwxDraw {
     for (const s of this.withLimits(def.type, def.schema)) {
       const f = s.key === key ? s : s.type === "list" ? s.itemSchema.find((x) => x.key === key) : undefined;
       if (f && f.type === "number") return { min: f.min ?? 80, max: f.max ?? 250 };
-      if (f && f.type === "fl") return { min: f.min ?? 250, max: f.max ?? 600 };
+      // FL bounds: schema (profile-injected via `withLimits`) → chart `vertical` →
+      // the WAFS engine fallback — the same chain as `flResolved`.
+      if (f && f.type === "fl") return { min: f.min ?? this.vertical?.min ?? 250, max: f.max ?? this.vertical?.max ?? 600 };
     }
     return { min: 80, max: 250 };
   }
@@ -2007,10 +2038,14 @@ export class SigwxDraw {
 
   /** Effective FL config handed to a phenomenon's decorate (chart bounds + resolved beyond). */
   private flResolved(type: string): { min?: number; max?: number; beyond: [FlMode, FlMode] } {
+    // Per-phenomenon bounds win; the chart `vertical` (profile) is the fallback — THE
+    // FL-bounds source of the descriptor model (a descriptor never carries chart bounds).
     const c = this.phenomena[type]?.flightLevel;
+    const min = c?.min ?? this.vertical?.min;
+    const max = c?.max ?? this.vertical?.max;
     return {
-      ...(c?.min != null ? { min: c.min } : {}),
-      ...(c?.max != null ? { max: c.max } : {}),
+      ...(min != null ? { min } : {}),
+      ...(max != null ? { max } : {}),
       beyond: [this.flBeyond(type, 0), this.flBeyond(type, 1)],
     };
   }
@@ -2076,6 +2111,60 @@ export class SigwxDraw {
     return spec;
   }
 
+  /** Unfold a chart profile onto the instance — the EXPLICIT options winning (per
+   *  phenomenon for `phenomena`, wholesale for `callouts`). Then the profile
+   *  INGESTION (the single-unit model, descriptor spec §2b): the inline atlas glyphs
+   *  merge FIRST (an inline descriptor may reference `atlas:` names shipped in the
+   *  same file), then every `objects` entry — stock name / `extends` patch / full
+   *  inline descriptor — compiles through the interpreter and registers over the
+   *  built-ins. A profile is pure JSON: behaviour arrives by NAME only. */
+  private applyProfile(profile: SigwxProfile, opts: SigwxDrawOptions): void {
+    this.profileId = profile.id;
+    this.profileTools = profile.tools;
+    this.vertical = profile.vertical;
+    // RE-ENTRANT (setProfile calls this again): rebuild the registry so a REMOVED object
+    // disappears. A profile WITH `objects` defines the FULL palette — start empty, it
+    // fills it (the profile is self-sufficient). No `objects` ⇒ the legacy built-in
+    // registry. An injected `opts.registry` always wins.
+    this.registry = opts.registry ?? (profile.objects?.length ? new PhenomenonRegistry() : defaultRegistry());
+    for (const k of Object.keys(this.phenomena)) delete this.phenomena[k];
+    Object.assign(this.phenomena, profile.phenomena, opts.phenomena);
+    this.calloutFraction = opts.callouts?.minZoneFraction ?? profile.callouts?.minZoneFraction ?? 0.15;
+    if (profile.glyphs) registerExtensions({ glyphs: profile.glyphs });
+    for (const spec of profile.objects ?? []) {
+      this.registry.register(defFromDescriptor(resolveObjectSpec(spec, mergeDescriptor)));
+    }
+  }
+
+  /**
+   * Re-ingest a (modified) profile LIVE — recompiles its descriptors / glyphs / tools /
+   * bounds and re-renders, KEEPING the drawn document. This is the single modification
+   * path: the profile is the source of truth, so to change anything (a colour, an FL, a
+   * leader…) you edit the profile object and re-inject it — no second, granular API.
+   *
+   * Features whose phenomenon the new profile no longer defines are DROPPED (with a
+   * console warning) so the document stays consistent; everything else is re-decorated
+   * with the new descriptors. The map view and the (still-valid) selection are preserved.
+   */
+  setProfile(profile: SigwxProfile): void {
+    this.applyProfile(profile, this.opts);
+    // Drop orphans (a type the new profile removed) — else the renderer can't decorate them.
+    const orphanIds = [...this.doc.entries()]
+      .filter(([, f]) => !this.registry.has(f.properties.phenomenon))
+      .map(([id]) => id);
+    if (orphanIds.length) {
+      const types = [...new Set(orphanIds.map((id) => this.doc.get(id)!.properties.phenomenon))];
+      console.warn(`[sigwx] setProfile dropped ${orphanIds.length} feature(s) of removed type(s): ${types.join(", ")}`);
+      for (const id of orphanIds) this.doc.delete(id);
+      this.order = this.order.filter((id) => !orphanIds.includes(id));
+      if (this.selectedId && !this.doc.has(this.selectedId)) this.selectedId = null;
+    }
+    this.resolved.clear(); // styles re-resolve from the new descriptors
+    if (this.opts.toolbar) this.buildToolbar(this.opts.toolbar === true ? {} : this.opts.toolbar);
+    this.renderAll();
+    this.emitSelect(); // refresh the selected card (new bounds/style/options)
+  }
+
   private emitChange(): void {
     const snapshot = this.save();
     for (const cb of this.changeListeners) cb(snapshot);
@@ -2097,10 +2186,8 @@ export class SigwxDraw {
   private buildToolbar(options: ToolbarOptions): void {
     // `tools` picks which phenomena (and their order); defaults to all registered.
     const all = this.registry.all();
-    const toolIds = options.tools ?? this.profileTools; // explicit > profile > every registered def
-    const defs = toolIds
-      ? toolIds.map((t) => all.find((d) => d.type === t)).filter((d): d is PhenomenonDef => !!d)
-      : all;
+    const toolSpecs: ToolSpec[] | undefined = options.tools ?? this.profileTools; // explicit > profile > every registered def
+    const defOf = (t: string): PhenomenonDef | undefined => all.find((d) => d.type === t);
     const drawItem = (def: PhenomenonDef, top: boolean): ToolbarItem => ({
       id: def.type,
       title: def.label,
@@ -2108,27 +2195,56 @@ export class SigwxDraw {
       ...(top ? { toggle: true } : {}),
       onClick: () => this.draw(def.type),
     });
-    // Point markers (TC / volcano / radioactive — less common) are grouped into ONE split-button
-    // submenu (toggle): hover reveals the set, the trigger mirrors the last-picked marker and re-draws
-    // it on click; picking a child adopts it. Everything else stays a flat toggle button, in order.
-    const markerDefs = defs.filter(isPointMarker);
     const items: ToolbarItem[] = [];
-    let markersDone = false;
-    for (const def of defs) {
-      if (isPointMarker(def)) {
-        if (!markersDone) {
-          markersDone = true;
-          items.push({
-            id: "markers",
-            title: "Point markers",
-            ...(markerDefs[0]?.icon ? { svg: markerDefs[0]!.icon } : {}),
-            toggle: true,
-            children: markerDefs.map((d) => drawItem(d, false)),
-          });
+    if (toolSpecs?.some((t) => typeof t !== "string")) {
+      // DECLARATIVE palette (profile v2, spec §2d): strings are flat toggle buttons,
+      // `{ group, items }` entries are split-button submenus (the trigger mirrors the
+      // last-picked child — engine semantics of a group). No auto-grouping here: the
+      // profile says exactly what it wants.
+      for (const t of toolSpecs) {
+        if (typeof t === "string") {
+          const def = defOf(t);
+          if (def) items.push(drawItem(def, true));
+          continue;
         }
-        continue;
+        const children = t.items.map(defOf).filter((d): d is PhenomenonDef => !!d);
+        if (!children.length) continue;
+        // Group icon: explicit (atlas ref / inline, dressed ~22 px) or the first child's.
+        const icon = t.icon ? resolveGlyph(t.icon) : children[0]?.icon;
+        const svg = icon && !/\bwidth=/.test(icon) ? icon.replace("<svg", "<svg width='22' height='22'") : icon;
+        items.push({
+          id: t.group.toLowerCase().replace(/\s+/g, "-"),
+          title: t.group,
+          ...(svg ? { svg } : {}),
+          toggle: true,
+          children: children.map((d) => drawItem(d, false)),
+        });
       }
-      items.push(drawItem(def, true));
+    } else {
+      const flat = toolSpecs as string[] | undefined;
+      const defs = flat ? flat.map(defOf).filter((d): d is PhenomenonDef => !!d) : all;
+      // FLAT (legacy) list: the point markers (TC / volcano / radioactive — less common)
+      // are auto-grouped into ONE split-button submenu (toggle): hover reveals the set,
+      // the trigger mirrors the last-picked marker and re-draws it on click; picking a
+      // child adopts it. Everything else stays a flat toggle button, in order.
+      const markerDefs = defs.filter(isPointMarker);
+      let markersDone = false;
+      for (const def of defs) {
+        if (isPointMarker(def)) {
+          if (!markersDone) {
+            markersDone = true;
+            items.push({
+              id: "markers",
+              title: "Point markers",
+              ...(markerDefs[0]?.icon ? { svg: markerDefs[0]!.icon } : {}),
+              toggle: true,
+              children: markerDefs.map((d) => drawItem(d, false)),
+            });
+          }
+          continue;
+        }
+        items.push(drawItem(def, true));
+      }
     }
     if (options.clear !== false) {
       items.push({ id: "clear", title: "Clear all", svg: CLEAR_ICON, onClick: () => this.clear() });

@@ -2,6 +2,7 @@ import {
   AfterViewInit,
   Component,
   CUSTOM_ELEMENTS_SCHEMA,
+  effect,
   ElementRef,
   inject,
   OnDestroy,
@@ -11,7 +12,7 @@ import {
 import { DomSanitizer, SafeHtml } from "@angular/platform-browser";
 import { registerInteractiveCode } from "@softwarity/interactive-code";
 import { DEFAULT_STYLE, defaultRegistry, SigwxDraw } from "@softwarity/sigwx-draw";
-import type { PhenomenonConfig, SigwxStyleInput, SnapshotDelivery, SnapshotQuality, ToolbarPosition } from "@softwarity/sigwx-draw";
+import type { SigwxProfile, SigwxStyleInput, SnapshotDelivery, SnapshotQuality, ToolbarPosition } from "@softwarity/sigwx-draw";
 // Adapters live on dedicated subpaths so the root entry stays peer-free.
 import { MapLibreAdapter } from "@softwarity/sigwx-draw/maplibre";
 import { OpenLayersAdapter } from "@softwarity/sigwx-draw/openlayers";
@@ -37,6 +38,16 @@ registerInteractiveCode();
 const REGISTRY = defaultRegistry();
 
 type Engine = "maplibre" | "openlayers" | "leaflet";
+
+/** One editable attribute of the live profile, surfaced as an inline `<code-binding>`. */
+interface ProfileBinding {
+  key: string;
+  type: "color" | "number";
+  value: string;
+  min?: number;
+  max?: number;
+  step?: number;
+}
 
 const ADAPTER_NAME: Record<Engine, string> = {
   maplibre: "MapLibreAdapter",
@@ -100,11 +111,28 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
   protected readonly mapImport = signal('import { Map } from "maplibre-gl";');
   /** Pretty-printed GeoJSON from the latest `change` event. */
   protected readonly geojson = signal("// draw a phenomenon — the FeatureCollection appears here");
+  /** The LIVE profile (the single source of truth) — the editor below mutates THIS object
+   *  and calls `setProfile`; the new mechanism, no per-phenomenon runtime API. */
+  private profile?: SigwxProfile;
+  /** The profile rendered AS editable code: the JSON with `${key}` markers at the
+   *  pertinent attributes (colours, opacities), bound to the `<code-binding>` list. */
+  protected readonly profileCode = signal("// the chart profile (JSON) appears here once loaded");
+  protected readonly profileBindings = signal<ProfileBinding[]>([]);
+  /** The right-hand profile editor drawer (opened by the `✎ edit` button in the config). */
+  protected readonly drawerOpen = signal(false);
+  /** Lock the page scroll while the drawer is open (modal pattern) — kills the second
+   *  scrollbar (the page's, behind the drawer); only the drawer's own scroll remains. */
+  private readonly _lockScroll = effect(() => {
+    document.body.style.overflow = this.drawerOpen() ? "hidden" : "";
+  });
+  /** The chosen chart profile (the carousel at the top of the config). One for now — `wafs`;
+   *  HL/ML/LL (and TEMSI) join the list as their JSON files land. */
+  protected readonly profileName = signal("wafs");
+  /** marker key → path into the profile (e.g. `e3` → ["objects",1,"style","color"]). */
+  private readonly editorPaths = new Map<string, (string | number)[]>();
 
   /** Live GENERAL style edits (chrome: selection / handles / slider / dial / tooltip). */
   private genStyle?: SigwxStyleInput;
-  /** Per-phenomenon config (speed/flightLevel + style + extra CB coverages) from the bottom cards. */
-  private phenoCfg: Record<string, PhenomenonConfig> = {};
   /** Whether the native toolbar is rendered (toggled via the block comment). */
   private toolbarOn = true;
   /** Live toolbar position edited in the panel. Its row/column flow is DERIVED from this
@@ -135,6 +163,7 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    document.body.style.overflow = ""; // restore page scroll if destroyed with the drawer open
     this.teardown();
   }
 
@@ -178,6 +207,17 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
    */
   protected onPanelChange(ev: Event): void {
     const t = ev.target as { key?: string; value?: unknown } | null;
+    // The `edit` button binding (interactive-code 1.1.0 `type="button"`) opens the drawer.
+    if (t?.key === "editProfile") {
+      this.drawerOpen.set(true);
+      return;
+    }
+    // The `profile` carousel switches the chart definition (one profile today: `wafs`).
+    if (t?.key === "profileName") {
+      this.profileName.set(String(t.value));
+      // Future: load the chosen profile JSON and `setProfile` it.
+      return;
+    }
     if (t?.key === "adapter") {
       this.setEngine(ENGINE_BY_ADAPTER[String(t.value)] ?? "maplibre");
       return;
@@ -249,107 +289,104 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Per-phenomenon card (the optional row below the map) — the `phenomena[type]`
-   * option node: `speed` (jet dial bounds) / `flightLevel` (turbulence FL range) +
-   * `style` (shape ink, FL text, glyph, dashed-edge width/dash). All live in comment
-   * blocks (off → default look). Jet speed rebuilds; FL range + style apply live.
+   * Build the EDITABLE profile view: serialize the live profile, then surface its
+   * pertinent attributes (every style colour + the fill opacities) as inline
+   * `<code-binding>` markers. Editing one fires `onProfileEdit` → patches the profile →
+   * `setProfile`. THIS is the new mechanism made visible: the JSON below is the source
+   * of truth, the controls live inside it, the Download button hands you the file.
    */
-  protected onPhenoChange(type: Phenomenon, ev: Event): void {
-    const host = ev.currentTarget as HTMLElement;
-    const val = (k: string): unknown =>
-      (host.querySelector(`code-binding[key="${k}"]`) as { value?: unknown } | null)?.value;
-    const col = (k: string): string => String(val(k));
-    const on = (k: string): boolean => val(k) === true || val(k) === "true";
-    const changed = (ev.target as { key?: string } | null)?.key;
-
-    const cfg: PhenomenonConfig = {};
-    if (type === "jetStream") {
-      if (on("jLim")) cfg.speed = { min: Number(val("jMin")), max: Number(val("jMax")) };
-      if (on("jFL")) cfg.flightLevel = { min: Number(val("jFLMin")), max: Number(val("jFLMax")), default: Number(val("jFLDef")) };
-      if (on("jOn")) {
-        cfg.style = {
-          arrow: { color: col("jColor"), width: Number(val("jWidth")) },
-          text: { color: col("jText"), halo: col("jHalo") },
-        };
+  private buildProfileEditor(): void {
+    this.editorPaths.clear();
+    if (!this.profile) return;
+    const bindings: ProfileBinding[] = [];
+    const clone = structuredClone(this.profile) as Record<string, any>;
+    const SENT = (k: string): string => "@@SIGWX_BIND_" + k + "@@";
+    let n = 0;
+    const color = (host: any, key: string, path: (string | number)[]): void => {
+      if (typeof host?.[key] !== "string") return;
+      const k = "e" + n++;
+      this.editorPaths.set(k, [...path, key]);
+      bindings.push({ key: k, type: "color", value: host[key] as string });
+      host[key] = SENT(k);
+    };
+    const opacity = (host: any, key: string, path: (string | number)[]): void => {
+      if (typeof host?.[key] !== "number") return;
+      const k = "e" + n++;
+      this.editorPaths.set(k, [...path, key]);
+      bindings.push({ key: k, type: "number", value: String(host[key]), min: 0, max: 1, step: 0.02 });
+      host[key] = SENT(k);
+    };
+    const objects = (clone["objects"] as Record<string, any>[] | undefined) ?? [];
+    objects.forEach((o, i) => {
+      const st = o?.["style"] as Record<string, any> | undefined;
+      if (!st) return;
+      const p: (string | number)[] = ["objects", i, "style"];
+      color(st, "color", p);
+      for (const sub of ["edge", "area", "text", "mod", "sev", "arrow"]) {
+        if (st[sub]) { color(st[sub], "color", [...p, sub]); color(st[sub], "halo", [...p, sub]); }
       }
-    } else if (type === "turbulence") {
-      if (on("tLim")) {
-        cfg.flightLevel = {
-          min: Number(val("tMin")),
-          max: Number(val("tMax")),
-          default: [Number(val("tBase")), Number(val("tTop"))],
-          beyond: [col("tBeyLo"), col("tBeyHi")] as ["clamp" | "xxx", "clamp" | "xxx"],
-        };
-      }
-      if (on("tOn")) {
-        cfg.style = {
-          mod: { color: col("tMod") },
-          sev: { color: col("tSev") },
-          edge: { width: Number(val("tEdgeW")), dash: [Number(val("tDashOn")), Number(val("tDashGap"))] },
-          area: { opacity: Number(val("tAreaOp")) },
-          text: { halo: col("tHalo") },
-        };
-      }
-    } else if (type === "cb") {
-      cfg.leaderThunderbolt = on("cBolt");
-      // Extra coverage amounts appended to the OCNL/FRQ carousel (a construction-time catalogue).
-      if (on("cExtra")) cfg.extraCoverages = ["ISOL EMBD", "OCNL EMBD"];
-      if (on("cFL")) {
-        cfg.flightLevel = {
-          min: Number(val("cMin")),
-          max: Number(val("cMax")),
-          default: [Number(val("cBase")), Number(val("cTop"))],
-          beyond: [col("cBeyLo"), col("cBeyHi")] as ["clamp" | "xxx", "clamp" | "xxx"],
-        };
-      }
-      if (on("cOn")) {
-        cfg.style = {
-          edge: { color: col("cEdge") },
-          area: { opacity: Number(val("cAreaOp")) },
-        };
-      }
-    } else if (type === "icing") {
-      cfg.leaderThunderbolt = on("iBolt");
-      if (on("iFL")) {
-        cfg.flightLevel = {
-          min: Number(val("iMin")),
-          max: Number(val("iMax")),
-          default: [Number(val("iBase")), Number(val("iTop"))],
-          beyond: [col("iBeyLo"), col("iBeyHi")] as ["clamp" | "xxx", "clamp" | "xxx"],
-        };
-      }
-      if (on("iOn")) {
-        // MOD/SEV inks (same hue, lighter/darker) drive the purple edge + fill, like CAT.
-        cfg.style = {
-          mod: { color: col("iMod") },
-          sev: { color: col("iSev") },
-          area: { opacity: Number(val("iAreaOp")) },
-        };
-      }
-    } else if (type === "tropopause") {
-      // One value per feature (a contour/spot carries a single FL) → a single `default`.
-      if (on("pFL")) {
-        cfg.flightLevel = { min: Number(val("pMin")), max: Number(val("pMax")), default: Number(val("pDef")) };
-      }
-      // The dotted iso-line + its FL label share one colour.
-      if (on("pOn")) {
-        cfg.style = { edge: { color: col("pEdge") }, text: { color: col("pEdge") } };
-      }
-    } else if (type === "volcano" || type === "tropicalCyclone" || type === "radioactive") {
-      // Marker widgets: `color` inks the glyph + card frame; `text` lets the name/coord
-      // deviate (colour + font px) — or follow the ink when left out.
-      const p = type === "volcano" ? "v" : type === "tropicalCyclone" ? "y" : "r";
-      if (on(p + "On")) cfg.style = { color: col(p + "Color"), text: { color: col(p + "Text"), size: Number(val(p + "Size")) } };
+      if (st["area"]) opacity(st["area"], "opacity", [...p, "area"]);
+    });
+    // Serialize, then turn the sentinels into ${key} markers — a colour stays quoted
+    // ("${e0}"), a number is unquoted (${e1}).
+    let code = JSON.stringify(clone, null, 2);
+    for (const b of bindings) {
+      const marker = "${" + b.key + "}";
+      code = b.type === "number"
+        ? code.replace('"' + SENT(b.key) + '"', marker)
+        : code.replace(SENT(b.key), marker);
     }
-    this.phenoCfg = { ...this.phenoCfg, [type]: cfg };
+    // Fold the structural / verbose sections by default — the glyph atlas and each
+    // object's gesture/fields/render/card/satellites. Only `style` (the editable colours)
+    // stays open, so opening the drawer shows what's tweakable. interactive-code 1.1.1
+    // `${fold}` … `${/fold}` markers (collapsed; the marker lines are stripped from the
+    // copy/download, so the exported JSON stays complete and valid).
+    const FOLDABLE = new Set(["glyphs", "gesture", "fields", "render", "card", "satellites"]);
+    const src = code.split("\n");
+    const folded: string[] = [];
+    let openIndent: string | null = null;
+    for (const line of src) {
+      if (openIndent === null) {
+        const m = /^(\s*)"(\w+)":\s*[{[]\s*$/.exec(line);
+        if (m && FOLDABLE.has(m[2])) {
+          folded.push(line, "${fold}");
+          openIndent = m[1];
+          continue;
+        }
+      } else if (new RegExp(`^${openIndent}[}\\]],?\\s*$`).test(line)) {
+        folded.push("${/fold}", line);
+        openIndent = null;
+        continue;
+      }
+      folded.push(line);
+    }
+    this.profileCode.set(folded.join("\n"));
+    this.profileBindings.set(bindings);
+  }
 
-    // Jet SPEED range is a construction-time option → rebuild. Every flightLevel field
-    // (jet + turbulence) applies live (gauge cursors re-clamp at once); style applies live too.
-    const flKeys = ["jFL", "jFLMin", "jFLMax", "jFLDef", "tLim", "tMin", "tMax", "tBase", "tTop", "tBeyLo", "tBeyHi", "cFL", "cMin", "cMax", "cBase", "cTop", "cBeyLo", "cBeyHi", "iFL", "iMin", "iMax", "iBase", "iTop", "iBeyLo", "iBeyHi", "pFL", "pMin", "pMax", "pDef"];
-    // Jet speed + CB/icing leaderThunderbolt/coverages are construction-time → rebuild (geometry preserved).
-    if (changed === "jMin" || changed === "jMax" || changed === "jLim" || changed === "cBolt" || changed === "cExtra" || changed === "iBolt") void this.rebuild();
-    else if (changed && flKeys.includes(changed)) this.sigwx?.setPhenomenonFlightLevel(type, cfg.flightLevel ?? {});
-    else this.sigwx?.setPhenomenonStyle(type, cfg.style ?? {});
+  /** A `<code-binding>` edit inside the profile view → write the value at its path,
+   *  re-ingest the whole profile (`setProfile`), keep the drawn features. */
+  protected onProfileEdit(ev: Event): void {
+    const t = ev.target as { key?: string; value?: unknown } | null;
+    const path = t?.key ? this.editorPaths.get(t.key) : undefined;
+    if (!path || !this.profile) return;
+    let host = this.profile as Record<string, any>;
+    for (let i = 0; i < path.length - 1; i++) host = host[path[i]] as Record<string, any>;
+    const last = path[path.length - 1];
+    host[last] = typeof host[last] === "number" ? Number(t!.value) : String(t!.value);
+    this.sigwx?.setProfile(this.profile);
+  }
+
+  /** Download the LIVE profile as a `.json` — drop it in your app and inject it as-is. */
+  protected downloadProfile(): void {
+    if (!this.profile) return;
+    const blob = new Blob([JSON.stringify(this.profile, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${this.profile.id}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   private teardown(): void {
@@ -374,6 +411,13 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
       // Keep the current drawing across an engine switch / rebuild — capture before teardown,
       // re-`load` it once the fresh instance is ready (same as sigmet-draw's demo).
       const keep = this.sigwx?.save();
+      // The chart is driven by ONE profile (the source of truth) — load an editable copy
+      // of the default JSON once; the editor panel mutates it and calls setProfile.
+      if (!this.profile) {
+        const base = (await import("@softwarity/sigwx-draw/profiles/wafs.json")).default as unknown as SigwxProfile;
+        this.profile = structuredClone(base);
+        this.buildProfileEditor();
+      }
 
       this.teardown();
 
@@ -428,8 +472,8 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
           : undefined,
         // Global chrome only (selection / handles / slider / dial / tooltip).
         style: this.genStyle,
-        // Per-phenomenon config (speed/flightLevel + style) — re-applied across an engine switch.
-        phenomena: this.phenoCfg,
+        // THE single ingestion unit — a pure-JSON chart profile (the cards edit it live).
+        profile: this.profile,
       });
       this.sigwx.on("change", (fc: FeatureCollection) => {
         this.geojson.set(

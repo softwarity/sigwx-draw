@@ -16,14 +16,8 @@
       "types": "./dist/core/index.d.ts",
       "import": "./dist/core/index.js"
     },
-    "./profiles": {
-      "types": "./dist/profiles/index.d.ts",
-      "import": "./dist/profiles/index.js"
-    },
-    "./profiles/*": {
-      "types": "./dist/profiles/*.d.ts",
-      "import": "./dist/profiles/*.js"
-    },
+    "./profiles/*.json": "./dist/profiles/*.json",
+    "./profiles/*": "./dist/profiles/*.json",
     "./maplibre": {
       "types": "./dist/map/maplibre-adapter.d.ts",
       "import": "./dist/map/maplibre-adapter.js"
@@ -43,7 +37,7 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "rm -rf dist && tsc -p tsconfig.json",
     "build:watch": "tsc -w -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -53,7 +47,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@softwarity/draw-adapter": "^0.3.3",
+    "@softwarity/draw-adapter": "^0.3.4",
     "@types/geojson": "^7946.0.14",
     "polyclip-ts": "^0.16.8"
   },

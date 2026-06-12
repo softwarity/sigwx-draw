@@ -53,14 +53,20 @@ export {
 } from "./phenomenon.js";
 
 export * from "./decorate/index.js";
+export * from "./descriptor/index.js";
+export { VOLCANO_DESCRIPTOR, RADIOACTIVE_DESCRIPTOR, TROPICAL_CYCLONE_DESCRIPTOR } from "./descriptors/markers.js";
 
 export { BUILTIN_PHENOMENA, defaultRegistry, jetStream, cb, icing, turbulence, tropopause, volcano, tropicalCyclone, radioactive } from "./registry.js";
-export { makeTurbulence, DEFAULT_TURBULENCE_SYMBOLS } from "./phenomena/turbulence.js";
-export type { TurbulenceSymbol } from "./phenomena/turbulence.js";
-export { makeCb, DEFAULT_CB_COVERAGE, CB_CLOUD_TYPE_BUFR } from "./phenomena/cb.js";
-export type { CbCoverage } from "./phenomena/cb.js";
-export { makeIcing, DEFAULT_ICING_SYMBOLS } from "./phenomena/icing.js";
-export type { IcingSymbol } from "./phenomena/icing.js";
+export { makeTurbulence, DEFAULT_TURBULENCE_SYMBOLS, TURBULENCE_DESCRIPTOR, turbulenceDescriptor } from "./descriptors/turbulence.js";
+export type { TurbulenceSymbol } from "./descriptors/turbulence.js";
+export { makeCb, DEFAULT_CB_COVERAGE, CB_CLOUD_TYPE_BUFR, CB_DESCRIPTOR, cbDescriptor } from "./descriptors/cb.js";
+export type { CbCoverage } from "./descriptors/cb.js";
+export { makeIcing, DEFAULT_ICING_SYMBOLS, ICING_DESCRIPTOR, icingDescriptor } from "./descriptors/icing.js";
+export type { IcingSymbol } from "./descriptors/icing.js";
+export { TROPOPAUSE_DESCRIPTOR } from "./descriptors/tropopause.js";
+export { JET_STREAM_DESCRIPTOR } from "./descriptors/jet-stream.js";
+export { BUILTIN_DESCRIPTORS, resolveObjectSpec } from "./descriptors/index.js";
+export { STOCK_GLYPHS } from "./descriptors/glyphs.js";
 
 export type { SigwxFeature, SigwxFeatureProps } from "./geojson.js";
 export { toFeatureCollection, fromFeatureCollection } from "./geojson.js";

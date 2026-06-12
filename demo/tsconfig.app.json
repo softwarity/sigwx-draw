@@ -7,6 +7,7 @@
     "paths": {
       "@softwarity/sigwx-draw": ["../dist/index"],
       "@softwarity/sigwx-draw/core": ["../dist/core/index"],
+      "@softwarity/sigwx-draw/profiles/*.json": ["../dist/profiles/*.json"],
       "@softwarity/sigwx-draw/maplibre": ["../dist/map/maplibre-adapter"],
       "@softwarity/sigwx-draw/openlayers": ["../dist/map/openlayers-adapter"],
       "@softwarity/sigwx-draw/leaflet": ["../dist/map/leaflet-adapter"],

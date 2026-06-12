@@ -9,12 +9,14 @@
     <aside class="stage-style" (change)="onPanelChange($event)">
       <interactive-code language="typescript" show-copy>
         <textarea>import { SigwxDraw, ${adapter} } from "@softwarity/sigwx-draw";
+import ${profileImport} from "@softwarity/sigwx-draw/profiles/${profileImport}.json" with { type: "json" };
 ${mapImport}
 
 const map = new Map({ /* your basemap, controls, projection */ });
 
 const sigwx = new SigwxDraw({
   adapter: new ${adapter}({ map }),
+  profile: ${profileName}, ${editProfile}
 ${tbOff}  toolbar: {
     // the bar's flow (row/column) is derived from this — no more `orientation`
     position: "${tbPosition}",
@@ -40,9 +42,10 @@ ${control}    control: {
     },${/control}
 ${tooltip}    tooltip: { color: "${tipColor}", background: "${tipBg}", fontSize: ${tipSize} },
   },
-  // see the cards below
-  phenomena: { … },
 });</textarea>
+        <code-binding key="profileName" type="select" options="wafs" value="wafs" carousel></code-binding>
+        <code-binding key="profileImport" type="readonly" [value]="profileName()"></code-binding>
+        <code-binding key="editProfile" type="button" value="edit"></code-binding>
         <code-binding key="adapter" type="select" options="MapLibreAdapter,OpenLayersAdapter,LeafletAdapter" [value]="adapterName()" carousel></code-binding>
         <code-binding key="mapImport" type="readonly" [value]="mapImport()"></code-binding>
         <code-binding key="tbOff" type="comment" value="true"></code-binding>
@@ -81,249 +84,6 @@ ${tooltip}    tooltip: { color: "${tipColor}", background: "${tipBg}", fontSize:
     off the line to delete it; the blue end points are fixed at 80&nbsp;kt and reshape the curve.
   </p>
 
-  <h2 class="api">Per-phenomenon config <span class="opt">— optional</span></h2>
-  <p class="muted">
-    The chrome you tune on the right — selection, handles, sliders, the speed dial, the tooltip —
-    is <strong>global</strong>. Everything specific to one phenomenon lives under
-    <code>phenomena: &#123; &lt;type&gt;: &#123; speed?, flightLevel?, style? &#125; &#125;</code>:
-    its numeric bounds (jet <code>speed</code>, turbulence <code>flightLevel</code>) and its <strong>own</strong> visual tokens — the shape colour
-    (jet axis&nbsp;+&nbsp;arrow&nbsp;+&nbsp;feathers; turbulence dashed edge&nbsp;+&nbsp;fill), the FL text,
-    the severity glyph. One card each — all shown below. The blocks start
-    <strong>commented out</strong> with bold alternative values — un-comment one to apply it live.
-  </p>
-  <div class="pheno-configs">
-    <div class="pheno-card" (change)="onPhenoChange('jetStream', $event)">
-      <header><span class="ic" [innerHTML]="icon('jetStream')"></span> Jet stream</header>
-      <interactive-code language="typescript" show-copy>
-        <textarea>phenomena: {
-  jetStream: {
-${jLim}    speed: { min: ${jMin}, max: ${jMax} },
-${jFL}    flightLevel: {
-      min: ${jFLMin}, max: ${jFLMax},
-      default: ${jFLDef},
-    },${/jFL}
-${jOn}    style: {
-      arrow: { color: "${jColor}", width: ${jWidth} },
-      text: { color: "${jText}", halo: "${jHalo}" },
-    },${/jOn}
-  },
-},</textarea>
-        <code-binding key="jLim" type="comment" value="false"></code-binding>
-        <code-binding key="jMin" type="number" value="100" min="40" max="160" step="10"></code-binding>
-        <code-binding key="jMax" type="number" value="200" min="160" max="350" step="10"></code-binding>
-        <code-binding key="jFL" type="comment" value="false"></code-binding>
-        <code-binding key="jFLMin" type="number" value="200" min="100" max="300" step="10"></code-binding>
-        <code-binding key="jFLMax" type="number" value="520" min="350" max="600" step="10"></code-binding>
-        <code-binding key="jFLDef" type="number" value="290" min="200" max="560" step="10"></code-binding>
-        <code-binding key="jOn" type="comment" value="false"></code-binding>
-        <code-binding key="jColor" type="color" value="#0b69ff"></code-binding>
-        <code-binding key="jWidth" type="number" value="4" min="1" max="6" step="1"></code-binding>
-        <code-binding key="jText" type="color" value="#0b69ff"></code-binding>
-        <code-binding key="jHalo" type="color" value="#fff8c5"></code-binding>
-      </interactive-code>
-    </div>
-
-    <div class="pheno-card" (change)="onPhenoChange('turbulence', $event)">
-      <header><span class="ic" [innerHTML]="icon('turbulence')"></span> Turbulence</header>
-      <interactive-code language="typescript" show-copy>
-        <textarea>phenomena: {
-  turbulence: {
-    // FL range + default [base, top] + per-bound off-chart mode ("clamp" | "xxx")
-${tLim}    flightLevel: {
-      min: ${tMin}, max: ${tMax},
-      default: [${tBase}, ${tTop}],
-      beyond: ["${tBeyLo}", "${tBeyHi}"],
-    },${/tLim}
-${tOn}    style: {
-      // MOD ink (lighter)
-      mod: { color: "${tMod}" },
-      // SEV ink (darker) — drives edge + fill + glyph + FL text
-      sev: { color: "${tSev}" },
-      edge: { width: ${tEdgeW}, dash: [${tDashOn}, ${tDashGap}] },
-      area: { opacity: ${tAreaOp} },
-      // colour follows mod/sev; halo = readability
-      text: { halo: "${tHalo}" },
-    },${/tOn}
-  },
-},</textarea>
-        <code-binding key="tLim" type="comment" value="false"></code-binding>
-        <code-binding key="tMin" type="number" value="200" min="100" max="300" step="10"></code-binding>
-        <code-binding key="tMax" type="number" value="550" min="400" max="600" step="10"></code-binding>
-        <code-binding key="tBase" type="number" value="220" min="200" max="400" step="10"></code-binding>
-        <code-binding key="tTop" type="number" value="400" min="300" max="600" step="10"></code-binding>
-        <code-binding key="tBeyLo" type="select" options="clamp,xxx" value="clamp"></code-binding>
-        <code-binding key="tBeyHi" type="select" options="clamp,xxx" value="xxx"></code-binding>
-        <code-binding key="tOn" type="comment" value="false"></code-binding>
-        <code-binding key="tMod" type="color" value="#74c0fc"></code-binding>
-        <code-binding key="tSev" type="color" value="#1971c2"></code-binding>
-        <code-binding key="tEdgeW" type="number" value="4" min="1" max="8" step="0.5"></code-binding>
-        <code-binding key="tDashOn" type="number" value="6" min="1" max="12" step="1"></code-binding>
-        <code-binding key="tDashGap" type="number" value="3" min="0" max="12" step="1"></code-binding>
-        <code-binding key="tAreaOp" type="number" value="0.2" min="0" max="0.6" step="0.05"></code-binding>
-        <code-binding key="tHalo" type="color" value="#fff8c5"></code-binding>
-      </interactive-code>
-    </div>
-
-    <div class="pheno-card" (change)="onPhenoChange('cb', $event)">
-      <header><span class="ic" [innerHTML]="icon('cb')"></span> Cumulonimbus (CB)</header>
-      <interactive-code language="typescript" show-copy>
-        <textarea>phenomena: {
-  cb: {
-    // Extra coverage amounts → appended to the OCNL/FRQ carousel:
-${cExtra}    extraCoverages: ["ISOL EMBD", "OCNL EMBD"],
-    // ⚡ lightning leader (false → plain straight)
-    leaderThunderbolt: ${cBolt},
-    // FL range + default [base, top] + per-bound off-chart mode ("clamp" | "xxx")
-${cFL}    flightLevel: {
-      min: ${cMin}, max: ${cMax},
-      default: [${cBase}, ${cTop}],
-      beyond: ["${cBeyLo}", "${cBeyHi}"],
-    },${/cFL}
-${cOn}    style: {
-      edge: { color: "${cEdge}" },
-      area: { opacity: ${cAreaOp} },
-    },${/cOn}
-  },
-},</textarea>
-        <code-binding key="cBolt" type="boolean" value="true"></code-binding>
-        <code-binding key="cExtra" type="comment" value="false"></code-binding>
-        <code-binding key="cFL" type="comment" value="false"></code-binding>
-        <code-binding key="cMin" type="number" value="200" min="100" max="300" step="10"></code-binding>
-        <code-binding key="cMax" type="number" value="550" min="400" max="630" step="10"></code-binding>
-        <code-binding key="cBase" type="number" value="220" min="200" max="400" step="10"></code-binding>
-        <code-binding key="cTop" type="number" value="380" min="300" max="600" step="10"></code-binding>
-        <code-binding key="cBeyLo" type="select" options="clamp,xxx" value="xxx"></code-binding>
-        <code-binding key="cBeyHi" type="select" options="clamp,xxx" value="xxx"></code-binding>
-        <code-binding key="cOn" type="comment" value="false"></code-binding>
-        <code-binding key="cEdge" type="color" value="#e8590c"></code-binding>
-        <code-binding key="cAreaOp" type="number" value="0.18" min="0" max="0.5" step="0.02"></code-binding>
-      </interactive-code>
-    </div>
-
-    <div class="pheno-card" (change)="onPhenoChange('icing', $event)">
-      <header><span class="ic" [innerHTML]="icon('icing')"></span> Icing</header>
-      <interactive-code language="typescript" show-copy>
-        <textarea>phenomena: {
-  icing: {
-    // ⚡ lightning leader (false → plain straight)
-    leaderThunderbolt: ${iBolt},
-    // FL range + default [base, top] + per-bound off-chart mode ("clamp" | "xxx")
-${iFL}    flightLevel: {
-      min: ${iMin}, max: ${iMax},
-      default: [${iBase}, ${iTop}],
-      beyond: ["${iBeyLo}", "${iBeyHi}"],
-    },${/iFL}
-${iOn}    style: {
-      // MOD ink (lighter purple)
-      mod: { color: "${iMod}" },
-      // SEV ink (darker purple) — drives edge + fill
-      sev: { color: "${iSev}" },
-      area: { opacity: ${iAreaOp} },
-    },${/iOn}
-  },
-},</textarea>
-        <code-binding key="iBolt" type="boolean" value="true"></code-binding>
-        <code-binding key="iFL" type="comment" value="false"></code-binding>
-        <code-binding key="iMin" type="number" value="200" min="100" max="300" step="10"></code-binding>
-        <code-binding key="iMax" type="number" value="550" min="400" max="600" step="10"></code-binding>
-        <code-binding key="iBase" type="number" value="220" min="200" max="400" step="10"></code-binding>
-        <code-binding key="iTop" type="number" value="380" min="300" max="600" step="10"></code-binding>
-        <code-binding key="iBeyLo" type="select" options="clamp,xxx" value="xxx"></code-binding>
-        <code-binding key="iBeyHi" type="select" options="clamp,xxx" value="xxx"></code-binding>
-        <code-binding key="iOn" type="comment" value="false"></code-binding>
-        <code-binding key="iMod" type="color" value="#a371f7"></code-binding>
-        <code-binding key="iSev" type="color" value="#6639ba"></code-binding>
-        <code-binding key="iAreaOp" type="number" value="0.18" min="0" max="0.5" step="0.02"></code-binding>
-      </interactive-code>
-    </div>
-
-    <div class="pheno-card" (change)="onPhenoChange('tropopause', $event)">
-      <header><span class="ic" [innerHTML]="icon('tropopause')"></span> Tropopause</header>
-      <interactive-code language="typescript" show-copy>
-        <textarea>phenomena: {
-  tropopause: {
-    // ONE value per feature — a contour (line) or a spot (point) carries a single FL
-${pFL}    flightLevel: {
-      min: ${pMin}, max: ${pMax},
-      default: ${pDef},
-    },${/pFL}
-${pOn}    style: {
-      // the dotted iso-line + its FL label (one colour)
-      edge: { color: "${pEdge}" },
-      text: { color: "${pEdge}" },
-    },${/pOn}
-  },
-},</textarea>
-        <code-binding key="pFL" type="comment" value="false"></code-binding>
-        <code-binding key="pMin" type="number" value="250" min="150" max="350" step="10"></code-binding>
-        <code-binding key="pMax" type="number" value="600" min="400" max="650" step="10"></code-binding>
-        <code-binding key="pDef" type="number" value="380" min="250" max="600" step="10"></code-binding>
-        <code-binding key="pOn" type="comment" value="false"></code-binding>
-        <code-binding key="pEdge" type="color" value="#0b6bcb"></code-binding>
-      </interactive-code>
-    </div>
-
-    <div class="pheno-card" (change)="onPhenoChange('volcano', $event)">
-      <header><span class="ic" [innerHTML]="icon('volcano')"></span> Volcanic eruption</header>
-      <interactive-code language="typescript" show-copy>
-        <textarea>phenomena: {
-  volcano: {
-${vOn}    style: {
-      // ink: glyph + name/coord + card frame
-      color: "${vColor}",
-      // name/coord: own colour (drop it to follow the ink) + font px
-      text: { color: "${vText}", size: ${vSize} },
-    },${/vOn}
-  },
-},</textarea>
-        <code-binding key="vOn" type="comment" value="false"></code-binding>
-        <code-binding key="vColor" type="color" value="#9a3412"></code-binding>
-        <code-binding key="vText" type="color" value="#0969da"></code-binding>
-        <code-binding key="vSize" type="number" value="16" min="10" max="20" step="1"></code-binding>
-      </interactive-code>
-    </div>
-
-    <div class="pheno-card" (change)="onPhenoChange('tropicalCyclone', $event)">
-      <header><span class="ic" [innerHTML]="icon('tropicalCyclone')"></span> Tropical cyclone</header>
-      <interactive-code language="typescript" show-copy>
-        <textarea>phenomena: {
-  tropicalCyclone: {
-${yOn}    style: {
-      // ink: spiral glyph + the editable name
-      color: "${yColor}",
-      // name: own colour (drop it to follow the ink) + font px
-      text: { color: "${yText}", size: ${ySize} },
-    },${/yOn}
-  },
-},</textarea>
-        <code-binding key="yOn" type="comment" value="false"></code-binding>
-        <code-binding key="yColor" type="color" value="#0b6bcb"></code-binding>
-        <code-binding key="yText" type="color" value="#d1242f"></code-binding>
-        <code-binding key="ySize" type="number" value="16" min="10" max="20" step="1"></code-binding>
-      </interactive-code>
-    </div>
-
-    <div class="pheno-card" (change)="onPhenoChange('radioactive', $event)">
-      <header><span class="ic" [innerHTML]="icon('radioactive')"></span> Radioactive spot</header>
-      <interactive-code language="typescript" show-copy>
-        <textarea>phenomena: {
-  radioactive: {
-${rOn}    style: {
-      // ink: trefoil glyph + name/coord + card frame
-      color: "${rColor}",
-      // name/coord: own colour (drop it to follow the ink) + font px
-      text: { color: "${rText}", size: ${rSize} },
-    },${/rOn}
-  },
-},</textarea>
-        <code-binding key="rOn" type="comment" value="false"></code-binding>
-        <code-binding key="rColor" type="color" value="#b45309"></code-binding>
-        <code-binding key="rText" type="color" value="#1f883d"></code-binding>
-        <code-binding key="rSize" type="number" value="16" min="10" max="20" step="1"></code-binding>
-      </interactive-code>
-    </div>
-  </div>
-
   <h2 class="api">Every phenomenon is one call</h2>
   <p class="muted">
     The <strong>jet stream</strong> is the flagship — a smooth directional curve whose barbs,
@@ -348,18 +108,24 @@ ${rOn}    style: {
   </p>
   <pre class="geojson">{{ geojson() }}</pre>
 
+
   <h2 class="api">All options — <code>new SigwxDraw(options)</code></h2>
   <table class="ref">
     <thead><tr><th>Option</th><th>Type</th><th>Default</th><th>What it does</th></tr></thead>
     <tbody>
       <tr><td><code>adapter</code></td><td><code>MapAdapter</code></td><td>—</td><td><strong>Required.</strong> Wraps your map — <code>new MapLibreAdapter(&#123; map &#125;)</code> or <code>new OpenLayersAdapter(&#123; map &#125;)</code>.</td></tr>
       <tr><td><code>toolbar</code></td><td><code>boolean | ToolbarOptions</code></td><td>—</td><td>Render the turnkey native toolbar, auto-built from the registry. <code>true</code> for defaults, or <code>&#123; position, lock, padding, gap, className &#125;</code> (the bar's flow follows <code>position</code>). Omit for none.</td></tr>
+      <tr><td><code>profile</code></td><td><code>SigwxProfile</code></td><td><code>wafs</code></td><td><strong>The chart definition</strong> — one self-contained JSON (vertical bounds, inline glyph atlas, the full descriptors, the tools palette). Omit ⇒ the bundled <code>wafs</code> preset. Edit it in the <code>✎ edit</code> drawer.</td></tr>
       <tr><td><code>style</code></td><td><code>SigwxStyleInput</code></td><td><code>DEFAULT_STYLE</code></td><td><strong>Global chrome only</strong> (selection, handles, slider, control handles, tooltip), merged onto the defaults.</td></tr>
-      <tr><td><code>phenomena</code></td><td><code>Record&lt;type, &#123; speed?, flightLevel?, style? &#125;&gt;</code></td><td><code>&#123;&#125;</code></td><td>Per-phenomenon config: <code>speed</code> (jet dial range), <code>flightLevel</code> (turbulence/CB chart FL range; beyond it shows XXX), <code>style</code> (that phenomenon's visual tokens).</td></tr>
-      <tr><td><code>registry</code></td><td><code>PhenomenonRegistry</code></td><td><code>defaultRegistry()</code></td><td>Override/extend the set of phenomena driving the toolbar &amp; rendering.</td></tr>
-      <tr><td><code>symbolSprite</code></td><td><code>SymbolSprites</code></td><td>built-in</td><td>Replace the glyph atlas (sprite id → inline SVG) used by the symbol layer.</td></tr>
+      <tr><td><code>callouts</code></td><td><code>&#123; minZoneFraction? &#125;</code></td><td><code>0.15</code></td><td>Chrome-declutter threshold: an unselected feature smaller than this fraction of the view hides its call-out/labels.</td></tr>
     </tbody>
   </table>
+  <p class="muted">
+    A phenomenon's own config (catalogues, bounds, style, glyphs) is <strong>not</strong> a
+    separate option anymore — it lives inside the <code>profile</code>. Edit the JSON and
+    re-inject it (<code>new SigwxDraw(&#123; profile &#125;)</code> or
+    <code>setProfile</code>).
+  </p>
 
   <h2 class="api">Events &amp; methods</h2>
   <table class="ref">
@@ -372,7 +138,7 @@ ${rOn}    style: {
       <tr><td><code>clear()</code></td><td>—</td><td>Remove every chart feature.</td></tr>
       <tr><td><code>save()</code> / <code>load(fc)</code></td><td><code>FeatureCollection</code> / —</td><td>Export the current chart / render an existing FeatureCollection.</td></tr>
       <tr><td><code>setStyle(partial)</code></td><td>—</td><td>Restyle the global chrome live (merged onto the current style).</td></tr>
-      <tr><td><code>setPhenomenonStyle(type, style)</code></td><td>—</td><td>Restyle one phenomenon's own tokens live — the runtime counterpart of <code>phenomena[type].style</code>; pass <code>&#123;&#125;</code> to revert.</td></tr>
+      <tr><td><code>setProfile(profile)</code></td><td>—</td><td>Re-ingest a (modified) profile live — recompiles its descriptors / glyphs / tools / bounds and re-renders, <strong>keeping the drawn document</strong>. The single config path.</td></tr>
       <tr><td><code>ready()</code> / <code>destroy()</code></td><td><code>Promise</code> / —</td><td>Resolves once grafted / detaches (leaves the host map intact).</td></tr>
     </tbody>
   </table>
@@ -390,8 +156,9 @@ ${rOn}    style: {
   </table>
   <p class="muted">
     A phenomenon's <strong>own</strong> tokens (axis/barb colour, CB fill, dashed edge, FL text,
-    severity glyph) are not here — set them per type via <code>phenomena[type].style</code> (option)
-    or <code>setPhenomenonStyle(type, …)</code> (runtime).
+    severity glyph) are not here — they live in the <strong>profile</strong>
+    (<code>objects[type].style</code>). Edit them in the <code>✎ edit</code> drawer and
+    re-inject via <code>setProfile</code>.
   </p>
 
   <h2 class="api">Phenomenon-driven rendering</h2>
@@ -403,15 +170,29 @@ ${rOn}    style: {
     <strong>CB</strong>: a scalloped edge. <strong>Turbulence</strong>: a dashed edge.
   </p>
 
-  <h2 class="api">Change the style at runtime</h2>
+  <h2 class="api">Change things at runtime</h2>
   <p class="muted">
-    Less common, but you can restyle after grafting — only what you pass is overridden,
-    the rest keeps its current value.
+    The global chrome restyles live; everything chart-specific is a profile edit, re-ingested
+    with <code>setProfile</code> (the drawn features are kept).
   </p>
   <interactive-code language="typescript" show-copy>
-    <textarea>sigwx.setStyle({ selection: { color: "#f0883e" } });          // global chrome
-sigwx.setPhenomenonStyle("jetStream", { color: "#0b69ff" });   // one phenomenon's tokens</textarea>
+    <textarea>sigwx.setStyle({ selection: { color: "#f0883e" } });   // global chrome (selection/handles/tooltip)
+
+profile.objects[0].style.color = "#0b69ff";           // one phenomenon token…
+sigwx.setProfile(profile);                            // …re-ingested live, drawing preserved</textarea>
   </interactive-code>
+
+  <h2 class="api">Build your own profile</h2>
+  <p class="muted">
+    A profile is plain JSON — clone <code>wafs.json</code>, change a colour / button / field
+    or add a phenomenon, and inject it. The icons travel with it (inline <code>glyphs</code>),
+    so it is fully self-contained and CDN-publishable. The full grammar — descriptors
+    (gesture, fields, render, cards, satellites, style), the <code>extends</code> patch rule,
+    the named-extension registries and the JSON Schema — is documented here:
+  </p>
+  <p class="muted">
+    📘 <a href="https://github.com/softwarity/sigwx-draw/blob/main/PROFILES.md" target="_blank" rel="noopener"><strong>Writing your own profile</strong></a>
+  </p>
 
   <h2 class="api">Core only (no map)</h2>
   <interactive-code language="typescript" show-copy>
@@ -428,4 +209,25 @@ const features = jet.decorate({
   resolution: 0,
 });</textarea>
   </interactive-code>
+
+  <!-- ── Profile editor DRAWER (opened by the ✎ edit button in the config) ── -->
+  <div class="drawer-backdrop" [class.open]="drawerOpen()" (click)="drawerOpen.set(false)"></div>
+  <aside class="drawer" [class.open]="drawerOpen()">
+    <header class="drawer-head">
+      <strong>Profile — <code>wafs.json</code></strong>
+      <button type="button" class="drawer-close" (click)="drawerOpen.set(false)" aria-label="Close">✕</button>
+    </header>
+    <p class="muted drawer-intro">
+      The whole chart in one JSON file. Edit a colour/opacity inline — the map updates live
+      (<code>setProfile</code>, your drawing kept). The glyph atlas is folded; <strong>Download</strong>
+      hands you the file to inject as-is.
+    </p>
+    <div class="profile-editor" (change)="onProfileEdit($event)">
+      <interactive-code language="json" show-copy show-download download="wafs.json" [code]="profileCode()">
+        @for (b of profileBindings(); track b.key) {
+          <code-binding [attr.key]="b.key" [attr.type]="b.type" [attr.value]="b.value" [attr.min]="b.min" [attr.max]="b.max" [attr.step]="b.step"></code-binding>
+        }
+      </interactive-code>
+    </div>
+  </aside>
 </section>

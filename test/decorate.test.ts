@@ -271,11 +271,13 @@ describe("cb / turbulence", () => {
     expect(content).toContain("XXX"); // top 650 > new ceiling 600 → XXX
   });
 
-  it("turbulence FL fields carry the SWH norm chart bounds (FL250–600), overridable via the flightLevel limit", () => {
+  it("turbulence FL fields carry NO chart bounds — they resolve from the PROFILE (flightLevel/vertical)", () => {
+    // The descriptor model: a phenomenon's schema only carries métier defaults; the
+    // chart clamp (SWH FL250–600) comes from the profile, so HL/ML share one descriptor.
     const top = turbulence.schema.find((s) => s.key === "topFL");
     const base = turbulence.schema.find((s) => s.key === "baseFL");
-    expect(top && top.type === "fl" ? [top.min, top.max] : null).toEqual([250, 600]);
-    expect(base && base.type === "fl" ? [base.min, base.max] : null).toEqual([250, 600]);
+    expect(top && top.type === "fl" ? [top.min, top.max] : null).toEqual([undefined, undefined]);
+    expect(base && base.type === "fl" ? [base.min, base.max] : null).toEqual([undefined, undefined]);
   });
 });
 

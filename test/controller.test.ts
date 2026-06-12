@@ -1,8 +1,8 @@
 import type { FeatureCollection, MultiPolygon, Position } from "geojson";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { LatLng } from "../src/core/index.js";
-import type { KeyEvent, MapAdapter, MarkerWidget, PointerEvent, SymbolSprites, ToolbarItem, WidgetEdit } from "../src/map/index.js";
+import type { KeyEvent, MapAdapter, MarkerWidget, PointerEvent, SigwxProfile, SymbolSprites, ToolbarItem, WidgetEdit } from "../src/map/index.js";
 import { SigwxDraw } from "../src/map/index.js";
 
 /** Headless mock adapter: records overlays, exposes a trivial linear projection. */
@@ -435,7 +435,8 @@ describe("tropopause (one button → spot or contour by gesture)", () => {
   it("the single-FL gauge (satellite card) drags the contour's fl, clamped to the field range", () => {
     const id = stroke(sigwx, adapter, "tropopause", [[0, 0], [2, 1], [4, 0]]);
     expect(lastMeta(sigwx)["fl"]).toBe(380); // default
-    const g = adapter.widget(id)!.child.items[0] as { kind: string; cursors: { name: string }[] };
+    // The gauge is a SATELLITE card (`#gauge`-suffixed id, like every satellite).
+    const g = adapter.widget(`${id}#gauge`)!.child.items[0] as { kind: string; cursors: { name: string }[] };
     expect(g.kind).toBe("gauge"); // a satellite card beside the FL label, 1 cursor
     expect(g.cursors).toHaveLength(1);
     adapter.dragGauge(id, "fl", 99999); // way up → saturates at the field max (clamp, no notch)
@@ -883,7 +884,8 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
   });
 
   it("a chart PROFILE unfolds onto the options: palette, phenomena config, save() tag — explicit options win", async () => {
-    const { WAFS_SWH } = await import("../src/profiles/index.js");
+    // A consumer loads the profile AS JSON (package file or CDN), exactly like the lib does.
+    const WAFS_SWH = (await import("../src/profiles/wafs.json")).default as unknown as SigwxProfile;
     const a = new MockAdapter();
     const s = new SigwxDraw({
       adapter: a,
@@ -897,10 +899,10 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
     stroke(s, a, "cb", POLY);
     expect(lastMeta(s)["baseFL"]).toBe(260); // the profile's phenomena config applied…
     const fc = s.save() as { profile?: string };
-    expect(fc.profile).toBe("wafs-swh"); // …and the document carries its chart type
+    expect(fc.profile).toBe("wafs"); // …and the document carries its chart type
 
     // NO profile given ⇒ the fallback IS a profile (WAFS SWH), not scattered values
-    expect((sigwx.save() as { profile?: string }).profile).toBe("wafs-swh");
+    expect((sigwx.save() as { profile?: string }).profile).toBe("wafs");
 
     // explicit options WIN over the profile (per phenomenon)
     const a2 = new MockAdapter();
@@ -925,5 +927,119 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
     const sub = a.toolbarItems.find((i) => i.id === "markers")!;
     expect(sub.toggle).toBe(true);         // split-button (mirrors the picked child)
     expect(sub.children?.map((c) => c.id)).toEqual(["volcano", "tropicalCyclone", "radioactive"]);
+  });
+});
+
+describe("profile v2 — the single ingestion unit (objects / glyphs / grouped tools)", () => {
+  /** A self-contained LL-ish profile: a patched stock CB, a fully INLINE marker
+   *  descriptor whose glyph ships in the profile's own `glyphs` section, and a
+   *  declarative grouped toolbar. Pure JSON end to end. */
+  const FOG_SVG = '<svg viewBox="0 0 24 24"><g stroke="currentColor" fill="none"><path d="M3 9 H21 M3 13 H17 M3 17 H21"/></g></svg>';
+  const profile = {
+    id: "test-ll",
+    vertical: { min: 0, max: 150, unit: "fl" as const },
+    glyphs: { fog: FOG_SVG },
+    objects: [
+      { extends: "cb", style: { edge: { color: "#0a0a0a" } } },
+      {
+        schemaVersion: 1 as const,
+        type: "fog",
+        label: "Fog",
+        gesture: { primitive: "point" as const, draw: "drop" as const },
+        fields: [{ key: "name", kind: "text" as const, default: "" }],
+        card: {
+          framed: "when-named" as const,
+          deletable: true,
+          items: [{ glyph: "atlas:fog", size: 26 }, { input: { field: "name" } }, { coord: true }],
+        },
+        style: { color: "#445566" },
+      },
+    ],
+    tools: ["fog", { group: "Convective", items: ["cb"] }],
+  };
+
+  it("ingests the whole profile: inline atlas + compiled objects + declarative groups", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile, toolbar: true });
+    await s.ready();
+    // The toolbar follows the profile's declarative palette (no auto-grouping).
+    const ids = a.toolbarItems.map((i) => i.id);
+    expect(ids).toContain("fog");
+    const grp = a.toolbarItems.find((i) => i.id === "convective")!;
+    expect(grp.title).toBe("Convective");
+    expect(grp.toggle).toBe(true);
+    expect(grp.children?.map((c) => c.id)).toEqual(["cb"]);
+    // The INLINE descriptor works as a marker: drop → an editable card wearing the
+    // profile-shipped glyph.
+    const id = s.draw("fog");
+    const w = a.widget(id)!;
+    expect(w).toBeDefined();
+    const glyph = w.child.items[0] as { kind: string; svg?: string };
+    expect(glyph.kind).toBe("glyph");
+    expect(glyph.svg).toContain("M3 9 H21");
+    // The PATCHED stock CB wears the new edge ink (deep-merge, patch wins).
+    s.select(null);
+    const cbId = stroke(s, a, "cb", POLY);
+    const edge = (a.overlays.get("edge")?.features ?? []).find((e) => e.properties?.["featureId"] === cbId);
+    expect(edge?.properties?.["stroke"]).toBe("#0a0a0a");
+    // `save()` tags the profile id.
+    expect((s.save() as { profile?: string }).profile).toBe("test-ll");
+  });
+
+  it("the chart `vertical` is the FL-bounds fallback (no per-phenomenon flightLevel needed)", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile });
+    await s.ready();
+    const id = stroke(s, a, "cb", POLY);
+    // CB's flBeyond is ["xxx","xxx"]: one off-chart notch (±5) past each vertical bound.
+    // (Base first: the stock CB keeps its HL métier defaults — base 250 — and the
+    // base ≤ top pairing would pin a dragged top onto it. A REAL LL profile patches
+    // the defaults via `extends`; this test only checks the vertical clamp chain.)
+    a.dragGauge(id, "baseFL", -99999); // way below the LL floor → the XXX notch under it
+    expect(lastMeta(s)["baseFL"]).toBe(-5);
+    a.dragGauge(id, "topFL", 99999); // way past the ceiling → the XXX notch above it
+    expect(lastMeta(s)["topFL"]).toBe(155);
+  });
+});
+
+describe("setProfile — live re-ingestion, document preserved", () => {
+  const load = async (over?: Partial<SigwxProfile>): Promise<SigwxProfile> => {
+    const base = (await import("../src/profiles/wafs.json")).default as unknown as SigwxProfile;
+    return { ...structuredClone(base), ...over };
+  };
+
+  it("re-injecting a profile with a patched colour re-decorates the SAME features", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a });
+    await s.ready();
+    const id = stroke(s, a, "cb", POLY);
+    const edge0 = (a.overlays.get("edge")?.features ?? []).find((e) => e.properties?.["featureId"] === id);
+    expect(edge0?.properties?.["stroke"]).toBe("#d1242f"); // default red scallop
+
+    const profile = await load();
+    const cb = profile.objects!.find((o) => typeof o === "object" && (o as { type?: string }).type === "cb") as Record<string, unknown>;
+    (cb["style"] as Record<string, unknown>)["color"] = "#0a7d22";
+    ((cb["style"] as Record<string, unknown>)["edge"] as Record<string, unknown>)["color"] = "#0a7d22";
+    s.setProfile(profile);
+
+    expect(s.save().features).toHaveLength(1); // the drawn CB is KEPT
+    expect(s.save().features[0]!.properties!["id"]).toBe(id); // same feature id
+    const edge1 = (a.overlays.get("edge")?.features ?? []).find((e) => e.properties?.["featureId"] === id);
+    expect(edge1?.properties?.["stroke"]).toBe("#0a7d22"); // re-decorated with the new ink
+  });
+
+  it("re-injecting a profile that REMOVES a type drops its features (with a warning)", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a });
+    await s.ready();
+    stroke(s, a, "cb", POLY);
+    expect(s.save().features).toHaveLength(1);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const profile = await load();
+    profile.objects = profile.objects!.filter((o) => !(typeof o === "object" && (o as { type?: string }).type === "cb"));
+    s.setProfile(profile);
+    expect(s.save().features).toHaveLength(0); // the orphan CB is dropped
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
