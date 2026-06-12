@@ -91,6 +91,14 @@ const MAPLIBRE_DEMO_STYLE = "https://demotiles.maplibre.org/style.json";
 const LEAFLET_POSITRON = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
 const CARTO_ATTR = "© OpenStreetMap contributors © CARTO";
 
+/** The selectable profiles — one static `import()` per entry so esbuild bundles each
+ *  profile JSON as its own chunk (a templated `import(`…${name}…`)` won't resolve). */
+const PROFILE_LOADERS: Record<string, () => Promise<{ default: unknown }>> = {
+  wafs: () => import("@softwarity/sigwx-draw/profiles/wafs.json"),
+  "temsi-euroc": () => import("@softwarity/sigwx-draw/profiles/temsi-euroc.json"),
+  "temsi-france": () => import("@softwarity/sigwx-draw/profiles/temsi-france.json"),
+};
+
 @Component({
   selector: "app-showcase",
   imports: [],
@@ -215,7 +223,7 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
     // The `profile` carousel switches the chart definition (one profile today: `wafs`).
     if (t?.key === "profileName") {
       this.profileName.set(String(t.value));
-      // Future: load the chosen profile JSON and `setProfile` it.
+      void this.loadProfile(String(t.value));
       return;
     }
     if (t?.key === "adapter") {
@@ -364,6 +372,19 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
     this.profileBindings.set(bindings);
   }
 
+  /** Switch the live chart to another profile (the `profile:` carousel). Load its JSON,
+   *  rebuild the editor view + the toolbar palette. The drawing is cleared — different
+   *  profiles expose different objects, so kept features could reference a missing type. */
+  private async loadProfile(name: string): Promise<void> {
+    const load = PROFILE_LOADERS[name];
+    if (!load) return;
+    const base = (await load()).default as unknown as SigwxProfile;
+    this.sigwx?.clear();
+    this.profile = structuredClone(base);
+    this.buildProfileEditor();
+    await this.rebuild(); // the toolbar palette is a construction-time option
+  }
+
   /** A `<code-binding>` edit inside the profile view → write the value at its path,
    *  re-ingest the whole profile (`setProfile`), keep the drawn features. */
   protected onProfileEdit(ev: Event): void {
@@ -414,7 +435,7 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
       // The chart is driven by ONE profile (the source of truth) — load an editable copy
       // of the default JSON once; the editor panel mutates it and calls setProfile.
       if (!this.profile) {
-        const base = (await import("@softwarity/sigwx-draw/profiles/wafs.json")).default as unknown as SigwxProfile;
+        const base = (await PROFILE_LOADERS[this.profileName()]()).default as unknown as SigwxProfile;
         this.profile = structuredClone(base);
         this.buildProfileEditor();
       }
@@ -456,12 +477,12 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
 
       this.sigwx = new SigwxDraw({
         adapter,
-        // Turnkey native toolbar; `tools` restricts it to jet + turbulence for now
-        // (CB exists in the registry but is hidden for the 0.0.1).
+        // Turnkey native toolbar — the PROFILE drives the palette (its `tools`, with the
+        // Fronts / Markers groups). No hard-coded `tools` here: switching profile switches
+        // the buttons (that's the single-ingestion-unit model).
         toolbar: this.toolbarOn
           ? {
               position: this.tbPos,
-              tools: ["jetStream", "cb", "icing", "turbulence", "tropopause", "volcano", "tropicalCyclone", "radioactive"],
               lock: this.tbLock,
               snapshot: {
                 ...(this.snapQOn ? { quality: this.snapQuality as SnapshotQuality } : {}),

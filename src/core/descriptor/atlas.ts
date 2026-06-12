@@ -2,7 +2,7 @@
  * Built-in glyph atlas — the ENGINE CHROME ONLY (`plus`/`minus`, worn by the
  * `draw_and_link`/`erase` action buttons). NEVER a phenomenon's art: a métier
  * glyph (cb, turbulence, volcano…) lives in the PROFILE (`glyphs` section) and
- * travels with its descriptor — see `descriptors/glyphs.ts`. So the core carries
+ * travels with its descriptor — lives in the profile. So the core carries
  * no SVG for a phenomenon you don't load.
  *
  * Normalized art: `<svg viewBox="0 0 24 24">…</svg>`, `currentColor`. Hosts/profiles

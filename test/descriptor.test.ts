@@ -87,8 +87,8 @@ describe("descriptor validation (names fail fast, listing the available)", () =>
   });
 });
 
-describe("wafs.json — the DEFAULT profile inlines its full descriptors", () => {
-  it("the eight inline objects are deep-equal to the stock descriptors (self-contained, CDN-servable)", async () => {
+describe("profile JSONs are THE source of the stock descriptors (no TS data copy)", () => {
+  it("wafs.json is self-contained: full inline descriptors + métier glyphs, and IS the stock", async () => {
     const { BUILTIN_DESCRIPTORS } = await import("../src/core/index.js");
     const profile = (await import("../src/profiles/wafs.json")).default as {
       objects: PhenomenonDescriptor[];
@@ -98,11 +98,26 @@ describe("wafs.json — the DEFAULT profile inlines its full descriptors", () =>
     expect(profile.objects.map((o) => o.type)).toEqual([
       "jetStream", "cb", "icing", "turbulence", "tropopause", "volcano", "tropicalCyclone", "radioactive",
     ]);
-    // The default profile is SELF-CONTAINED: every tool is a FULL inline descriptor (so the
-    // file is CDN-servable on its own) and the métier icons travel in `glyphs`. It stays
-    // byte-equivalent to the stock descriptors the lib documents.
-    for (const o of profile.objects) expect(o).toEqual(BUILTIN_DESCRIPTORS[o.type]);
+    // BUILTIN_DESCRIPTORS is DERIVED from this JSON — every WAFS stock entry IS the very
+    // object the profile holds (single source of truth, no TS↔JSON duplication).
+    for (const o of profile.objects) expect(BUILTIN_DESCRIPTORS[o.type]).toBe(o);
     expect(Object.keys(profile.glyphs)).toContain("cb");
     expect(profile.vertical).toMatchObject({ min: 250, max: 600 });
+  });
+
+  it("the TEMSI profiles are autoportant (every object is a FULL inline descriptor, fronts too)", async () => {
+    for (const id of ["temsi-france", "temsi-euroc"]) {
+      const profile = (await import(`../src/profiles/${id}.json`)).default as {
+        objects: PhenomenonDescriptor[];
+        glyphs: Record<string, string>;
+      };
+      for (const o of profile.objects) {
+        expect(typeof o).toBe("object"); // NOT a "name" string reference — fully inline
+        expect(o.type).toBeTruthy();
+        expect(o.style).toBeTruthy();
+        if (o.type.startsWith("front")) expect(o.icon).toMatch(/^<svg/); // fronts carry their inline icon
+      }
+      expect(Object.keys(profile.glyphs).length).toBeGreaterThan(0);
+    }
   });
 });

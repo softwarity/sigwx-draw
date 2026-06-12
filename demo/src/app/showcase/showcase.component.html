@@ -43,7 +43,7 @@ ${control}    control: {
 ${tooltip}    tooltip: { color: "${tipColor}", background: "${tipBg}", fontSize: ${tipSize} },
   },
 });</textarea>
-        <code-binding key="profileName" type="select" options="wafs" value="wafs" carousel></code-binding>
+        <code-binding key="profileName" type="select" options="wafs,temsi-euroc,temsi-france" value="wafs" carousel></code-binding>
         <code-binding key="profileImport" type="readonly" [value]="profileName()"></code-binding>
         <code-binding key="editProfile" type="button" value="edit"></code-binding>
         <code-binding key="adapter" type="select" options="MapLibreAdapter,OpenLayersAdapter,LeafletAdapter" [value]="adapterName()" carousel></code-binding>
@@ -223,7 +223,7 @@ const features = jet.decorate({
       hands you the file to inject as-is.
     </p>
     <div class="profile-editor" (change)="onProfileEdit($event)">
-      <interactive-code language="json" show-copy show-download download="wafs.json" [code]="profileCode()">
+      <interactive-code language="json" show-copy show-download [attr.download]="profileName() + '.json'" [code]="profileCode()">
         @for (b of profileBindings(); track b.key) {
           <code-binding [attr.key]="b.key" [attr.type]="b.type" [attr.value]="b.value" [attr.min]="b.min" [attr.max]="b.max" [attr.step]="b.step"></code-binding>
         }

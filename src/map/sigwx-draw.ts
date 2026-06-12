@@ -1032,7 +1032,9 @@ export class SigwxDraw {
     const geometry = def.draw.defaultGeometry
       ? def.draw.defaultGeometry(center, span)
       : ({ type: "Point", coordinates: [center.lon, center.lat] } as Geometry);
-    this.doc.set(id, { type: "Feature", geometry, properties: { id, phenomenon: def.type, metadata: defaultMetadata(def) } });
+    const metadata = defaultMetadata(def);
+    this.clampFlDefaults(def.type, metadata); // keep defaults on-chart (profile `vertical`)
+    this.doc.set(id, { type: "Feature", geometry, properties: { id, phenomenon: def.type, metadata } });
     this.order.push(id);
     this.mode = "editing";
     this.select(id);
@@ -1063,6 +1065,7 @@ export class SigwxDraw {
     const id = `f${this.idSeq++}`;
     const metadata = defaultMetadata(this.registry.get(type));
     this.applyFlDefault(type, metadata); // override FL defaults from `phenomena[type].flightLevel.default`
+    this.clampFlDefaults(type, metadata); // then keep them on-chart (profile `vertical`)
     this.doc.set(id, { type: "Feature", geometry, properties: { id, phenomenon: type, metadata } });
     this.order.push(id);
     this.drawing = null;
@@ -2061,6 +2064,24 @@ export class SigwxDraw {
 
   /** Apply `flightLevel.default` to a freshly-built metadata: by order onto the top-level FL
    *  fields (`[base, top]`), or onto every break point's core FL for a list-based jet. */
+  /** Pull every FL default into the profile's `vertical` range so a placement never starts
+   *  off-chart ("XXX"). A stock descriptor carries WAFS-scale defaults (base 250 / top 400);
+   *  a low-level profile (TEMSI France, ceiling FL150) needs them clamped into [min, max].
+   *  No-op when no `vertical` is set, or when the descriptor defaults already fit (the JSON
+   *  is the source — coherent per-profile defaults bypass this entirely). */
+  private clampFlDefaults(type: string, metadata: Metadata): void {
+    const v = this.vertical;
+    if (!v) return;
+    const cl = (x: unknown): unknown => (typeof x === "number" ? Math.min(v.max, Math.max(v.min, x)) : x);
+    for (const s of this.registry.get(type).schema) {
+      if (s.type === "fl") metadata[s.key] = cl(metadata[s.key]);
+      else if (s.type === "list" && Array.isArray(metadata[s.key])) {
+        for (const it of metadata[s.key] as Metadata[])
+          for (const x of s.itemSchema) if (x.type === "fl") it[x.key] = cl(it[x.key]);
+      }
+    }
+  }
+
   private applyFlDefault(type: string, metadata: Metadata): void {
     const d = this.phenomena[type]?.flightLevel?.default;
     if (d == null) return;

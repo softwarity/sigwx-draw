@@ -54,19 +54,19 @@ export {
 
 export * from "./decorate/index.js";
 export * from "./descriptor/index.js";
-export { VOLCANO_DESCRIPTOR, RADIOACTIVE_DESCRIPTOR, TROPICAL_CYCLONE_DESCRIPTOR } from "./descriptors/markers.js";
 
 export { BUILTIN_PHENOMENA, defaultRegistry, jetStream, cb, icing, turbulence, tropopause, volcano, tropicalCyclone, radioactive } from "./registry.js";
-export { makeTurbulence, DEFAULT_TURBULENCE_SYMBOLS, TURBULENCE_DESCRIPTOR, turbulenceDescriptor } from "./descriptors/turbulence.js";
-export type { TurbulenceSymbol } from "./descriptors/turbulence.js";
-export { makeCb, DEFAULT_CB_COVERAGE, CB_CLOUD_TYPE_BUFR, CB_DESCRIPTOR, cbDescriptor } from "./descriptors/cb.js";
-export type { CbCoverage } from "./descriptors/cb.js";
-export { makeIcing, DEFAULT_ICING_SYMBOLS, ICING_DESCRIPTOR, icingDescriptor } from "./descriptors/icing.js";
-export type { IcingSymbol } from "./descriptors/icing.js";
-export { TROPOPAUSE_DESCRIPTOR } from "./descriptors/tropopause.js";
-export { JET_STREAM_DESCRIPTOR } from "./descriptors/jet-stream.js";
-export { BUILTIN_DESCRIPTORS, resolveObjectSpec } from "./descriptors/index.js";
-export { STOCK_GLYPHS } from "./descriptors/glyphs.js";
+// Stock descriptors + builders — all DERIVED from the profile JSONs (single source).
+export {
+  BUILTIN_DESCRIPTORS, STOCK_GLYPHS, resolveObjectSpec,
+  JET_STREAM_DESCRIPTOR, CB_DESCRIPTOR, ICING_DESCRIPTOR, TURBULENCE_DESCRIPTOR, TROPOPAUSE_DESCRIPTOR,
+  VOLCANO_DESCRIPTOR, TROPICAL_CYCLONE_DESCRIPTOR, RADIOACTIVE_DESCRIPTOR,
+  FRONT_COLD_DESCRIPTOR, FRONT_WARM_DESCRIPTOR, FRONT_OCCLUDED_DESCRIPTOR, FRONT_STATIONARY_DESCRIPTOR, FRONT_DESCRIPTORS,
+  makeTurbulence, DEFAULT_TURBULENCE_SYMBOLS, turbulenceDescriptor,
+  makeCb, DEFAULT_CB_COVERAGE, CB_CLOUD_TYPE_BUFR, cbDescriptor,
+  makeIcing, DEFAULT_ICING_SYMBOLS, icingDescriptor,
+} from "./descriptors/index.js";
+export type { CbCoverage, TurbulenceSymbol, IcingSymbol } from "./descriptors/index.js";
 
 export type { SigwxFeature, SigwxFeatureProps } from "./geojson.js";
 export { toFeatureCollection, fromFeatureCollection } from "./geojson.js";

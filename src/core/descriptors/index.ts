@@ -1,38 +1,33 @@
 /**
- * The stock descriptors — the eight WAFS phenomena as PURE JSON, the living
- * documentation of the descriptor format. A profile references them by name in
- * its `objects` (`"cb"`), patches them (`{ "extends": "cb", … }`), or ships its
- * own inline descriptors next to them.
+ * Stock-descriptor barrel. Everything here is DERIVED from the profile JSONs (the single
+ * source of truth — see `stock.ts`); the named `*_DESCRIPTOR` exports are kept only as
+ * API-stable aliases that POINT AT the JSON objects (no second copy). A profile references
+ * these by name in its `objects` (`"cb"`, `"frontCold"`), patches them (`{ "extends": "cb",
+ * … }`), or ships its own inline. Custom rendering that can't be expressed in JSON is a
+ * NAMED extension (`jet-barbs`, `front-symbols`) — never data in TypeScript.
  */
 import type { PhenomenonDescriptor } from "../descriptor/types.js";
-import { CB_DESCRIPTOR } from "./cb.js";
-import { ICING_DESCRIPTOR } from "./icing.js";
-import { JET_STREAM_DESCRIPTOR } from "./jet-stream.js";
-import { RADIOACTIVE_DESCRIPTOR, TROPICAL_CYCLONE_DESCRIPTOR, VOLCANO_DESCRIPTOR } from "./markers.js";
-import { TROPOPAUSE_DESCRIPTOR } from "./tropopause.js";
-import { TURBULENCE_DESCRIPTOR } from "./turbulence.js";
+import { BUILTIN_DESCRIPTORS } from "./stock.js";
 
-export { CB_DESCRIPTOR, cbDescriptor, makeCb, DEFAULT_CB_COVERAGE, CB_CLOUD_TYPE_BUFR } from "./cb.js";
-export type { CbCoverage } from "./cb.js";
-export { ICING_DESCRIPTOR, icingDescriptor, makeIcing, DEFAULT_ICING_SYMBOLS } from "./icing.js";
-export type { IcingSymbol } from "./icing.js";
-export { JET_STREAM_DESCRIPTOR } from "./jet-stream.js";
-export { RADIOACTIVE_DESCRIPTOR, TROPICAL_CYCLONE_DESCRIPTOR, VOLCANO_DESCRIPTOR } from "./markers.js";
-export { TROPOPAUSE_DESCRIPTOR } from "./tropopause.js";
-export { TURBULENCE_DESCRIPTOR, turbulenceDescriptor, makeTurbulence, DEFAULT_TURBULENCE_SYMBOLS } from "./turbulence.js";
-export type { TurbulenceSymbol } from "./turbulence.js";
+export { BUILTIN_DESCRIPTORS, STOCK_GLYPHS } from "./stock.js";
+export * from "./builders.js";
 
-/** Stock descriptors by type — what a profile's `objects` strings/`extends` resolve to. */
-export const BUILTIN_DESCRIPTORS: Record<string, PhenomenonDescriptor> = {
-  jetStream: JET_STREAM_DESCRIPTOR,
-  cb: CB_DESCRIPTOR,
-  icing: ICING_DESCRIPTOR,
-  turbulence: TURBULENCE_DESCRIPTOR,
-  tropopause: TROPOPAUSE_DESCRIPTOR,
-  volcano: VOLCANO_DESCRIPTOR,
-  tropicalCyclone: TROPICAL_CYCLONE_DESCRIPTOR,
-  radioactive: RADIOACTIVE_DESCRIPTOR,
-};
+// API-stable aliases — each is the SAME object the JSON source holds (zero duplication).
+export const JET_STREAM_DESCRIPTOR: PhenomenonDescriptor = BUILTIN_DESCRIPTORS.jetStream!;
+export const CB_DESCRIPTOR: PhenomenonDescriptor = BUILTIN_DESCRIPTORS.cb!;
+export const ICING_DESCRIPTOR: PhenomenonDescriptor = BUILTIN_DESCRIPTORS.icing!;
+export const TURBULENCE_DESCRIPTOR: PhenomenonDescriptor = BUILTIN_DESCRIPTORS.turbulence!;
+export const TROPOPAUSE_DESCRIPTOR: PhenomenonDescriptor = BUILTIN_DESCRIPTORS.tropopause!;
+export const VOLCANO_DESCRIPTOR: PhenomenonDescriptor = BUILTIN_DESCRIPTORS.volcano!;
+export const TROPICAL_CYCLONE_DESCRIPTOR: PhenomenonDescriptor = BUILTIN_DESCRIPTORS.tropicalCyclone!;
+export const RADIOACTIVE_DESCRIPTOR: PhenomenonDescriptor = BUILTIN_DESCRIPTORS.radioactive!;
+export const FRONT_COLD_DESCRIPTOR: PhenomenonDescriptor = BUILTIN_DESCRIPTORS.frontCold!;
+export const FRONT_WARM_DESCRIPTOR: PhenomenonDescriptor = BUILTIN_DESCRIPTORS.frontWarm!;
+export const FRONT_OCCLUDED_DESCRIPTOR: PhenomenonDescriptor = BUILTIN_DESCRIPTORS.frontOccluded!;
+export const FRONT_STATIONARY_DESCRIPTOR: PhenomenonDescriptor = BUILTIN_DESCRIPTORS.frontStationary!;
+export const FRONT_DESCRIPTORS: PhenomenonDescriptor[] = [
+  FRONT_COLD_DESCRIPTOR, FRONT_WARM_DESCRIPTOR, FRONT_OCCLUDED_DESCRIPTOR, FRONT_STATIONARY_DESCRIPTOR,
+];
 
 /** Resolve one profile `objects` entry to a full descriptor (stock / patch / inline). */
 export function resolveObjectSpec(

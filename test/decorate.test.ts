@@ -337,3 +337,25 @@ describe("clampInArea (hole-aware arrow tip)", () => {
     expect(clampInArea([2, 2], { outer, holes: [hole] })).toEqual([2, 2]);
   });
 });
+
+describe("fronts (TEMSI family B — the front-symbols decorator)", () => {
+  const line: Geometry = { type: "LineString", coordinates: [[0, 0], [5, 1], [10, 0], [15, 1]] };
+  it("a cold front renders a base line + triangle pips along it", async () => {
+    const { FRONT_COLD_DESCRIPTOR } = await import("../src/core/descriptors/index.js");
+    const { defFromDescriptor } = await import("../src/core/index.js");
+    const def = defFromDescriptor(FRONT_COLD_DESCRIPTOR);
+    const fs = def.decorate({ geometry: line, metadata: {}, style: def.style });
+    expect(byLayer(fs, "edge").length).toBe(1); // the base line
+    const pips = byLayer(fs, "decoration").filter((f) => f.geometry.type === "Polygon");
+    expect(pips.length).toBeGreaterThan(0); // triangles along it
+  });
+  it("every front type compiles and decorates (line + pips)", async () => {
+    const { FRONT_DESCRIPTORS } = await import("../src/core/descriptors/index.js");
+    const { defFromDescriptor } = await import("../src/core/index.js");
+    for (const d of FRONT_DESCRIPTORS) {
+      const def = defFromDescriptor(d);
+      const fs = def.decorate({ geometry: line, metadata: {}, style: def.style });
+      expect(fs.length).toBeGreaterThan(1);
+    }
+  });
+});
