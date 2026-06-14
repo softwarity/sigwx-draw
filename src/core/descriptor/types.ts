@@ -83,6 +83,11 @@ export interface EnumFieldDescriptor extends DescriptorFieldBase {
   kind: "enum";
   options: EnumOptionDescriptor[];
   default?: string;
+  /** Conditional option SET: the live options depend on ANOTHER field's value (e.g. a cloud
+   *  layer's `amount` depends on its `type` — CB ⇒ ISOL/OCNL/FRQ/EMBD, else ⇒ FEW/SCT/BKN/OVC).
+   *  `map[<other value>]` (or `map["*"]`) replaces `options`. Resolved LIB-side at each render;
+   *  the adapter only ever receives the already-resolved option list. */
+  optionsBy?: { field: string; map: Record<string, EnumOptionDescriptor[]> };
 }
 
 export interface BoolFieldDescriptor extends DescriptorFieldBase {
@@ -175,6 +180,11 @@ export interface LabelSpec {
   content: string[];
   /** Boxed (white rectangle + border) vs bare text + halo. */
   box?: boolean;
+  /** Box border width preset (`small` ≈ 0.8px / `medium` ≈ 1.4px / `large`). Default `medium`. */
+  borderWidth?: "small" | "medium" | "large";
+  /** LINE labels only: the label can be slid ALONG the line while selected (a drag
+   *  handle appears on it). Its position rides `metadata.labelT` (fraction 0–1, default 0.5). */
+  movable?: boolean;
 }
 
 export interface RenderSpec {
@@ -196,12 +206,18 @@ export interface RenderByGeometry {
 
 // ── Cards (selected): the panel + satellites ──────────────────────────────────
 
-export interface CarouselItemSpec {
+export interface PickerItemSpec {
   field: string;
   /** Option label TEMPLATE (`{value}` = the option's value); omitted ⇒ the options'
    *  GLYPHS (resolved from the atlas via each option's `glyph`, default `atlas:{value}`). */
   label?: string;
+  /** How the picker presents its options (adapter `picker` control): `carousel` (≤5),
+   *  `flower` (6–10), `grid` (>10) — each degrades to the next past its threshold.
+   *  Omitted ⇒ adapter default (carousel with auto-degradation). */
+  mode?: "carousel" | "flower" | "grid";
 }
+/** @deprecated renamed to {@link PickerItemSpec} (the `carousel` control is now `picker`). */
+export type CarouselItemSpec = PickerItemSpec;
 
 export interface GaugeItemSpec {
   /** 1–2 cursor field keys (list-scoped names are engine-routed on a break point). */
@@ -229,7 +245,10 @@ export interface CardItemSpec {
   input?: { field: string };
   /** The auto lat/long line (adapter-filled). */
   coord?: boolean;
-  carousel?: CarouselItemSpec;
+  /** An option picker bound to a field (adapter `picker` control: carousel/flower/grid). */
+  picker?: PickerItemSpec;
+  /** @deprecated alias of {@link picker}. */
+  carousel?: PickerItemSpec;
   gauge?: GaugeItemSpec;
   dial?: DialItemSpec;
 }
@@ -247,8 +266,20 @@ export interface CardSpec {
   framed?: boolean | "when-named";
   /** Card pinning on the anchor (markers: volcano pins its base dot). */
   origin?: "center" | "bottom";
+  /** Inner padding preset of a FRAMED panel (adapter presets: small=[3,5] /
+   *  medium=[6,8] / large=[10,13] px). Default `"small"`. */
+  pad?: "small" | "medium" | "large";
+  /** Vertical gap (px) between stacked card items. Default `0`. */
+  gap?: number;
+  /** Unitless line-height for the card text (multi-line labels). Default `1.2`; lower (≈1)
+   *  to tighten a compact label like the tropopause `H`/FL stack. */
+  lineHeight?: number;
   /** Show a delete ✕ while selected. */
   deletable?: boolean;
+  /** Frame OUTLINE driven by an enum field: maps each value to a `boxShape` (adapter presets
+   *  `rect`/`pentagon-up`/`pentagon-down` or a custom normalized contour). E.g. the tropopause
+   *  spot: `{ field:"kind", map:{ fl:"rect", high:"pentagon-up", low:"pentagon-down" } }`. */
+  boxShapeBy?: { field: string; map: Record<string, string> };
   items: CardItemSpec[];
   buttons?: CardButtonSpec[];
 }
@@ -304,5 +335,11 @@ export type ObjectSpec =
   | ({ extends: string } & Record<string, unknown>)
   | PhenomenonDescriptor;
 
-/** A toolbar entry: a phenomenon type, or a named GROUP (split-button submenu). */
-export type ToolSpec = string | { group: string; icon?: GlyphRef; items: string[] };
+/** A toolbar entry: a phenomenon type, or a named GROUP. A group's `items` may themselves
+ *  be groups → NESTED submenus (toolbar → submenu → sub-submenu, any depth). */
+export interface ToolGroupSpec {
+  group: string;
+  icon?: GlyphRef;
+  items: ToolSpec[];
+}
+export type ToolSpec = string | ToolGroupSpec;

@@ -1,5 +1,5 @@
 import type { Geometry } from "geojson";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import {
   clampInArea,
@@ -340,6 +340,13 @@ describe("clampInArea (hole-aware arrow tip)", () => {
 
 describe("fronts (TEMSI family B — the front-symbols decorator)", () => {
   const line: Geometry = { type: "LineString", coordinates: [[0, 0], [5, 1], [10, 0], [15, 1]] };
+  // Front objects default their icon to `atlas:<type>` (declared in the profile's `glyphs`),
+  // so register the TEMSI glyphs first — exactly what profile ingestion does at runtime.
+  beforeAll(async () => {
+    const { registerExtensions } = await import("../src/core/index.js");
+    const profile = (await import("../src/profiles/temsi-euroc.json")).default as { glyphs: Record<string, string> };
+    registerExtensions({ glyphs: profile.glyphs });
+  });
   it("a cold front renders a base line + triangle pips along it", async () => {
     const { FRONT_COLD_DESCRIPTOR } = await import("../src/core/descriptors/index.js");
     const { defFromDescriptor } = await import("../src/core/index.js");

@@ -6,10 +6,11 @@
  * the named-extension registries at COMPILE time, so unknown names fail fast
  * with the available ones listed.
  */
-import type { MarkerWidget, WidgetNode } from "@softwarity/draw-adapter";
+import type { BoxShape, MarkerWidget, WidgetNode } from "@softwarity/draw-adapter";
 import type { Geometry } from "geojson";
 
 import {
+  add,
   areaRings,
   catmullRom,
   catmullRomClosed,
@@ -17,13 +18,16 @@ import {
   frameK,
   inwardTicks,
   lineFeature,
+  perpLeft,
   pointAtFraction,
   pointFeature,
   polygonFeature,
   polylineLength,
+  scale,
   scallopRing,
   toLonLat,
   toPlanar,
+  unit,
 } from "../decorate/index.js";
 import type { Pt } from "../decorate/index.js";
 import type {
@@ -47,6 +51,7 @@ import type {
   CardSpec,
   DescriptorField,
   EnumFieldDescriptor,
+  EnumOptionDescriptor,
   GestureSpec,
   GlyphSpec,
   InkSpec,
@@ -87,6 +92,14 @@ function toolbarIcon(svg: string): string {
   return /\bwidth=/.test(svg) ? svg : svg.replace("<svg", "<svg width='22' height='22'");
 }
 
+/** An enum field's LIVE options — honours `optionsBy` (options that depend on another field's
+ *  value, e.g. a cloud layer's `amount` set depends on its `type`). Resolved against `metadata`. */
+function liveOptions(field: EnumFieldDescriptor, metadata: Metadata): EnumOptionDescriptor[] {
+  const ob = field.optionsBy;
+  if (!ob) return field.options;
+  return ob.map[String(metadata[ob.field] ?? "")] ?? ob.map["*"] ?? field.options;
+}
+
 // ── Fields ────────────────────────────────────────────────────────────────────
 
 function compileField(f: DescriptorField): FieldSchema {
@@ -108,12 +121,15 @@ function compileField(f: DescriptorField): FieldSchema {
         type: "fl", key: f.key, label, ...when, ...required,
         ...(f.default !== undefined ? { default: f.default } : {}),
       };
-    case "enum":
+    case "enum": {
+      const opt = (o: EnumOptionDescriptor): { value: string; label: string } => ({ value: o.value, label: o.label ?? o.value });
       return {
         type: "enum", key: f.key, label, ...when, ...required,
-        options: f.options.map((o) => ({ value: o.value, label: o.label ?? o.value })),
+        options: f.options.map(opt),
+        ...(f.optionsBy ? { optionsBy: { field: f.optionsBy.field, map: Object.fromEntries(Object.entries(f.optionsBy.map).map(([k, v]) => [k, v.map(opt)])) } } : {}),
         ...(f.default !== undefined ? { default: f.default } : { default: f.options[0]?.value ?? "" }),
       };
+    }
     case "bool":
       return {
         type: "bool", key: f.key, label, ...when, ...required,
@@ -154,6 +170,7 @@ function compileDraw(g: GestureSpec): DrawSpec {
     ...(g.directional ? { directional: true } : {}),
     ...(g.draw === "lasso" || g.draw === "lasso-or-spot" ? { freehand: true } : {}),
     ...(g.draw === "lasso-or-spot" ? { pointWhenShort: true } : {}),
+    ...(g.erasable ? { erasable: true } : {}),
   };
   const generator = g.default ? getGenerator(g.default) : undefined;
   const defaultGeometry =
@@ -224,9 +241,37 @@ function compileInk(spec: InkSpec | undefined): (style: PhenomenonStyle, metadat
 }
 
 /** The plain placed label (tropopause): boxed spot FL / bare contour mid-label. */
+/** A line's label/gauge frame at `metadata.labelT` (fraction, default 0.5): the planar
+ *  point on the (smoothed) curve + its tangent + the projection frame. Null for non-lines. */
+function lineLabelFrame(geometry: Geometry, metadata: Metadata, smooth: boolean): { k: ReturnType<typeof frameK>; p: Pt; dir: Pt } | null {
+  if (geometry.type !== "LineString") return null;
+  const coords = geometry.coordinates as Pt[];
+  if (coords.length < 2) return null;
+  const k = frameK(coords);
+  const planar = (smooth ? catmullRom(coords, 16) : coords).map((c) => toPlanar(c, k));
+  const t = typeof metadata["labelT"] === "number" ? (metadata["labelT"] as number) : 0.5;
+  const st = pointAtFraction(planar, t);
+  return { k, p: st.p as Pt, dir: st.dir as Pt };
+}
+
 function labelFeatures(spec: LabelSpec, input: DecorationInput, smooth: boolean): RenderFeature[] {
   const { geometry, metadata, style } = input;
-  const at = geometryMid(geometry, smooth);
+  let at = geometryMid(geometry, smooth);
+  // A movable line label rides `metadata.labelT` and is LIFTED off the line (its base sits on
+  // the line, where the drag handle is) so the handle never covers the value.
+  if (spec.movable) {
+    const fr = lineLabelFrame(geometry, metadata, smooth);
+    if (fr) {
+      let p = fr.p;
+      const res = input.resolution;
+      if (res && res > 0) {
+        let n = perpLeft(unit(fr.dir)); // perpendicular; flip to the upper (north/+y) side
+        if (n[1] < 0) n = [-n[0], -n[1]];
+        p = add(p, scale(n, res * 13)); // ≈ half the box height above the line
+      }
+      at = toLonLat(p, fr.k);
+    }
+  }
   if (!at) return [];
   const ink = style.edge?.color ?? style.color;
   const text = spec.content.map((t) => evalTemplate(t, metadata, { metadata, flightLevel: flCtx(input) })).join("\n");
@@ -238,7 +283,7 @@ function labelFeatures(spec: LabelSpec, input: DecorationInput, smooth: boolean)
       textSize: style.text?.size ?? 13,
       textHalo: style.text?.halo ?? "#ffffff",
       // Boxed: a small white rectangle + border; bare: the halo punches the gap.
-      ...(spec.box ? { textBackground: style.text?.background ?? "#ffffff", textBorder: ink } : {}),
+      ...(spec.box ? { textBackground: style.text?.background ?? "#ffffff", textBorder: ink, ...(spec.borderWidth ? { textBorderWidth: spec.borderWidth } : {}) } : {}),
     }),
   ];
 }
@@ -438,7 +483,7 @@ function compileDecorate(d: PhenomenonDescriptor): DecorateFn {
  *  break-point dial ring (−1.6). */
 const SIDE_X: Record<SatelliteSpec["anchor"], number> = {
   callout: -1.0,
-  "geometry-mid": -0.5,
+  "geometry-mid": -0.85, // just clear of the geometry label box (−0.5 looked astride, −1.1 too far)
   "break-point": -1.6,
 };
 
@@ -477,8 +522,11 @@ function compileSatellites(d: PhenomenonDescriptor): ((input: WidgetInput) => Ma
     }
     for (const sat of sats) {
       let at: Pt | null = null;
-      if (sat.anchor === "geometry-mid") at = geometryMid(geometry, smooth);
-      else if (sat.anchor === "callout" && input.callout) at = input.callout.at;
+      if (sat.anchor === "geometry-mid") {
+        // Follow a movable line label (so the FL gauge tracks it); else the arc middle.
+        const fr = geometry.type === "LineString" && typeof metadata["labelT"] === "number" ? lineLabelFrame(geometry, metadata, smooth) : null;
+        at = fr ? toLonLat(fr.p, fr.k) : geometryMid(geometry, smooth);
+      } else if (sat.anchor === "callout" && input.callout) at = input.callout.at;
       else if (sat.anchor === "break-point") at = breakAt;
       if (!at) continue;
       const scope = sat.anchor === "break-point" && listField ? `${listField.key}.${sub}.` : "";
@@ -569,7 +617,7 @@ function compilePanelWidget(d: PhenomenonDescriptor, satellites: ((input: Widget
     (d.fields ?? []).find((f): f is EnumFieldDescriptor => f.kind === "enum" && f.key === key);
 
   return (input: WidgetInput): MarkerWidget[] | null => {
-    const { id, metadata, editable, style, callout, sprite } = input;
+    const { id, metadata, editable, style, callout, sprite, flightLevel, chrome } = input;
     if (!editable || !callout) return null;
     // Framed panel: black & white like the printed call-out; bare: the per-state ink.
     const ink = framed ? (style.text?.color ?? "#1f2328") : inkOf(style, metadata);
@@ -579,20 +627,37 @@ function compilePanelWidget(d: PhenomenonDescriptor, satellites: ((input: Widget
     let textLines = 0;
     let hasGlyphCarousel = false;
     for (const it of card.items) {
-      if (it.carousel) {
-        const field = enumOf(it.carousel.field);
+      const pick = it.picker ?? it.carousel; // `carousel` = deprecated alias of `picker`
+      if (pick) {
+        const field = enumOf(pick.field);
         if (!field) continue;
-        const value = str(metadata[it.carousel.field], field.default ?? field.options[0]?.value ?? "");
-        const labelTpl = it.carousel.label;
-        const options = field.options.map((o) => {
-          if (labelTpl !== undefined) return { value: o.value, label: evalTemplate(labelTpl, metadata, fmt, { value: o.value }) };
+        const live = liveOptions(field, metadata); // honours `optionsBy` (e.g. amount-by-type)
+        const value = live.some((o) => o.value === metadata[pick.field]) ? str(metadata[pick.field]) : (live[0]?.value ?? "");
+        const labelTpl = pick.label;
+        const options = live.map((o) => {
+          // The descriptor option's `label` is the full human name (e.g. "Cirrus" for "CI") —
+          // surface it as the picker `title` (tooltip) whenever it isn't the visible text. No
+          // explicit name ⇒ no tooltip (the adapter never falls back to value/label).
+          const tip = (o.label && o.label !== o.value) ? { title: o.label } : {};
+          if (labelTpl !== undefined) {
+            const label = evalTemplate(labelTpl, metadata, fmt, { value: o.value });
+            return { value: o.value, label, ...(o.label && o.label !== label ? { title: o.label } : {}) };
+          }
           // No label template ⇒ GLYPH options, resolved from the live sprite catalogue
           // (the code IS the sprite id — host extensions included).
           const svg = sprite?.(o.value);
-          return svg ? { value: o.value, svg } : { value: o.value, label: o.value };
+          return svg ? { value: o.value, svg, ...tip } : { value: o.value, label: o.value, ...tip };
         });
         if (labelTpl === undefined) hasGlyphCarousel = true;
-        items.push({ kind: "text", value, control: "carousel", name: it.carousel.field, options });
+        // The adapter `picker` control (carousel ≤5 / flower 6–10 / grid >10, auto-degrading).
+        // Its text is tinted with the control HANDLE colour (like the gauge/dial knobs) so the
+        // clickable value reads as a control — customisable via `style.control.handle`.
+        items.push({ kind: "text", value, control: "picker", ...(pick.mode ? { mode: pick.mode } : {}), name: pick.field, options, ...(chrome?.handle?.fill ? { color: chrome.handle.fill } : {}) });
+      } else if (it.gauge) {
+        // FL gauge INLINE in the card (1–2 cursors over the metadata, XXX notches per side) —
+        // same control as the satellite gauge, but stacked in the panel under the pickers.
+        const keys = it.gauge.cursors;
+        items.push(flGaugeNode(metadata, flightLevel, FALLBACK_FL.min, FALLBACK_FL.max, keys.length === 2 ? [keys[0]!, keys[1]!] : [keys[0]!], chrome));
       } else if (it.text !== undefined) {
         items.push({ kind: "text", value: evalTemplate(it.text, metadata, fmt) });
         textLines++;
@@ -607,12 +672,16 @@ function compilePanelWidget(d: PhenomenonDescriptor, satellites: ((input: Widget
       id,
       anchor: { lon: callout.at[0]!, lat: callout.at[1]! },
       ...(framed
-        ? { bg: style.text?.background ?? "#ffffff", border: ink, radius: "small", padding: "small" }
+        ? { bg: style.text?.background ?? "#ffffff", border: ink, radius: "small" }
         : hasGlyphCarousel
           ? { origin: { x: 0.5, y: (glyphH + textH / 2) / (glyphH + textH) } }
           : {}),
+      // Inner padding is a SPACING token, independent of the frame: a framed card always pads
+      // (b&w box), an UNFRAMED card pads too when it carries edge buttons (+/−) so they clear the
+      // bare content. (The adapter currently only honours padding when framed — see the spec.)
+      ...(framed || buttons.length ? { padding: card.pad ?? "large" } : {}),
       font: { color: ink, size: fontPx },
-      child: { dir: "v", align: "center", gap: 0, items },
+      child: { dir: "v", align: "center", gap: card.gap ?? 0, items },
       ...(buttons.length ? { buttons } : {}),
     };
     return [panel, ...(satellites ? satellites(input) : [])];
@@ -626,23 +695,66 @@ function isMarker(d: PhenomenonDescriptor): boolean {
   return d.gesture.primitive === "point" && !d.render && !!d.card;
 }
 
+/** Resolve a glyph ref WITHOUT throwing (returns undefined if the atlas name is absent). */
+function tryGlyph(ref: string): string | undefined {
+  try {
+    return resolveGlyph(ref);
+  } catch {
+    return undefined;
+  }
+}
+
 function compileMarkerWidget(d: PhenomenonDescriptor): (input: WidgetInput) => MarkerWidget {
   const card = d.card as CardSpec;
   for (const it of card.items) if (it.glyph) checkGlyph(it.glyph);
   // The "named" state reads the FIRST input item's bound field (when-named framing).
   const nameField = card.items.find((i) => i.input)?.input?.field;
+  // A picker reads its enum field's options (the descriptor's single source).
+  const enumOf = (key: string): EnumFieldDescriptor | undefined =>
+    (d.fields ?? []).find((f): f is EnumFieldDescriptor => f.kind === "enum" && f.key === key);
 
   return (input: WidgetInput): MarkerWidget => {
-    const { id, geometry, metadata, editable, style } = input;
+    const { id, geometry, metadata, editable, style, sprite, chrome } = input;
     const [lon, lat] = geometry.type === "Point" ? (geometry.coordinates as [number, number]) : [0, 0];
     const ink = style.color; // glyph + card frame
     const textInk = style.text?.color ?? ink; // name/coord may deviate, else follow the ink
     const name = nameField ? str(metadata[nameField], "") : "";
     // Box + coord show only while editing (selected) or once named; else just the glyph.
     const framed = card.framed === true || (card.framed === "when-named" && (editable || name !== ""));
+    // The glyph for an enum option (its `glyph`, else the live sprite, else `atlas:{value}`).
+    const optGlyph = (o: { value: string; glyph?: GlyphSpec }): string | undefined =>
+      (typeof o.glyph === "string" ? tryGlyph(o.glyph) : undefined) ?? sprite?.(o.value) ?? tryGlyph(`atlas:${o.value}`);
     const items: WidgetNode[] = [];
     for (const it of card.items) {
-      if (it.glyph) {
+      const pick = it.picker ?? it.carousel; // `carousel` = deprecated alias
+      if (pick) {
+        const field = enumOf(pick.field);
+        if (!field) continue;
+        const live = liveOptions(field, metadata); // honours `optionsBy`
+        const value = live.some((o) => o.value === metadata[pick.field]) ? str(metadata[pick.field]) : (live[0]?.value ?? "");
+        if (editable) {
+          // Interactive picker (adapter: carousel/flower/grid by option count, auto-degrading).
+          const options = live.map((o) => {
+            const svg = optGlyph(o);
+            // Tooltip = the full human name when the glyph (or terse value) hides it (not for templates).
+            if (svg) return { value: o.value, svg, ...(o.label && o.label !== o.value && !o.label.includes("{") ? { title: o.label } : {}) };
+            // Option labels MAY be templates (e.g. the tropopause `kind` shows the FL: "{fl}" / "H\n{fl}").
+            return { value: o.value, label: evalTemplate(o.label ?? o.value, metadata, { metadata }) };
+          });
+          // `size` also constrains the picker TRIGGER glyph while selected (the adapter maps it to
+          // the control font-size, which sizes the glyph) — so selected matches the collapsed marker.
+          items.push({ kind: "text", value, control: "picker", ...(pick.mode ? { mode: pick.mode } : {}), name: pick.field, options, ...(it.size ? { size: it.size } : {}), ...(chrome?.handle?.fill ? { color: chrome.handle.fill } : {}) });
+        } else {
+          // Collapsed (not selected): the chosen symbol's glyph; or, for a TEXT picker, its
+          // (template-evaluated) label — so a shaped FL box (tropopause) stays visible unselected.
+          const svg = optGlyph({ value });
+          if (svg) items.push({ kind: "glyph", svg, size: it.size ?? 26, color: ink });
+          else {
+            const cur = live.find((o) => o.value === value);
+            items.push({ kind: "text", value: evalTemplate(cur?.label ?? value, metadata, { metadata }) });
+          }
+        }
+      } else if (it.glyph) {
         items.push({ kind: "glyph", svg: glyphFor(it.glyph, lat), size: it.size ?? 26, color: ink });
       } else if (it.input) {
         if (editable) items.push({ kind: "text", value: name, editable: true, control: "input", name: it.input.field, autofocus: true });
@@ -653,6 +765,9 @@ function compileMarkerWidget(d: PhenomenonDescriptor): (input: WidgetInput) => M
         items.push({ kind: "text", value: evalTemplate(it.text, metadata, { metadata }) });
       }
     }
+    // Frame outline driven by an enum field (the tropopause spot: rect / pentagon-up / -down).
+    const shapeBy = card.boxShapeBy;
+    const boxShape = shapeBy ? (shapeBy.map[str(metadata[shapeBy.field])] as BoxShape | undefined) : undefined;
     return {
       id,
       anchor: { lon, lat },
@@ -661,7 +776,8 @@ function compileMarkerWidget(d: PhenomenonDescriptor): (input: WidgetInput) => M
       // keyboard delete can't reach the controller; the card button fires `onWidgetDelete`.
       deletable: card.deletable === true && editable,
       ...(framed ? { bg: "#ffffff", border: ink, radius: "small", padding: "small" } : {}),
-      font: { color: textInk, size: style.text?.size ?? 13 },
+      ...(boxShape ? { boxShape } : {}),
+      font: { color: textInk, size: style.text?.size ?? 13, ...(card.lineHeight != null ? { lineHeight: card.lineHeight } : {}) },
       child: { dir: "v", align: "center", gap: 2, items },
     };
   };
@@ -687,8 +803,8 @@ export function validateDescriptor(d: PhenomenonDescriptor): void {
     if (f.kind === "enum" && !f.options?.length) fail(d.type, `enum field "${f.key}" has no options`);
   }
   for (const it of d.card?.items ?? []) {
-    const keys = (["text", "glyph", "input", "coord", "carousel", "gauge", "dial"] as const).filter((k) => it[k] !== undefined);
-    if (keys.length !== 1) fail(d.type, `a card item must set exactly ONE of text/glyph/input/coord/carousel/gauge/dial (got ${keys.join("+") || "none"})`);
+    const keys = (["text", "glyph", "input", "coord", "picker", "carousel", "gauge", "dial"] as const).filter((k) => it[k] !== undefined);
+    if (keys.length !== 1) fail(d.type, `a card item must set exactly ONE of text/glyph/input/coord/picker/gauge/dial (got ${keys.join("+") || "none"})`);
   }
   for (const sat of d.satellites ?? []) {
     if (!sat.part) fail(d.type, "a satellite is missing its part id");
@@ -727,8 +843,24 @@ export function defFromDescriptor(d: PhenomenonDescriptor): PhenomenonDef {
 
   const decorate = compileDecorate(d);
   const satellites = compileSatellites(d);
+  // A LINE label flagged `movable` slides along the line (controller adds a drag handle).
+  const rr = d.render as (RenderSpec & RenderByGeometry) | undefined;
+  const movableLabel = !!(rr?.line?.label?.movable ?? (rr?.label && (rr as RenderSpec).label?.movable));
+  // A by-geometry render (line/point) WITH a card = a line-or-spot phenomenon whose SPOT is an
+  // always-shown card (e.g. the tropopause `kind` carousel: rect / pentagon-up / -down), while
+  // the CONTOUR keeps its decorated label. An area card (RenderSpec) still replaces its call-out.
+  const byGeomRender = !!(d.render && ("line" in d.render || "point" in d.render));
+  const markerCard = d.card && byGeomRender ? compileMarkerWidget(d) : undefined;
   const widget = d.card
-    ? compilePanelWidget(d, satellites) // the panel replaces the placed call-out
+    ? (markerCard
+        ? (input: WidgetInput): MarkerWidget[] | null => {
+            if (input.geometry.type === "Point") {
+              const sats = satellites && input.editable ? satellites(input) : [];
+              return [markerCard(input), ...sats];
+            }
+            return satellites && input.editable ? (satellites(input).length ? satellites(input) : null) : null;
+          }
+        : compilePanelWidget(d, satellites)) // the panel replaces the placed call-out (areas)
     : satellites
       ? (input: WidgetInput): MarkerWidget[] | null => {
           if (!input.editable) return null;
@@ -736,5 +868,5 @@ export function defFromDescriptor(d: PhenomenonDescriptor): PhenomenonDef {
           return cards.length ? cards : null;
         }
       : undefined;
-  return { ...base, decorate, ...(widget ? { widget } : {}) };
+  return { ...base, decorate, ...(widget ? { widget } : {}), ...(movableLabel ? { movableLabel } : {}) };
 }

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { LatLng } from "../src/core/index.js";
 import type { KeyEvent, MapAdapter, MarkerWidget, PointerEvent, SigwxProfile, SymbolSprites, ToolbarItem, WidgetEdit } from "../src/map/index.js";
-import { SigwxDraw } from "../src/map/index.js";
+import { DEFAULT_STYLE, SigwxDraw } from "../src/map/index.js";
 
 /** Headless mock adapter: records overlays, exposes a trivial linear projection. */
 class MockAdapter implements MapAdapter {
@@ -50,6 +50,7 @@ class MockAdapter implements MapAdapter {
   }
   setDoubleClickZoom(): void {}
   setInteractive(): void {} // draw-adapter 0.2.7 (lock map)
+  setActiveTool(): void {} // draw-adapter 0.4.x (toolbar active-tool highlight)
   setCursor(): void {}
   onPointer(cb: (ev: PointerEvent) => void): void {
     this.cb = cb;
@@ -111,6 +112,22 @@ describe("SigwxDraw controller (draw mode)", () => {
     adapter = new MockAdapter();
     sigwx = new SigwxDraw({ adapter });
     await sigwx.ready();
+  });
+
+  it("re-loading a saved drawing into a FRESH controller doesn't let the next draw overwrite a loaded feature (engine switch)", async () => {
+    const first = stroke(sigwx, adapter, "cb", POLY);
+    const saved = sigwx.save();
+    expect(saved.features).toHaveLength(1);
+    // Simulate the demo switching engines: brand-new adapter + controller, re-hydrate the SAME
+    // collection, then draw again. The fresh controller's id counter must advance past the
+    // loaded `fN` ids, or the new draw reuses `f0` and clobbers the loaded feature.
+    const adapter2 = new MockAdapter();
+    const sigwx2 = new SigwxDraw({ adapter: adapter2 });
+    await sigwx2.ready();
+    sigwx2.load(saved);
+    const second = stroke(sigwx2, adapter2, "icing", [[10, 10], [14, 10], [14, 14], [10, 14]]);
+    expect(second).not.toBe(first); // a fresh id, not a reused f0
+    expect(sigwx2.save().features).toHaveLength(2); // the loaded feature SURVIVES the new draw
   });
 
   it("draws a jet: smoothed axis + handles; no barbs at the 80 floor by default", () => {
@@ -567,8 +584,9 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
     const w = adapter.widget(id)!;
     expect(w.buttons?.[0]?.event).toBe("draw-more");
     expect(w.buttons?.[0]?.place).toBe("h-edges"); // + on top/bottom…
-    expect(w.buttons?.[1]?.event).toBe("erase"); // …the ERASER (−) takes the left edge
-    expect(w.buttons?.[1]?.place).toBe("left");
+    // The eraser is no longer a card button — it's Ctrl/⌘ + hover (brush) / click (dig),
+    // so the `+` is the ONLY edge button now.
+    expect(w.buttons).toHaveLength(1);
     sigwx.select(null);
     expect(adapter.widget(id)).toBeUndefined(); // the control card exists ONLY while selected
     const vid = sigwx.draw("volcano"); // markers no longer carry edge buttons
@@ -698,14 +716,16 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
     const id = stroke(sigwx, adapter, "cb", POLY);
     const w = adapter.widget(id)!;
     const cov = w.child.items[0] as { kind: string; control?: string; name?: string; value?: string; options?: unknown[] };
-    expect(cov.control).toBe("carousel");
+    expect(cov.control).toBe("picker");
     expect(cov.name).toBe("coverage");
     expect(cov.value).toBe("OCNL");
-    // the "CB" word folds INTO the clickable label, stacked under the coverage (pre-line)
-    expect(cov.options).toEqual([
+    // the "CB" word folds INTO the clickable label, stacked under the coverage (pre-line);
+    // the full coverage name rides along as the option `title` (tooltip).
+    expect((cov.options as { value: string; label: string; title?: string }[]).map((o) => ({ value: o.value, label: o.label }))).toEqual([
       { value: "OCNL", label: "OCNL\nCB" },
       { value: "FRQ", label: "FRQ\nCB" },
     ]);
+    expect((cov.options as { title?: string }[]).every((o) => typeof o.title === "string" && o.title.length > 0)).toBe(true);
     adapter.editWidget(id, "FRQ", "coverage"); // a carousel cycle
     expect(lastMeta(sigwx)["coverage"]).toBe("FRQ");
     expect((adapter.widget(id)!.child.items[0] as { value?: string }).value).toBe("FRQ"); // re-rendered
@@ -713,14 +733,16 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
     expect(lastMeta(sigwx)["name"]).toBe("ignored-name-field"); // …routes to metadata.name (harmless on CB)
   });
 
-  it("turbulence card: UNFRAMED, severity GLYPH carousel (svg options), canvas glyph suppressed while selected", () => {
+  it("turbulence card: UNFRAMED (bare, like the call-out) but padded so edge buttons clear content, severity GLYPH carousel, canvas glyph suppressed while selected", () => {
     const id = stroke(sigwx, adapter, "turbulence", POLY);
     const w = adapter.widget(id)!;
-    expect(w.bg).toBeUndefined(); // unframed, like the canvas call-out
+    expect(w.bg).toBeUndefined();     // unframed: no box, no border (just bare text + glyph)
     expect(w.border).toBeUndefined();
+    // …yet it still REQUESTS inner padding (it has +/− edge buttons): the adapter applies it bare.
+    expect((w as { padding?: string }).padding).toBe("large");
     const sev = w.child.items[0] as { control?: string; name?: string; value?: string; options?: { value: string; svg?: string }[] };
     expect((adapter.widget(`${id}#gauge`)!.child.items[0] as { kind?: string }).kind).toBe("gauge"); // satellite gauge card
-    expect(sev.control).toBe("carousel");
+    expect(sev.control).toBe("picker");
     expect(sev.name).toBe("symbol");
     expect(sev.value).toBe("MOD");
     expect(sev.options?.map((o) => o.value)).toEqual(["MOD", "SEV"]);
@@ -739,7 +761,7 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
     expect(w.bg).toBeDefined(); // boxed panel
     expect(w.border).toBeDefined();
     const sev = w.child.items[0] as { control?: string; name?: string; value?: string; options?: { value: string }[] };
-    expect(sev.control).toBe("carousel");
+    expect(sev.control).toBe("picker");
     expect(sev.value).toBe("ICE_MOD");
     expect(sev.options?.map((o) => o.value)).toEqual(["ICE_MOD", "ICE_SEV"]);
     const texts = w.child.items.slice(1) as { value: string }[];
@@ -1041,5 +1063,59 @@ describe("setProfile — live re-ingestion, document preserved", () => {
     expect(s.save().features).toHaveLength(0); // the orphan CB is dropped
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+});
+
+describe("sigwxArea — panel replaces the call-out (no double)", () => {
+  it("selected sigwxArea: NO call-out text-box remains for the feature", async () => {
+    const a = new MockAdapter();
+    const profile = (await import("../src/profiles/temsi-france.json")).default as unknown as SigwxProfile;
+    const s = new SigwxDraw({ adapter: a, profile });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY); // draws + auto-selects
+    const widgetIds = a.widgets.map((w) => w.id);
+    const boxFids = (a.overlays.get("text-boxes")?.features ?? []).map((f) => f.properties?.["featureId"]);
+    expect(widgetIds).toContain(id);     // the panel exists
+    expect(boxFids).not.toContain(id);   // call-out replaced → no double (single CB on screen)
+  });
+
+  // Regression: the amount/type pickers carry an explicit `label: "{value}"`, so the
+  // interpreter renders the CODE as TEXT. WITHOUT it, a label-less picker falls back to
+  // implicit glyph resolution and `sprite("OCNL")`/`sprite("FRQ")` hit the stock CB-coverage
+  // glyphs ("OCNL\nCB", "FRQ\nCB") seeded by DEFAULT_SPRITES — re-introducing the doubled
+  // "OCNL CB" on screen. Assert the pickers stay pure text (the amount shown WITHOUT the type).
+  it("amount picker renders text codes, never the stacked CB glyph", async () => {
+    const a = new MockAdapter();
+    const profile = (await import("../src/profiles/temsi-france.json")).default as unknown as SigwxProfile;
+    const s = new SigwxDraw({ adapter: a, profile });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY); // draws + auto-selects
+    const panel = a.widget(id)!;
+    const pickers = panel.child.items.filter(
+      (i): i is { kind: string; name?: string; value?: string; color?: string; options?: { value: string; label?: string; svg?: string; title?: string }[] } =>
+        "control" in i && (i as { control?: string }).control === "picker",
+    );
+    const amount = pickers.find((p) => p.name === "amount")!;
+    expect(amount.value).toBe("OCNL");                          // amount alone, no type appended
+    expect(amount.options?.every((o) => o.svg === undefined && typeof o.label === "string")).toBe(true);
+    // and nothing rendered for this field carries the leaked stacked-CB glyph
+    expect(JSON.stringify(amount)).not.toContain("\\nCB");
+    // the picker text is tinted with the control HANDLE colour (like the gauge/dial knobs)
+    expect(amount.color).toBe(DEFAULT_STYLE.control.handle.fill);
+    // the terse cloud codes carry their full name as a tooltip (CB → "Cumulonimbus", CI → "Cirrus")
+    const type = pickers.find((p) => p.name === "type")!;
+    expect(type.options?.find((o) => o.value === "CB")).toMatchObject({ label: "CB", title: "Cumulonimbus" });
+    expect(type.options?.find((o) => o.value === "CI")).toMatchObject({ label: "CI", title: "Cirrus" });
+  });
+
+  it("picker text colour follows style.control.handle (customisable like the gauge/dial)", async () => {
+    const a = new MockAdapter();
+    const profile = (await import("../src/profiles/temsi-france.json")).default as unknown as SigwxProfile;
+    const s = new SigwxDraw({ adapter: a, profile, style: { control: { handle: { fill: "#0969da" } } } });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY);
+    const amount = (a.widget(id)!.child.items as { control?: string; name?: string; color?: string }[])
+      .find((i) => i.control === "picker" && i.name === "amount")!;
+    expect(amount.color).toBe("#0969da");
   });
 });

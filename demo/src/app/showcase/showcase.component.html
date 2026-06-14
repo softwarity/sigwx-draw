@@ -3,6 +3,18 @@
 
   <div class="stage">
     <div class="stage-main">
+      <!-- Chart area: the profile's fixed ICAO areas drive the camera + projection via
+           sigwx.setArea(). Disabled (n/a) when the profile declares no `areas`. -->
+      <div class="stage-controls">
+        <label for="area-select">Chart area</label>
+        <select id="area-select" [value]="areaId()" [disabled]="!areaOptions().length"
+                (change)="onAreaChange($event)" title="Frame the map on a fixed ICAO chart area (WAFS)">
+          <option value="">{{ areaOptions().length ? "— none —" : "n/a for this profile" }}</option>
+          @for (a of areaOptions(); track a.id) {
+            <option [value]="a.id">{{ a.id }} — {{ a.name }}</option>
+          }
+        </select>
+      </div>
       <!-- Engine is chosen in the config panel (the `adapter` select); Clear is the toolbar's native ✕ on the map. -->
       <div #map class="map"></div>
     </div>

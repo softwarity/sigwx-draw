@@ -136,6 +136,10 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
   /** The chosen chart profile (the carousel at the top of the config). One for now — `wafs`;
    *  HL/ML/LL (and TEMSI) join the list as their JSON files land. */
   protected readonly profileName = signal("wafs");
+  /** Selectable fixed ICAO chart areas of the live profile (empty ⇒ combo disabled). */
+  protected readonly areaOptions = signal<{ id: string; name: string }[]>([]);
+  /** Currently selected area id ("" = none). Persists across engine switches, re-applied on ready. */
+  protected readonly areaId = signal("");
   /** marker key → path into the profile (e.g. `e3` → ["objects",1,"style","color"]). */
   private readonly editorPaths = new Map<string, (string | number)[]>();
 
@@ -381,8 +385,37 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
     const base = (await load()).default as unknown as SigwxProfile;
     this.sigwx?.clear();
     this.profile = structuredClone(base);
+    this.refreshAreas();
     this.buildProfileEditor();
     await this.rebuild(); // the toolbar palette is a construction-time option
+  }
+
+  /** Recompute the area combo from the live profile; drop the selection if the new profile
+   *  doesn't offer it (switching wafs → temsi clears the WAFS area). */
+  private refreshAreas(): void {
+    const opts = (this.profile?.areas ?? []).map((a) => ({ id: a.id, name: a.name }));
+    this.areaOptions.set(opts);
+    if (!opts.some((o) => o.id === this.areaId())) this.areaId.set("");
+  }
+
+  /** Combo change → drive the map: frame + projection on a chart area, or `null` to clear.
+   *  Pinning to an area also locks the map (and unlocking on "— none —"). */
+  protected onAreaChange(ev: Event): void {
+    const v = (ev.target as HTMLSelectElement).value;
+    this.areaId.set(v);
+    this.sigwx?.setArea(v || null);
+    this.syncLock(!!v);
+  }
+
+  /** Drive the toolbar's native "lock map" button to `locked` — clicked only when its state
+   *  differs, so the button's icon + map interactivity + internal state stay in sync. We click
+   *  the REAL button (rather than `setInteractive`) so the user can always toggle it back: the
+   *  area lock is a default, not a forced freeze (it stays débrayable). No-op if the lock button
+   *  isn't rendered (toolbar off, or `lock:false`). */
+  private syncLock(locked: boolean): void {
+    const root = this.mapEl().nativeElement;
+    const btn = root.querySelector<HTMLButtonElement>('[data-tool="lock"]') ?? document.querySelector<HTMLButtonElement>('[data-tool="lock"]');
+    if (btn && btn.classList.contains("active") !== locked) btn.click();
   }
 
   /** A `<code-binding>` edit inside the profile view → write the value at its path,
@@ -439,6 +472,7 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
         this.profile = structuredClone(base);
         this.buildProfileEditor();
       }
+      this.refreshAreas();
 
       this.teardown();
 
@@ -502,6 +536,12 @@ export class ShowcaseComponent implements AfterViewInit, OnDestroy {
         );
       });
       await this.sigwx.ready();
+      // Drive zone + projection once the adapter is ready: re-apply the selection on the new
+      // engine, or clear piloting (null) for a profile with no areas (non-WAFS).
+      const areaActive = this.areaOptions().length > 0 && !!this.areaId();
+      if (this.areaOptions().length === 0) this.sigwx.setArea(null);
+      else if (this.areaId()) this.sigwx.setArea(this.areaId());
+      this.syncLock(areaActive); // re-lock on the fresh toolbar if an area is pinned
       if (keep?.features.length) this.sigwx.load(keep); // restore the drawing on the new engine
     } catch (e) {
       console.error("[showcase] rebuild failed", e);

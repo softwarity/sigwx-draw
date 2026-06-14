@@ -68,6 +68,8 @@ export interface RenderProps {
   textHalo?: string;
   textBackground?: string;
   textBorder?: string;
+  /** Border width preset for the label box (`small` ≈ 0.8px … default `medium` ≈ 1.4px). */
+  textBorderWidth?: "small" | "medium" | "large";
   // annotations (call-out requests): a stable label id per owner, multi-line
   // content, and whether a leader line is drawn back to the anchor.
   labelId?: string;
@@ -193,6 +195,8 @@ export interface EnumField extends FieldBase {
   type: "enum";
   options: { value: string; label: string }[];
   default?: string;
+  /** Conditional option set: live options depend on another field's value (resolved at render). */
+  optionsBy?: { field: string; map: Record<string, { value: string; label: string }[]> };
 }
 export interface BoolField extends FieldBase {
   type: "bool";
@@ -234,6 +238,8 @@ export interface InteractionSpec {
   pointWhenShort?: boolean;
   /** `"draw"` = a drawn path/area; `"drop"` = a default geometry at the centre. */
   mode: "draw" | "drop";
+  /** The area can be "dug" with the eraser (Ctrl/⌘ + hover → brush, click → hole). */
+  erasable?: boolean;
 }
 
 export interface DrawSpec {
@@ -272,6 +278,9 @@ export interface PhenomenonDef {
   /** Default off-chart behaviour for this phenomenon's FL bounds `[below-min, above-max]`
    *  (areas → `["xxx","xxx"]`; the jet → `["clamp","clamp"]`). Overridable via config. */
   flBeyond?: [FlMode, FlMode];
+  /** LINE phenomena: the placed label can be slid ALONG the line (a drag handle shows while
+   *  selected). Position rides `metadata.labelT` (fraction 0–1). Set from `render.line.label.movable`. */
+  movableLabel?: boolean;
 }
 
 // ── Registry ─────────────────────────────────────────────────────────────────

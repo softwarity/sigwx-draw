@@ -1,12 +1,16 @@
 /**
  * `front-symbols` — the named decorator for TEMSI fronts (OBJECTS-ROADMAP.md family B):
  * a smooth line with the WMO front pips placed at a constant SCREEN interval along it,
- * on the warm side. Four `type`s:
+ * on the warm side. Classic surface fronts:
  *   • `cold`       — filled triangles (blue), pointing to the warm side;
  *   • `warm`       — filled semicircles (red), bulging to the warm side;
  *   • `occluded`   — triangles AND semicircles alternating (purple);
  *   • `stationary` — triangles on the warm side, semicircles on the cold side, alternating
  *                    (blue triangles + red semicircles).
+ * TEMSI line phenomena (same machinery — a line carrying a periodic WMO symbol):
+ *   • `convergence` — solid line + open chevrons pointing along it (convergence line);
+ *   • `itcz`        — double parallel line + periodic crossing ticks (ITCZ);
+ *   • `squall`      — dashed line + periodic "^" carets (severe squall line, red).
  *
  * Registered as a built-in through the SAME mechanism a host would use; the front
  * descriptors register it EXPLICITLY (never a bare side-effect import — `sideEffects:false`).
@@ -29,8 +33,10 @@ import {
 } from "../decorate/index.js";
 import type { Pt } from "../decorate/index.js";
 import type { DecorationInput, RenderFeature } from "../phenomenon.js";
+import type { PhenomenonStyle } from "../style.js";
 
 type FrontType = "cold" | "warm" | "occluded" | "stationary";
+type LineType = "convergence" | "itcz" | "squall";
 
 /** WMO front colours (the ink drives the line + the pips). */
 const FRONT_INK: Record<FrontType, { warm: string; cold: string }> = {
@@ -38,6 +44,13 @@ const FRONT_INK: Record<FrontType, { warm: string; cold: string }> = {
   warm: { warm: "#d1242f", cold: "#d1242f" }, // red
   occluded: { warm: "#8250df", cold: "#8250df" }, // purple
   stationary: { warm: "#d1242f", cold: "#2c5fb3" }, // red pips warm side, blue pips cold side
+};
+
+/** Default ink for the TEMSI line phenomena (overridable via `style.color`). */
+const LINE_INK: Record<LineType, string> = {
+  convergence: "#1f2328", // neutral dark
+  itcz: "#1f2328",
+  squall: "#d1242f", // convective ⇒ red
 };
 
 /** A filled triangle (cold-front pip): base on the line, apex on the `sideSign` side. */
@@ -67,9 +80,91 @@ function semicircle(p: Pt, tan: Pt, sideSign: number, r: number, k: ReturnType<t
   return polygonFeature(ring.map((c) => toLonLat(c, k)), { layer: "decoration", fillColor: ink, fillOpacity: 1, stroke: ink, strokeWidth: 1 });
 }
 
+/** An open polyline glyph (chevron ">" / caret "^") sitting on the line. */
+function strokeGlyph(pts: Pt[], k: ReturnType<typeof frameK>, ink: string, width: number): RenderFeature {
+  return lineFeature(pts.map((c) => toLonLat(c, k)), { layer: "decoration", stroke: ink, strokeWidth: width });
+}
+
+/** The 3 TEMSI line phenomena: one ink, a typed base line + a periodic stroke glyph. */
+function lineSymbols(
+  type: LineType,
+  dense: Pt[],
+  planar: Pt[],
+  total: number,
+  k: ReturnType<typeof frameK>,
+  px: number,
+  style: PhenomenonStyle,
+): RenderFeature[] {
+  const ink = style.edge?.color ?? style.color ?? LINE_INK[type];
+  const width = style.edge?.width ?? 2.4;
+  const out: RenderFeature[] = [];
+
+  // Squall line (WMO severe-squall-line): a DASHED base line carrying open "Λ" teeth that
+  // point to one side — feet ON the line, apex off it ⇒ "—Λ—Λ—". The line meets each tooth
+  // on its slanted SIDES (the Λ has no horizontal base), never bisecting it.
+  if (type === "squall") {
+    out.push(lineFeature(dense, { layer: "edge", stroke: ink, strokeWidth: width, dash: [px * 13, px * 10] }));
+    const spacing = px * 38;
+    const half = px * 7; // half the foot span
+    const up = px * 5; // apex pokes this far ABOVE the line
+    const down = px * 10; // feet hang this far BELOW the line ⇒ the Λ straddles (crosses) the line
+    for (let d = spacing; d < total - spacing * 0.3; d += spacing) {
+      const st = pointAtFraction(planar, d / total);
+      const p = st.p as Pt;
+      const t = unit(st.dir as Pt);
+      const n = perpLeft(t);
+      const apex = add(p, scale(n, up));
+      const footL = add(add(p, scale(n, -down)), scale(t, -half));
+      const footR = add(add(p, scale(n, -down)), scale(t, half));
+      out.push(strokeGlyph([footL, apex, footR], k, ink, width));
+    }
+    return out;
+  }
+
+  if (type === "itcz") {
+    // double parallel line: offset every vertex by ±normal·off (per-vertex tangent)
+    const off = px * 4;
+    const offset = (sign: number): Pt[] =>
+      planar.map((p, i) => {
+        const a = planar[Math.max(0, i - 1)]!;
+        const b = planar[Math.min(planar.length - 1, i + 1)]!;
+        const t = unit([b[0] - a[0], b[1] - a[1]] as Pt);
+        const n = perpLeft(t);
+        return add(p, scale(n, off * sign));
+      });
+    out.push(lineFeature(offset(+1).map((c) => toLonLat(c, k)), { layer: "edge", stroke: ink, strokeWidth: width }));
+    out.push(lineFeature(offset(-1).map((c) => toLonLat(c, k)), { layer: "edge", stroke: ink, strokeWidth: width }));
+  } else {
+    // convergence: a solid base line
+    out.push(lineFeature(dense, { layer: "edge", stroke: ink, strokeWidth: width }));
+  }
+
+  const spacing = px * 40;
+  const size = px * 7;
+  for (let d = spacing; d < total - spacing * 0.3; d += spacing) {
+    const st = pointAtFraction(planar, d / total);
+    const p = st.p as Pt;
+    const t = unit(st.dir as Pt);
+    const n = perpLeft(t);
+    if (type === "convergence") {
+      // ">" pointing along travel: arms at p±n·size, apex ahead at p+t·size
+      const apex = add(p, scale(t, size));
+      const armA = add(p, scale(n, size));
+      const armB = add(p, scale(n, -size));
+      out.push(strokeGlyph([armA, apex, armB], k, ink, width));
+    } else {
+      // itcz: a short tick crossing both lines (−normal..+normal)
+      const a = add(p, scale(n, px * 5));
+      const b = add(p, scale(n, -px * 5));
+      out.push(strokeGlyph([a, b], k, ink, width));
+    }
+  }
+  return out;
+}
+
 export function frontSymbols(input: DecorationInput, params: Record<string, unknown>): RenderFeature[] {
   const { geometry, style, resolution } = input;
-  const type = (typeof params["frontType"] === "string" ? params["frontType"] : "cold") as FrontType;
+  const type = (typeof params["frontType"] === "string" ? params["frontType"] : "cold") as FrontType | LineType;
   const coords = coordsOf(geometry);
   if (coords.length < 2) return [];
 
@@ -79,13 +174,18 @@ export function frontSymbols(input: DecorationInput, params: Record<string, unkn
   const total = polylineLength(planar);
   if (total <= 0) return [];
 
+  // Constant SCREEN sizing (no resolution = headless: a sensible fraction of the line).
+  const px = resolution && resolution > 0 ? resolution : total / 600;
+
+  if (type === "convergence" || type === "itcz" || type === "squall") {
+    return lineSymbols(type, dense, planar, total, k, px, style);
+  }
+
   const ink = FRONT_INK[type] ?? FRONT_INK.cold;
   const out: RenderFeature[] = [];
   // The base line carries the warm-side ink (occluded purple, stationary defaults to red).
   out.push(lineFeature(dense, { layer: "edge", stroke: ink.warm, strokeWidth: style.edge?.width ?? 2.5 }));
 
-  // Constant SCREEN sizing (no resolution = headless: a sensible fraction of the line).
-  const px = resolution && resolution > 0 ? resolution : total / 600;
   const spacing = px * 34; // distance between pips
   const size = px * 8; // pip height / radius
   const half = px * 6; // triangle half-base

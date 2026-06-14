@@ -208,6 +208,31 @@ export interface SigwxProfile {
    *  storable, servable, host-editable. THE FL-bounds fallback: a phenomenon without
    *  its own `flightLevel` config clamps to these; the unit plumbs into rendering later. */
   vertical?: { min: number; max: number; unit?: "fl" | "hft-amsl" };
+  /** Fixed ICAO chart areas (WAFS SWH A…M, TEMSI EUROC/FRANCE) — the cartouche frame.
+   *  Declarative (no code): the host drives the map from these via the adapter
+   *  (`viewArea(extent)` to frame, `setProjection(projection)` — Mercator-only engines
+   *  ignore non-mercator — and `highlightArea(extent)` for the dashed frame). */
+  areas?: ChartArea[];
+}
+
+/** Map projection of a {@link ChartArea}. `stereographic` carries an SRS `code` + its
+ *  proj4 `def` so the adapter can register it (OpenLayers); Mercator-only engines keep
+ *  Mercator. Plain data — no code — so a profile stays JSON. */
+export type AreaProjection =
+  | { kind: "mercator" }
+  | { kind: "stereographic"; pole: "north" | "south"; code: string; def: string };
+
+/** A fixed ICAO chart area: id + label + lon/lat bbox + projection. */
+export interface ChartArea {
+  /** ICAO area id, e.g. `"A"`, `"B1"`, `"H"`. */
+  id: string;
+  /** Human label / geographic coverage — shown in the cartouche. */
+  name: string;
+  /** lon/lat bbox `[west, south, east, north]`; `west > east` ⇒ crosses the antimeridian. */
+  extent: [number, number, number, number];
+  projection: AreaProjection;
+  /** `false` ⇒ `extent` is provisional (exact corners live in ICAO Annex 3, App. 8 figures). */
+  verified?: boolean;
 }
 
 export interface SigwxDrawOptions {
@@ -243,6 +268,12 @@ const SNAPSHOT_HIDE = ["selection", "handles", "controls"];
  *  POINT instead of a line (`pointWhenShort`) — ≈ 1.5× the "FLxxx" label box, so a contour
  *  must be visibly longer than its own label to count as a line (tropopause spot vs contour). */
 const POINT_MAX_PX = 60;
+
+/** The platform "command" modifier for the eraser: ⌘ on macOS, Ctrl elsewhere. macOS reserves
+ *  Ctrl+click for the secondary (context-menu) click, so using Ctrl there is unreliable — we use
+ *  ⌘ on Mac and Ctrl on Windows/Linux (the usual `platformModifierKeyOnly` convention). */
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || "");
+const eraserMod = (ev: { ctrlKey?: boolean; metaKey?: boolean }): boolean => (IS_MAC ? !!ev.metaKey : !!ev.ctrlKey);
 
 /** A break point sitting at a jet extremity (t≈0 / t≈1): its speed is fixed at the floor. */
 const isEndItem = (it: Metadata): boolean => {
@@ -290,6 +321,7 @@ export class SigwxDraw {
   private dragTarget:
     | { kind: "vertex"; featureId: string; index: number }
     | { kind: "slider"; featureId: string; index: number }
+    | { kind: "labelslide"; featureId: string }
     | { kind: "callout"; featureId: string; labelId: string; grab: [number, number] }
     | { kind: "anchor"; featureId: string; area: number }
     | { kind: "translate"; featureId: string; lastPx: [number, number] }
@@ -318,7 +350,7 @@ export class SigwxDraw {
   /** ERASER mode (the card's `−` button): rubbing gnaws the feature LIVE — each pointer
    *  step subtracts a brush capsule. `r` (px) is sized to the area at rub start; `lastPx`
    *  null = armed, not rubbing. Exited via Escape / deselection. */
-  private erasing: { featureId: string; r: number; lastPx: [number, number] | null; cursorPx?: [number, number] } | null = null;
+  private erasing: { featureId: string; r: number; lastPx: [number, number] | null; cursorPx?: [number, number]; viaCtrl?: boolean } | null = null;
   /** FL reference captured at selection time — pins the gauge cards (stable during drags). */
   private flRef: number | null = null;
   /** Chart-type id from the profile — tagged onto `save()`'s FeatureCollection. */
@@ -327,6 +359,10 @@ export class SigwxDraw {
   private profileTools: ToolSpec[] | undefined;
   /** Chart vertical reference (profile) — the FL-bounds fallback of `flResolved`. */
   private vertical: { min: number; max: number } | undefined;
+  /** Fixed ICAO chart areas from the profile — looked up by `setArea`. */
+  private profileAreas: ChartArea[] | undefined;
+  /** The area `setArea` last applied (null = none / cleared). */
+  private activeAreaId: string | null = null;
   /** Call-out declutter threshold (fraction of the view span; 0 = never hide). */
   private calloutFraction = 0.15;
   /** Last visibility per feature (the ±10% hysteresis needs the previous state). */
@@ -435,6 +471,16 @@ export class SigwxDraw {
           this.updateMetadata(fid, { [key]: Number(e.value) });
         } else {
           this.updateMetadata(fid, { [key]: e.value });
+          // Conditional-options dependents (`optionsBy`): a field whose option SET depends on
+          // `key` (e.g. cloud `amount` by `type`) — reset it if its value is no longer valid.
+          for (const s of def.schema) {
+            if (s.type === "enum" && s.optionsBy?.field === key) {
+              const opts = s.optionsBy.map[String(e.value)] ?? s.optionsBy.map["*"] ?? s.options;
+              if (!opts.some((o) => o.value === f.properties.metadata[s.key])) {
+                this.updateMetadata(fid, { [s.key]: opts[0]?.value ?? "" });
+              }
+            }
+          }
         }
       });
       this.adapter.setCoordFormat((ll) => `${Math.abs(ll.lat).toFixed(1)}${ll.lat >= 0 ? "N" : "S"} ${Math.abs(ll.lon).toFixed(1)}${ll.lon >= 0 ? "E" : "W"}`);
@@ -486,12 +532,33 @@ export class SigwxDraw {
     this.select(null);
     this.mode = "drawing";
     this.drawing = { type, coords: [] };
+    this.setActiveTool(type); // highlight the armed tool's button WHILE drawing (cleared on commit/cancel)
     this.drawCursor = null;
     this.stroking = false;
     this.syncDblClickZoom();
     this.adapter.setCursor("crosshair");
     this.renderAll();
     return "";
+  }
+
+  /** The erasable feature under a hover hit, else null — a Polygon/MultiPolygon area whose
+   *  phenomenon opts into the eraser (`interaction.erasable`). Only body overlays count
+   *  (edge / fill / decoration); handles & widgets are ignored. */
+  private erasableFeatureAt(hit: PointerEvent["hit"]): string | null {
+    if (!hit || (hit.overlay !== "edge" && hit.overlay !== "area-fill" && hit.overlay !== "decoration")) return null;
+    const fid = hit.props["featureId"];
+    if (typeof fid !== "string") return null;
+    const f = this.doc.get(fid);
+    if (!f || (f.geometry.type !== "Polygon" && f.geometry.type !== "MultiPolygon")) return null;
+    const def = this.registry.get(f.properties.phenomenon);
+    return def && interactionOf(def).erasable ? fid : null;
+  }
+
+  /** Drop the (Ctrl-armed) eraser: clear the brush, reset the cursor, repaint. */
+  private disarmEraser(): void {
+    this.erasing = null;
+    this.adapter.setCursor("");
+    this.scheduleRender();
   }
 
   /** Brush radius (px) for the eraser — proportional to the area's on-screen extent
@@ -569,7 +636,10 @@ export class SigwxDraw {
       .map((poly) => poly.filter((rg) => rg.length >= 4).map(lean))
       .filter((poly) => poly.length > 0 && poly[0]!.length >= 4);
     if (!polys.length) {
-      this.erasing = null; // gnawed it all out
+      // Gnawed it all out — restore the navigation lever onUp won't reach (erasing is null now).
+      if (er.viaCtrl) this.adapter.setInteractive(true);
+      else this.adapter.setPanEnabled(true);
+      this.erasing = null;
       this.adapter.setCursor("");
       this.delete(er.featureId);
       return;
@@ -899,6 +969,14 @@ export class SigwxDraw {
       this.doc.set(id, f);
       this.order.push(id);
     }
+    // Advance the id counter PAST every loaded `fN` id — otherwise a feature that came WITH an
+    // id (the `||` above didn't bump the counter) lets a later draw reuse `f0`/`f1`/… and
+    // OVERWRITE a loaded feature. Bites when the same collection is re-hydrated into a fresh
+    // controller (e.g. the demo switching engines): draw → `f0` → clobbers the first feature.
+    for (const id of this.doc.keys()) {
+      const m = /^f(\d+)$/.exec(id);
+      if (m) this.idSeq = Math.max(this.idSeq, Number(m[1]) + 1);
+    }
     this.selectedId = null;
     this.selectedSub = null;
     this.syncDblClickZoom();
@@ -1043,10 +1121,18 @@ export class SigwxDraw {
   }
 
   /** Commit a drawn geometry as a new feature, select it, leave drawing mode. */
+  /** Mirror the drawing state onto the toolbar: highlight the armed tool's button while a draw
+   *  is in progress, clear it on commit / cancel / Escape. The adapter owns the toolbar DOM and
+   *  does the actual highlight (its appearance is set via the toolbar's `activeStyle`). */
+  private setActiveTool(id: string | null): void {
+    this.adapter.setActiveTool(id);
+  }
+
   private commit(type: string, geometry: Geometry): void {
     // `+` append mode: the freshly drawn polygon joins the TARGET feature's geometry as an
     // extra area (Polygon → MultiPolygon) — one logical phenomenon (one box, one metadata
     // set, one arrow per area), NOT a new feature.
+    this.setActiveTool(null); // drawing succeeded → the tool button is no longer armed
     const target = this.appendTo ? this.doc.get(this.appendTo) : undefined;
     this.appendTo = null;
     if (target && geometry.type === "Polygon" && (target.geometry.type === "Polygon" || target.geometry.type === "MultiPolygon")) {
@@ -1112,6 +1198,10 @@ export class SigwxDraw {
     if (it.pointWhenShort && this.strokeExtentPx(d.coords) < POINT_MAX_PX) {
       const at = d.coords[0];
       if (at) {
+        // A spot is laid by a CLICK, which the browser follows with a trailing `click` event —
+        // swallow it (didDrag) so it doesn't land on the map background and deselect the spot
+        // we just placed + selected (markers use `dropFeature`, no trailing map click).
+        this.didDrag = true;
         this.commit(d.type, { type: "Point", coordinates: [at[0]!, at[1]!] });
         return;
       }
@@ -1149,6 +1239,7 @@ export class SigwxDraw {
 
   private cancelDrawing(): void {
     this.appendTo = null; // an aborted `+` stroke must not capture the NEXT drawing
+    this.setActiveTool(null); // leaving drawing (Escape / abort / re-arm) un-highlights the button
     if (!this.drawing) return;
     this.drawing = null;
     this.drawCursor = null;
@@ -1526,6 +1617,21 @@ export class SigwxDraw {
       }
     }
 
+    // Movable line label (0°C isotherm): a control handle sits on the label so it can be
+    // slid ALONG the line (its position rides metadata.labelT).
+    if (def.movableLabel && f.geometry.type === "LineString") {
+      // Handle stays ON the line at labelT — which is the BASE of the lifted label box, so
+      // grabbing it never covers the value.
+      const { planar, k } = this.renderPath(f.geometry, it);
+      const t = typeof f.properties.metadata["labelT"] === "number" ? (f.properties.metadata["labelT"] as number) : 0.5;
+      const ll = toLonLat(pointAtFraction(planar, t).p, k);
+      buckets["handles"]!.push({
+        type: "Feature",
+        properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: "label" },
+        geometry: { type: "Point", coordinates: ll },
+      });
+    }
+
   }
 
   /** The dense planar path (smoothed if needed) used for slider placement. */
@@ -1613,11 +1719,22 @@ export class SigwxDraw {
   }
 
   private onDown(ev: PointerEvent): void {
+    // Ctrl/⌘ + click on an erasable area digs even if the hover arm never caught (or caught a
+    // different feature) — resolve the target from the click itself. Robust to engines that
+    // flicker the fill hit-test (OpenLayers): the click is the source of truth.
+    if (eraserMod(ev)) {
+      const fid = this.erasableFeatureAt(ev.hit);
+      if (fid && this.erasing?.featureId !== fid)
+        this.erasing = { featureId: fid, r: this.brushRadiusPx(fid), lastPx: null, viaCtrl: true };
+    }
     if (this.erasing) {
       const px = this.adapter.project(ev.lngLat);
       if (px) {
         this.erasing.lastPx = px;
-        this.adapter.setPanEnabled(false);
+        // Modifier-armed: lock ALL navigation (a modified drag would otherwise rotate the map);
+        // button-armed: pan-off is enough. Restored on release (onUp).
+        if (this.erasing.viaCtrl) this.adapter.setInteractive(false);
+        else this.adapter.setPanEnabled(false);
         this.eraseStep(px, px); // a tap punches a round hole right away
       }
       return;
@@ -1645,6 +1762,8 @@ export class SigwxDraw {
         if (featureId === this.selectedId) this.selectSubItem(index);
       } else if (hClass === "control" && role === "anchor") {
         this.dragTarget = { kind: "anchor", featureId, area: Number(hit.props["area"] ?? 0) };
+      } else if (hClass === "control" && role === "label") {
+        this.dragTarget = { kind: "labelslide", featureId };
       }
       // Only seize the pointer if a drag was actually armed — a control handle hit with
       // no selected sub-item arms nothing, and must NOT leave pan disabled (onUp returns
@@ -1718,6 +1837,23 @@ export class SigwxDraw {
   }
 
   private onMove(ev: PointerEvent): void {
+    // Platform modifier (⌘ on Mac / Ctrl on Win-Linux) + hover over an erasable area ARMS the
+    // eraser brush (no `−` button); press-drag-release then digs/rubs (onDown/onMove/onUp). The
+    // arm is STICKY while the modifier is held and only drops when it's RELEASED — we must NOT
+    // disarm just because a hover frame has no erasable hit (OpenLayers flickers the fill hit-test
+    // over the interior, which would drop the arm right before the click). (Re)target on any
+    // erasable feature hovered; the dig re-resolves from the click and self-corrects off-feature.
+    if (this.mode !== "drawing" && !this.erasing?.lastPx) {
+      const mod = eraserMod(ev);
+      if (!mod) {
+        if (this.erasing?.viaCtrl) this.disarmEraser(); // modifier released → exit eraser mode
+      } else {
+        const fid = this.erasableFeatureAt(ev.hit);
+        if (fid && this.erasing?.featureId !== fid)
+          this.erasing = { featureId: fid, r: this.brushRadiusPx(fid), lastPx: null, viaCtrl: true };
+        // hit-less frame while the modifier is held → keep the current arm (no disarm)
+      }
+    }
     if (this.erasing) {
       this.adapter.setCursor("crosshair");
       // Track the pointer: the brush footprint is PROJECTED on the map (renderAll), so the
@@ -1756,6 +1892,16 @@ export class SigwxDraw {
     if (!t) return;
     const f = this.doc.get(t.featureId);
     if (!f) return;
+    if (t.kind === "labelslide") {
+      // Slide the placed label ALONG the line: project the cursor onto the curve → labelT.
+      if (f.geometry.type !== "LineString") return;
+      const { planar, k } = this.renderPath(f.geometry, interactionOf(this.registry.get(f.properties.phenomenon)));
+      const tt = projectToFraction(planar, toPlanar([ev.lngLat.lon, ev.lngLat.lat], k));
+      f.properties.metadata["labelT"] = Math.min(0.98, Math.max(0.02, tt));
+      this.didDrag = true;
+      this.scheduleRender();
+      return;
+    }
     if (t.kind === "vertex") {
       if (f.geometry.type === "Polygon" || f.geometry.type === "MultiPolygon") {
         // Constrain the zone to a SIMPLE polygon: apply the move, but undo it if it makes
@@ -1897,7 +2043,8 @@ export class SigwxDraw {
   private onUp(): void {
     if (this.erasing?.lastPx) {
       this.erasing.lastPx = null; // stay in eraser mode (Escape exits) — rub again for gruyère
-      this.adapter.setPanEnabled(true);
+      if (this.erasing.viaCtrl) this.adapter.setInteractive(true);
+      else this.adapter.setPanEnabled(true);
       if (this.doc.has(this.erasing.featureId)) {
         this.emitChange(); // ONE change event per rub (the gnawing itself was live)
         this.emitMetadata();
@@ -2143,6 +2290,7 @@ export class SigwxDraw {
     this.profileId = profile.id;
     this.profileTools = profile.tools;
     this.vertical = profile.vertical;
+    this.profileAreas = profile.areas;
     // RE-ENTRANT (setProfile calls this again): rebuild the registry so a REMOVED object
     // disappears. A profile WITH `objects` defines the FULL palette — start empty, it
     // fills it (the profile is self-sufficient). No `objects` ⇒ the legacy built-in
@@ -2167,6 +2315,43 @@ export class SigwxDraw {
    * console warning) so the document stays consistent; everything else is re-decorated
    * with the new descriptors. The map view and the (still-valid) selection are preserved.
    */
+  /** The fixed chart areas declared by the active profile (empty for a non-area profile). */
+  get areas(): ChartArea[] {
+    return this.profileAreas ?? [];
+  }
+
+  /** The area `setArea` last applied (`null` = none). */
+  get area(): string | null {
+    return this.activeAreaId;
+  }
+
+  /**
+   * Frame the map on a fixed ICAO chart area and switch to its projection, drawing a dashed
+   * frame around it. Accepts either:
+   *  - a **string** id → resolved against the profile's `areas`;
+   *  - a full **{@link ChartArea}** object → used as-is (an ad-hoc area NOT in the profile, with
+   *    its own `extent` + `projection`);
+   *  - **`null`** (or an unknown id, or a profile with no `areas`) → clears the frame and resets
+   *    to Mercator.
+   *
+   * Non-mercator projections apply ONLY on adapters that can reproject (OpenLayers); MapLibre
+   * and Leaflet stay Mercator (the adapter no-ops a `proj4` spec there with one warning).
+   */
+  setArea(area: string | ChartArea | null): void {
+    const resolved: ChartArea | null =
+      area == null ? null : typeof area === "string" ? this.profileAreas?.find((x) => x.id === area) ?? null : area;
+    this.activeAreaId = resolved?.id ?? null;
+    if (!resolved) {
+      this.adapter.setProjection("mercator");
+      this.adapter.highlightArea(null);
+      return;
+    }
+    const p = resolved.projection;
+    this.adapter.setProjection(p.kind === "mercator" ? "mercator" : { kind: "proj4", code: p.code, def: p.def });
+    this.adapter.viewArea(resolved.extent);
+    this.adapter.highlightArea(resolved.extent);
+  }
+
   setProfile(profile: SigwxProfile): void {
     this.applyProfile(profile, this.opts);
     // Drop orphans (a type the new profile removed) — else the renderer can't decorate them.
@@ -2218,28 +2403,30 @@ export class SigwxDraw {
     });
     const items: ToolbarItem[] = [];
     if (toolSpecs?.some((t) => typeof t !== "string")) {
-      // DECLARATIVE palette (profile v2, spec §2d): strings are flat toggle buttons,
-      // `{ group, items }` entries are split-button submenus (the trigger mirrors the
-      // last-picked child — engine semantics of a group). No auto-grouping here: the
-      // profile says exactly what it wants.
-      for (const t of toolSpecs) {
+      // DECLARATIVE palette (profile v2, spec §2d): a string is a draw button; a `{ group,
+      // items }` entry is a submenu, and its `items` may themselves be groups → NESTED
+      // submenus (any depth). No auto-grouping here — the profile says exactly what it wants.
+      const dress = (icon: string): string =>
+        !/\bwidth=/.test(icon) ? icon.replace("<svg", "<svg width='22' height='22'") : icon;
+      const buildSpec = (t: ToolSpec, top: boolean): ToolbarItem | null => {
         if (typeof t === "string") {
           const def = defOf(t);
-          if (def) items.push(drawItem(def, true));
-          continue;
+          return def ? drawItem(def, top) : null;
         }
-        const children = t.items.map(defOf).filter((d): d is PhenomenonDef => !!d);
-        if (!children.length) continue;
-        // Group icon: explicit (atlas ref / inline, dressed ~22 px) or the first child's.
-        const icon = t.icon ? resolveGlyph(t.icon) : children[0]?.icon;
-        const svg = icon && !/\bwidth=/.test(icon) ? icon.replace("<svg", "<svg width='22' height='22'") : icon;
-        items.push({
+        const children = t.items.map((it) => buildSpec(it, false)).filter((i): i is ToolbarItem => !!i);
+        if (!children.length) return null;
+        const icon = t.icon ? resolveGlyph(t.icon) : children[0]?.svg; // explicit, else first child's
+        return {
           id: t.group.toLowerCase().replace(/\s+/g, "-"),
           title: t.group,
-          ...(svg ? { svg } : {}),
+          ...(icon ? { svg: dress(icon) } : {}),
           toggle: true,
-          children: children.map((d) => drawItem(d, false)),
-        });
+          children,
+        };
+      };
+      for (const t of toolSpecs) {
+        const item = buildSpec(t, true);
+        if (item) items.push(item);
       }
     } else {
       const flat = toolSpecs as string[] | undefined;

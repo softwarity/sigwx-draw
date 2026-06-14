@@ -87,9 +87,9 @@ describe("descriptor validation (names fail fast, listing the available)", () =>
   });
 });
 
-describe("profile JSONs are THE source of the stock descriptors (no TS data copy)", () => {
-  it("wafs.json is self-contained: full inline descriptors + métier glyphs, and IS the stock", async () => {
-    const { BUILTIN_DESCRIPTORS } = await import("../src/core/index.js");
+describe("profile JSONs are THE source of the descriptors; glyphs are referenced (svgs/ bank)", () => {
+  it("wafs.json holds full inline descriptors; its glyphs are REFERENCES (not inline SVG)", async () => {
+    const { BUILTIN_DESCRIPTORS, STOCK_GLYPHS } = await import("../src/core/index.js");
     const profile = (await import("../src/profiles/wafs.json")).default as {
       objects: PhenomenonDescriptor[];
       glyphs: Record<string, string>;
@@ -101,11 +101,15 @@ describe("profile JSONs are THE source of the stock descriptors (no TS data copy
     // BUILTIN_DESCRIPTORS is DERIVED from this JSON — every WAFS stock entry IS the very
     // object the profile holds (single source of truth, no TS↔JSON duplication).
     for (const o of profile.objects) expect(BUILTIN_DESCRIPTORS[o.type]).toBe(o);
-    expect(Object.keys(profile.glyphs)).toContain("cb");
+    // SOURCE `glyphs` = REFERENCES (paths into svgs/), NOT inline SVG — the build resolves
+    // them to inline SVG in dist. The lib's stock BUTTON glyphs come from stock-glyphs.json.
+    expect(profile.glyphs.cb).toMatch(/\.svg$/);
+    expect(profile.glyphs.cb).not.toMatch(/^<svg/);
+    expect(STOCK_GLYPHS.cb).toMatch(/^<svg/);
     expect(profile.vertical).toMatchObject({ min: 250, max: 600 });
   });
 
-  it("the TEMSI profiles are autoportant (every object is a FULL inline descriptor, fronts too)", async () => {
+  it("the TEMSI profiles are full inline descriptors (fronts too); glyphs are references", async () => {
     for (const id of ["temsi-france", "temsi-euroc"]) {
       const profile = (await import(`../src/profiles/${id}.json`)).default as {
         objects: PhenomenonDescriptor[];
@@ -115,9 +119,61 @@ describe("profile JSONs are THE source of the stock descriptors (no TS data copy
         expect(typeof o).toBe("object"); // NOT a "name" string reference — fully inline
         expect(o.type).toBeTruthy();
         expect(o.style).toBeTruthy();
-        if (o.type.startsWith("front")) expect(o.icon).toMatch(/^<svg/); // fronts carry their inline icon
+        // No object carries an inline SVG icon — fronts (and every other object) reference
+        // their icon by name (the default `atlas:<type>`, declared in `glyphs`).
+        if (typeof o.icon === "string") expect(o.icon).not.toMatch(/^<svg/);
+        if (o.type.startsWith("front")) {
+          expect(o.icon).toBeUndefined(); // defaults to atlas:<type>
+          expect(profile.glyphs[o.type]).toMatch(/\.svg$/);
+        }
       }
-      expect(Object.keys(profile.glyphs).length).toBeGreaterThan(0);
+      // glyphs hold ONLY bank references (paths) now — no inline <svg> anywhere (single source:
+      // the svgs/ bank; the build inlines them into the dist profile).
+      for (const ref of Object.values(profile.glyphs)) expect(ref).toMatch(/\.svg$/);
     }
+  });
+});
+
+describe("movable line label (0°C isotherm)", () => {
+  it("def.movableLabel is set and the label rides metadata.labelT along the line", async () => {
+    const profile = (await import("../src/profiles/temsi-euroc.json")).default as {
+      objects: PhenomenonDescriptor[];
+      glyphs: Record<string, string>;
+    };
+    // zeroIsotherm defaults its icon to `atlas:zeroIsotherm` (declared in `glyphs`) — register
+    // the profile glyphs first, exactly as profile ingestion does at runtime.
+    const { registerExtensions } = await import("../src/core/index.js");
+    registerExtensions({ glyphs: profile.glyphs });
+    const spec = profile.objects.find((o) => o.type === "zeroIsotherm")!;
+    const def = defFromDescriptor(resolveObjectSpec(spec, mergeDescriptor));
+    expect(def.movableLabel).toBe(true);
+    const line = { type: "LineString" as const, coordinates: [[0, 46], [10, 46]] };
+    const labelLon = (labelT?: number): number => {
+      const metadata = { fl: 100, ...(labelT !== undefined ? { labelT } : {}) };
+      const feats = def.decorate({ geometry: line, metadata, style: def.style, resolution: 0 });
+      const box = feats.find((f) => f.geometry.type === "Point")!;
+      return (box.geometry as { coordinates: number[] }).coordinates[0]!;
+    };
+    expect(labelLon()).toBeCloseTo(5, 1); // default = mid
+    expect(labelLon(0.2)).toBeCloseTo(2, 1); // slid toward the start
+    expect(labelLon(0.8)).toBeCloseTo(8, 1); // slid toward the end
+  });
+});
+
+describe("tropopause spot — 3 forms via boxShape (rect / pentagon-up / pentagon-down)", () => {
+  it("the spot card's frame shape follows `kind`; the contour keeps its label", async () => {
+    const profile = (await import("../src/profiles/temsi-euroc.json")).default as { objects: PhenomenonDescriptor[] };
+    const def = defFromDescriptor(resolveObjectSpec(profile.objects.find((o) => o.type === "tropopause")!, mergeDescriptor));
+    const call = def.widget as (i: unknown) => { boxShape?: string | number[][] }[] | { boxShape?: string | number[][] } | null;
+    const base = { id: "t", style: def.style, chrome: {}, sprite: () => undefined, flightLevel: { min: 0, max: 600 } };
+    const spotShape = (kind: string): string | number[][] | undefined => {
+      const w = call({ ...base, geometry: { type: "Point", coordinates: [2, 46] }, metadata: { fl: 460, kind }, editable: false });
+      return (Array.isArray(w) ? w[0] : w)?.boxShape;
+    };
+    expect(spotShape("fl")).toBe("rect"); // plain box
+    expect(spotShape("high")).toBe("pentagon-up"); // cap holds the H (adapter preset, cap inside [0,1])
+    expect(spotShape("low")).toBe("pentagon-down"); // point holds the L
+    // contour (LineString) ⇒ no card (the FL label is drawn by decorate)
+    expect(call({ ...base, geometry: { type: "LineString", coordinates: [[0, 46], [5, 46]] }, metadata: { fl: 460, kind: "fl" }, editable: false })).toBeNull();
   });
 });

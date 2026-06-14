@@ -1,6 +1,6 @@
 /** Map layer: the controller, adapters, style and overlay manifest. */
 export { SigwxDraw } from "./sigwx-draw.js";
-export type { SigwxDrawOptions, SigwxProfile, PhenomenonConfig, PhenomenaConfig, NumRange, TurbulenceType, FormSpec, ResolvedField } from "./sigwx-draw.js";
+export type { SigwxDrawOptions, SigwxProfile, ChartArea, AreaProjection, PhenomenonConfig, PhenomenaConfig, NumRange, TurbulenceType, FormSpec, ResolvedField } from "./sigwx-draw.js";
 
 export type {
   MapAdapter,

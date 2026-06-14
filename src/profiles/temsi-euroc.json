@@ -9,18 +9,239 @@
   "callouts": {
     "minZoneFraction": 0.15
   },
-  "glyphs": {
-    "jetStream": "<svg viewBox='0 0 24 24' width='20' height='20' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='M3 17 Q11.5 16.5 16.5 8'/><path d='M18.5 4.6 L18.2 9 L14.8 7 Z' fill='currentColor' stroke='none'/><path d='M5.5 16.5 L7.4 16.1 L2.8 13 Z' fill='currentColor' stroke='none'/><path d='M9 15.6 L5 12.8' stroke-width='1.3'/><path d='M11.2 14.4 L7.2 11.6' stroke-width='1.3'/><text x='14.5' y='20' font-size='5.3' font-weight='700' text-anchor='middle' fill='currentColor' stroke='none' font-family='sans-serif' transform='rotate(-25 14.5 20)'>FL300</text></svg>",
-    "tropopause": "<svg viewBox='0 0 24 24'><g fill='none' stroke='currentColor' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='M2 13 Q7 7 12 11 T22 8' stroke-dasharray='3.2 1.6'/><text x='12' y='21.5' font-size='6.2' font-weight='700' fill='currentColor' stroke='none' text-anchor='middle' font-family='sans-serif'>FL380</text></g></svg>",
-    "cb": "<svg viewBox='0 0 24 24' width='24' height='24' fill='none' stroke='currentColor' stroke-width='1.2' stroke-linejoin='round'><g transform='rotate(-15 12 12)'><path d='M13.1 5.3 L14.1 5 L15 5.1 L15.7 5.5 L16.4 6.3 L17 7.3 L18.1 7.2 L19 7.2 L19.8 7.5 L20.3 8.1 L20.6 9 L20.7 10 L21.4 10.8 L21.8 11.5 L21.9 12.2 L21.5 12.8 L20.9 13.3 L20 13.8 L20.1 14.8 L20.1 15.7 L19.8 16.4 L19.2 16.8 L18.3 17 L17.3 17 L16.6 18 L15.8 18.7 L15 19.1 L14.1 19.1 L13.1 18.8 L12 18.3 L10.9 18.7 L9.9 19 L9 18.9 L8.3 18.5 L7.6 17.7 L7 16.7 L5.9 16.8 L5 16.8 L4.2 16.5 L3.7 15.9 L3.4 15 L3.3 14 L2.6 13.2 L2.2 12.5 L2.1 11.8 L2.5 11.2 L3.1 10.7 L4 10.2 L3.9 9.2 L3.9 8.3 L4.2 7.6 L4.8 7.2 L5.7 7 L6.7 7 L7.4 6 L8.2 5.3 L9 4.9 L9.9 4.9 L10.9 5.2 L12 5.7 Z'/></g><text x='12' y='12.5' font-size='7' font-weight='700' text-anchor='middle' dominant-baseline='central' stroke='none' fill='currentColor' font-family='system-ui, -apple-system, sans-serif'>CB</text></svg>",
-    "icing": "<svg viewBox='0 0 24 24' width='24' height='24' fill='none' stroke='currentColor' stroke-width='1.2' stroke-linejoin='round'><g transform='rotate(-15 12 12)'><path d='M13.1 5.3 L14.1 5 L15 5.1 L15.7 5.5 L16.4 6.3 L17 7.3 L18.1 7.2 L19 7.2 L19.8 7.5 L20.3 8.1 L20.6 9 L20.7 10 L21.4 10.8 L21.8 11.5 L21.9 12.2 L21.5 12.8 L20.9 13.3 L20 13.8 L20.1 14.8 L20.1 15.7 L19.8 16.4 L19.2 16.8 L18.3 17 L17.3 17 L16.6 18 L15.8 18.7 L15 19.1 L14.1 19.1 L13.1 18.8 L12 18.3 L10.9 18.7 L9.9 19 L9 18.9 L8.3 18.5 L7.6 17.7 L7 16.7 L5.9 16.8 L5 16.8 L4.2 16.5 L3.7 15.9 L3.4 15 L3.3 14 L2.6 13.2 L2.2 12.5 L2.1 11.8 L2.5 11.2 L3.1 10.7 L4 10.2 L3.9 9.2 L3.9 8.3 L4.2 7.6 L4.8 7.2 L5.7 7 L6.7 7 L7.4 6 L8.2 5.3 L9 4.9 L9.9 4.9 L10.9 5.2 L12 5.7 Z'/></g><path d='M8.5 8 V11.5 Q8.5 13 9.7 13 H14.3 Q15.5 13 15.5 11.5 V8 M10.8 11 V17 M13.2 11 V17' stroke-width='1.3' stroke-linecap='round'/></svg>",
-    "turbulence": "<svg viewBox='0 0 24 24' width='20' height='20' fill='none' stroke='currentColor' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='M12 1.3 C17.8 0.9 23.2 3.6 22.6 10.9 C22.2 17.6 17.7 22.2 11.8 21.8 C5.5 21.4 1.3 16.7 1.9 10.1 C2.4 4.1 6.2 1.7 12 1.3 Z' stroke-dasharray='2.8 2.3'/><path d='M8 14 H10.5 L12 9 L13.5 14 H16'/></svg>",
-    "volcano": "<svg viewBox='0 0 24 24'><g fill='none' stroke='currentColor' stroke-width='1.5' stroke-linecap='round'><path d='M10.3 9 L8.7 4.6'/><path d='M12 8.4 L12 3.8'/><path d='M13.7 9 L15.3 4.6'/></g><path d='M3.8 18.6 L9 9 L10.8 10.7 L13.2 10.7 L15 9 L20.2 18.6 Z' fill='currentColor'/><circle cx='12' cy='20' r='1.4' fill='currentColor'/></svg>",
-    "tc-nh": "<svg viewBox='0 0 24 24'><g fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round'><circle cx='12' cy='12' r='3.6'/><path d='M14.9 9.9 C16.4 7.3 15.6 4.6 12.8 3.1'/><path d='M9.1 14.1 C7.6 16.7 8.4 19.4 11.2 20.9'/></g></svg>",
-    "tc-sh": "<svg viewBox='0 0 24 24'><g transform='translate(24,0) scale(-1,1)'><g fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round'><circle cx='12' cy='12' r='3.6'/><path d='M14.9 9.9 C16.4 7.3 15.6 4.6 12.8 3.1'/><path d='M9.1 14.1 C7.6 16.7 8.4 19.4 11.2 20.9'/></g></g></svg>",
-    "radioactive": "<svg viewBox='0 0 24 24'><g fill='currentColor'><path d='M10.2 8.88 L7.5 4.21 A9 9 0 0 1 16.5 4.21 L13.8 8.88 A3.6 3.6 0 0 0 10.2 8.88 Z'/><path d='M10.2 8.88 L7.5 4.21 A9 9 0 0 1 16.5 4.21 L13.8 8.88 A3.6 3.6 0 0 0 10.2 8.88 Z' transform='rotate(120 12 12)'/><path d='M10.2 8.88 L7.5 4.21 A9 9 0 0 1 16.5 4.21 L13.8 8.88 A3.6 3.6 0 0 0 10.2 8.88 Z' transform='rotate(240 12 12)'/><circle cx='12' cy='12' r='2.3'/></g></svg>"
-  },
   "objects": [
+    {
+      "schemaVersion": 1,
+      "type": "sigwxArea",
+      "label": "Zone de temps significatif",
+      "gesture": {
+        "primitive": "polygon",
+        "draw": "lasso",
+        "smooth": true,
+        "multiArea": true,
+        "erasable": true,
+        "default": "regular-polygon"
+      },
+      "fields": [
+        {
+          "key": "type",
+          "kind": "enum",
+          "label": "Type de nuage",
+          "default": "CB",
+          "options": [
+            {
+              "value": "CI",
+              "label": "Cirrus"
+            },
+            {
+              "value": "CC",
+              "label": "Cirrocumulus"
+            },
+            {
+              "value": "CS",
+              "label": "Cirrostratus"
+            },
+            {
+              "value": "AC",
+              "label": "Altocumulus"
+            },
+            {
+              "value": "AS",
+              "label": "Altostratus"
+            },
+            {
+              "value": "NS",
+              "label": "Nimbostratus"
+            },
+            {
+              "value": "SC",
+              "label": "Stratocumulus"
+            },
+            {
+              "value": "ST",
+              "label": "Stratus"
+            },
+            {
+              "value": "CU",
+              "label": "Cumulus"
+            },
+            {
+              "value": "CB",
+              "label": "Cumulonimbus"
+            }
+          ]
+        },
+        {
+          "key": "amount",
+          "kind": "enum",
+          "label": "Quantité",
+          "default": "OCNL",
+          "options": [
+            {
+              "value": "ISOL",
+              "label": "ISOL — CB isolés"
+            },
+            {
+              "value": "OCNL",
+              "label": "OCNL — CB bien séparés"
+            },
+            {
+              "value": "FRQ",
+              "label": "FRQ — CB peu/pas séparés"
+            },
+            {
+              "value": "EMBD",
+              "label": "EMBD — CB noyés"
+            }
+          ],
+          "optionsBy": {
+            "field": "type",
+            "map": {
+              "CB": [
+                {
+                  "value": "ISOL",
+                  "label": "ISOL — CB isolés"
+                },
+                {
+                  "value": "OCNL",
+                  "label": "OCNL — CB bien séparés"
+                },
+                {
+                  "value": "FRQ",
+                  "label": "FRQ — CB peu/pas séparés"
+                },
+                {
+                  "value": "EMBD",
+                  "label": "EMBD — CB noyés"
+                }
+              ],
+              "*": [
+                {
+                  "value": "FEW",
+                  "label": "FEW — 1-2/8"
+                },
+                {
+                  "value": "SCT",
+                  "label": "SCT — 3-4/8"
+                },
+                {
+                  "value": "BKN",
+                  "label": "BKN — 5-7/8"
+                },
+                {
+                  "value": "OVC",
+                  "label": "OVC — 8/8"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "key": "baseFL",
+          "kind": "fl",
+          "label": "Base",
+          "default": 50
+        },
+        {
+          "key": "topFL",
+          "kind": "fl",
+          "label": "Top",
+          "default": 120
+        }
+      ],
+      "flBeyond": [
+        "xxx",
+        "xxx"
+      ],
+      "render": {
+        "edge": {
+          "treatment": "scallop",
+          "width": 2
+        },
+        "fill": {
+          "opacity": 0.12
+        },
+        "callout": {
+          "anchor": "largest-area-centroid",
+          "leader": "lightning",
+          "arrow": true,
+          "box": true,
+          "content": [
+            "{amount}",
+            "{type}",
+            "{topFL|flx:top}",
+            "{baseFL|flx:base}"
+          ]
+        }
+      },
+      "card": {
+        "framed": true,
+        "origin": "bottom",
+        "gap": 2,
+        "items": [
+          {
+            "picker": {
+              "field": "amount",
+              "label": "{value}"
+            }
+          },
+          {
+            "picker": {
+              "field": "type",
+              "label": "{value}"
+            }
+          },
+          {
+            "text": "{topFL|flx:top}"
+          },
+          {
+            "text": "{baseFL|flx:base}"
+          }
+        ],
+        "buttons": [
+          {
+            "place": "h-edges",
+            "action": "draw_and_link",
+            "svg": "atlas:plus",
+            "title": "Ajouter une aire"
+          }
+        ]
+      },
+      "satellites": [
+        {
+          "part": "gauge",
+          "anchor": "callout",
+          "pin": "flRef",
+          "side": "right",
+          "items": [
+            {
+              "gauge": {
+                "cursors": [
+                  "baseFL",
+                  "topFL"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "style": {
+        "color": "#d1242f",
+        "edge": {
+          "width": 2,
+          "decorator": "scallop"
+        },
+        "area": {
+          "color": "#d1242f",
+          "opacity": 0.12
+        },
+        "text": {
+          "halo": "#ffffff",
+          "size": 13
+        }
+      },
+      "summary": "{amount} {type} {topFL|fl}/{baseFL|fl}"
+    },
     {
       "schemaVersion": 1,
       "type": "jetStream",
@@ -174,6 +395,26 @@
           "kind": "fl",
           "label": "Flight level",
           "default": 380
+        },
+        {
+          "key": "kind",
+          "kind": "enum",
+          "label": "Forme",
+          "default": "fl",
+          "options": [
+            {
+              "value": "fl",
+              "label": "{fl}"
+            },
+            {
+              "value": "high",
+              "label": "H\n{fl}"
+            },
+            {
+              "value": "low",
+              "label": "{fl}\nL"
+            }
+          ]
         }
       ],
       "render": {
@@ -191,15 +432,6 @@
             "content": [
               "{fl|fl}"
             ]
-          }
-        },
-        "point": {
-          "label": {
-            "anchor": "geometry-mid",
-            "content": [
-              "{fl|fl}"
-            ],
-            "box": true
           }
         }
       },
@@ -237,123 +469,73 @@
           "background": "#ffffff"
         }
       },
-      "summary": "Tropopause {fl|fl}"
+      "summary": "Tropopause {fl|fl}",
+      "card": {
+        "framed": true,
+        "boxShapeBy": {
+          "field": "kind",
+          "map": {
+            "fl": "rect",
+            "high": "pentagon-up",
+            "low": "pentagon-down"
+          }
+        },
+        "items": [
+          {
+            "picker": {
+              "field": "kind"
+            }
+          }
+        ],
+        "lineHeight": 1
+      }
     },
     {
       "schemaVersion": 1,
-      "type": "cb",
-      "label": "Cumulonimbus (CB)",
+      "type": "zeroIsotherm",
+      "label": "Isotherme 0°C",
       "gesture": {
-        "primitive": "polygon",
+        "primitive": "polyline",
         "draw": "lasso",
         "smooth": true,
-        "multiArea": true,
-        "erasable": true,
-        "default": "regular-polygon"
+        "minVertices": 2
       },
       "fields": [
         {
-          "key": "coverage",
-          "kind": "enum",
-          "label": "Coverage",
-          "options": [
-            {
-              "value": "OCNL",
-              "label": "OCNL — occasional (50–75%)",
-              "meta": {
-                "bufr": 10
-              }
-            },
-            {
-              "value": "FRQ",
-              "label": "FRQ — frequent (>75%)",
-              "meta": {
-                "bufr": 12
-              }
-            }
-          ]
-        },
-        {
-          "key": "baseFL",
+          "key": "fl",
           "kind": "fl",
-          "label": "Base",
-          "default": 250
-        },
-        {
-          "key": "topFL",
-          "kind": "fl",
-          "label": "Top",
-          "default": 400
+          "label": "Niveau",
+          "default": 100
         }
-      ],
-      "flBeyond": [
-        "xxx",
-        "xxx"
       ],
       "render": {
-        "edge": {
-          "treatment": "scallop",
-          "width": 2
-        },
-        "fill": {
-          "opacity": 0.12
-        },
-        "callout": {
-          "anchor": "largest-area-centroid",
-          "leader": "lightning",
-          "arrow": true,
-          "box": true,
-          "content": [
-            "{coverage|stack}",
-            "CB",
-            "{topFL|flx:top}",
-            "{baseFL|flx:base}"
-          ]
+        "line": {
+          "edge": {
+            "treatment": "plain",
+            "width": 2
+          },
+          "label": {
+            "anchor": "geometry-mid",
+            "content": [
+              "0°: {fl}"
+            ],
+            "box": true,
+            "movable": true,
+            "borderWidth": "small"
+          }
         }
-      },
-      "card": {
-        "framed": true,
-        "items": [
-          {
-            "carousel": {
-              "field": "coverage",
-              "label": "{value|stack}\nCB"
-            }
-          },
-          {
-            "text": "{topFL|flx:top}"
-          },
-          {
-            "text": "{baseFL|flx:base}"
-          }
-        ],
-        "buttons": [
-          {
-            "place": "h-edges",
-            "action": "draw_and_link",
-            "svg": "atlas:plus",
-            "title": "Draw a linked area"
-          },
-          {
-            "place": "left",
-            "action": "erase",
-            "svg": "atlas:minus",
-            "title": "Eraser — rub a clear hole"
-          }
-        ]
       },
       "satellites": [
         {
           "part": "gauge",
-          "anchor": "callout",
+          "anchor": "geometry-mid",
           "pin": "flRef",
           "side": "right",
           "items": [
             {
               "gauge": {
                 "cursors": [
-                  "baseFL",
-                  "topFL"
+                  "fl"
                 ]
               }
             }
@@ -361,26 +543,80 @@
         }
       ],
       "style": {
-        "color": "#d1242f",
+        "color": "#0b6bcb",
         "edge": {
-          "color": "#d1242f",
-          "width": 2,
-          "decorator": "scallop"
-        },
-        "area": {
-          "color": "#d1242f",
-          "opacity": 0.12
-        },
-        "symbol": {
-          "sprite": "OCNL",
-          "size": 1
+          "color": "#0b6bcb",
+          "width": 2
         },
         "text": {
+          "color": "#0b6bcb",
           "halo": "#ffffff",
-          "size": 13
+          "size": 12,
+          "background": "transparent"
         }
       },
-      "summary": "{coverage} CB {topFL|fl}/{baseFL|fl}"
+      "summary": "0°C {fl|fl}"
+    },
+    {
+      "schemaVersion": 1,
+      "type": "pressureCentre",
+      "label": "Centre de pression",
+      "gesture": {
+        "primitive": "point",
+        "draw": "drop"
+      },
+      "fields": [
+        {
+          "key": "kind",
+          "kind": "enum",
+          "label": "Type",
+          "default": "H",
+          "options": [
+            {
+              "value": "H",
+              "label": "High (H)"
+            },
+            {
+              "value": "L",
+              "label": "Low (L)"
+            }
+          ]
+        },
+        {
+          "key": "pressure",
+          "kind": "text",
+          "label": "Pression (hPa)",
+          "default": "1013"
+        }
+      ],
+      "card": {
+        "framed": "when-named",
+        "origin": "bottom",
+        "deletable": true,
+        "items": [
+          {
+            "picker": {
+              "field": "kind"
+            },
+            "size": 24
+          },
+          {
+            "input": {
+              "field": "pressure"
+            }
+          },
+          {
+            "coord": true
+          }
+        ]
+      },
+      "style": {
+        "color": "#1f2328",
+        "text": {
+          "color": "#1f2328"
+        }
+      },
+      "summary": "{kind} {pressure} hPa"
     },
     {
       "schemaVersion": 1,
@@ -482,12 +718,6 @@
             "action": "draw_and_link",
             "svg": "atlas:plus",
             "title": "Draw a linked area"
-          },
-          {
-            "place": "left",
-            "action": "erase",
-            "svg": "atlas:minus",
-            "title": "Eraser — rub a clear hole"
           }
         ]
       },
@@ -639,12 +869,6 @@
             "action": "draw_and_link",
             "svg": "atlas:plus",
             "title": "Draw a linked area"
-          },
-          {
-            "place": "left",
-            "action": "erase",
-            "svg": "atlas:minus",
-            "title": "Eraser — rub a clear hole"
           }
         ]
       },
@@ -700,7 +924,6 @@
       "schemaVersion": 1,
       "type": "frontCold",
       "label": "Cold front",
-      "icon": "<svg viewBox='0 0 24 24' width='22' height='22'><line x1='2' y1='15' x2='22' y2='15' stroke='#2c5fb3' stroke-width='2'/><path d='M9 15 L12 9 L15 15 Z' fill='#2c5fb3'/></svg>",
       "gesture": {
         "primitive": "polyline",
         "draw": "lasso",
@@ -728,7 +951,6 @@
       "schemaVersion": 1,
       "type": "frontWarm",
       "label": "Warm front",
-      "icon": "<svg viewBox='0 0 24 24' width='22' height='22'><line x1='2' y1='15' x2='22' y2='15' stroke='#d1242f' stroke-width='2'/><path d='M8.5 15 A3.5 3.5 0 0 1 15.5 15 Z' fill='#d1242f'/></svg>",
       "gesture": {
         "primitive": "polyline",
         "draw": "lasso",
@@ -756,7 +978,6 @@
       "schemaVersion": 1,
       "type": "frontOccluded",
       "label": "Occluded front",
-      "icon": "<svg viewBox='0 0 24 24' width='22' height='22'><line x1='2' y1='15' x2='22' y2='15' stroke='#8250df' stroke-width='2'/><path d='M5 15 L8 9 L11 15 Z' fill='#8250df'/><path d='M12.5 15 A3.5 3.5 0 0 1 19.5 15 Z' fill='#8250df'/></svg>",
       "gesture": {
         "primitive": "polyline",
         "draw": "lasso",
@@ -784,7 +1005,6 @@
       "schemaVersion": 1,
       "type": "frontStationary",
       "label": "Stationary front",
-      "icon": "<svg viewBox='0 0 24 24' width='22' height='22'><line x1='2' y1='15' x2='22' y2='15' stroke='#d1242f' stroke-width='2'/><path d='M5 15 L8 21 L11 15 Z' fill='#2c5fb3'/><path d='M13 15 A3 3 0 0 1 19 15 Z' fill='#d1242f'/></svg>",
       "gesture": {
         "primitive": "polyline",
         "draw": "lasso",
@@ -807,6 +1027,84 @@
         }
       },
       "summary": "Stationary front"
+    },
+    {
+      "schemaVersion": 1,
+      "type": "frontConvergence",
+      "label": "Convergence line",
+      "gesture": {
+        "primitive": "polyline",
+        "draw": "lasso",
+        "smooth": true,
+        "minVertices": 2
+      },
+      "render": {
+        "decorations": [
+          {
+            "use": "front-symbols",
+            "frontType": "convergence"
+          }
+        ]
+      },
+      "style": {
+        "color": "#1f2328",
+        "edge": {
+          "color": "#1f2328",
+          "width": 2.4
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "type": "frontItcz",
+      "label": "Intertropical convergence zone (ITCZ)",
+      "gesture": {
+        "primitive": "polyline",
+        "draw": "lasso",
+        "smooth": true,
+        "minVertices": 2
+      },
+      "render": {
+        "decorations": [
+          {
+            "use": "front-symbols",
+            "frontType": "itcz"
+          }
+        ]
+      },
+      "style": {
+        "color": "#1f2328",
+        "edge": {
+          "color": "#1f2328",
+          "width": 2.4
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "type": "squallLine",
+      "label": "Squall line",
+      "gesture": {
+        "primitive": "polyline",
+        "draw": "lasso",
+        "smooth": true,
+        "minVertices": 2
+      },
+      "render": {
+        "decorations": [
+          {
+            "use": "front-symbols",
+            "frontType": "squall"
+          }
+        ]
+      },
+      "style": {
+        "color": "#d1242f",
+        "edge": {
+          "color": "#d1242f",
+          "width": 2.4
+        }
+      }
     },
     {
       "schemaVersion": 1,
@@ -925,12 +1223,236 @@
       "style": {
         "color": "#1f2328"
       }
+    },
+    {
+      "schemaVersion": 1,
+      "type": "wmo-visibility",
+      "label": "Visibilité",
+      "icon": "atlas:widespread-fog",
+      "gesture": {
+        "primitive": "point",
+        "draw": "drop"
+      },
+      "fields": [
+        {
+          "key": "symbol",
+          "kind": "enum",
+          "label": "Symbole",
+          "default": "widespread-fog",
+          "options": [
+            {
+              "value": "widespread-fog",
+              "label": "Brouillard étendu"
+            },
+            {
+              "value": "widespread-mist",
+              "label": "Brume"
+            },
+            {
+              "value": "severe-sand-or-dust-haze",
+              "label": "Brume de sable/poussière dense"
+            },
+            {
+              "value": "widespread-haze",
+              "label": "Brume sèche"
+            },
+            {
+              "value": "widespread-blowing-snow",
+              "label": "Chasse-neige élevé"
+            },
+            {
+              "value": "widespread-smoke",
+              "label": "Fumée"
+            },
+            {
+              "value": "widespread-sandstorm-or-duststorm",
+              "label": "Tempête de sable/poussière"
+            }
+          ]
+        },
+        {
+          "key": "name",
+          "kind": "text",
+          "label": "Name",
+          "default": ""
+        }
+      ],
+      "card": {
+        "framed": "when-named",
+        "origin": "bottom",
+        "deletable": true,
+        "items": [
+          {
+            "picker": {
+              "field": "symbol"
+            },
+            "size": 20
+          },
+          {
+            "input": {
+              "field": "name"
+            }
+          },
+          {
+            "coord": true
+          }
+        ]
+      },
+      "style": {
+        "color": "#1f2328"
+      },
+      "summary": "{symbol}"
+    },
+    {
+      "schemaVersion": 1,
+      "type": "wmo-others",
+      "label": "Autres",
+      "icon": "atlas:thunderstorms",
+      "gesture": {
+        "primitive": "point",
+        "draw": "drop"
+      },
+      "fields": [
+        {
+          "key": "symbol",
+          "kind": "enum",
+          "label": "Symbole",
+          "default": "thunderstorms",
+          "options": [
+            {
+              "value": "thunderstorms",
+              "label": "Orage"
+            },
+            {
+              "value": "visible-volcanic-ash-cloud",
+              "label": "Nuage de cendres"
+            },
+            {
+              "value": "mountain-obscuration",
+              "label": "Obscurcissement des montagnes"
+            },
+            {
+              "value": "mountain-waves",
+              "label": "Ondes orographiques"
+            }
+          ]
+        },
+        {
+          "key": "name",
+          "kind": "text",
+          "label": "Name",
+          "default": ""
+        }
+      ],
+      "card": {
+        "framed": "when-named",
+        "origin": "bottom",
+        "deletable": true,
+        "items": [
+          {
+            "picker": {
+              "field": "symbol",
+              "mode": "flower"
+            },
+            "size": 20
+          },
+          {
+            "input": {
+              "field": "name"
+            }
+          },
+          {
+            "coord": true
+          }
+        ]
+      },
+      "style": {
+        "color": "#1f2328"
+      },
+      "summary": "{symbol}"
+    },
+    {
+      "schemaVersion": 1,
+      "type": "wmo-precipitation",
+      "label": "Précipitations",
+      "icon": "atlas:rain",
+      "gesture": {
+        "primitive": "point",
+        "draw": "drop"
+      },
+      "fields": [
+        {
+          "key": "symbol",
+          "kind": "enum",
+          "label": "Symbole",
+          "default": "rain",
+          "options": [
+            {
+              "value": "rain",
+              "label": "Pluie continue"
+            },
+            {
+              "value": "hail",
+              "label": "Grêle"
+            },
+            {
+              "value": "drizzle",
+              "label": "Bruine"
+            },
+            {
+              "value": "freezing-precipitation",
+              "label": "Précipitation verglaçante"
+            },
+            {
+              "value": "shower",
+              "label": "Averse"
+            },
+            {
+              "value": "snow",
+              "label": "Neige"
+            }
+          ]
+        },
+        {
+          "key": "name",
+          "kind": "text",
+          "label": "Name",
+          "default": ""
+        }
+      ],
+      "card": {
+        "framed": "when-named",
+        "origin": "bottom",
+        "deletable": true,
+        "items": [
+          {
+            "picker": {
+              "field": "symbol"
+            },
+            "size": 20
+          },
+          {
+            "input": {
+              "field": "name"
+            }
+          },
+          {
+            "coord": true
+          }
+        ]
+      },
+      "style": {
+        "color": "#1f2328"
+      },
+      "summary": "{symbol}"
     }
   ],
   "tools": [
     "jetStream",
     "tropopause",
-    "cb",
+    "zeroIsotherm",
+    "pressureCentre",
+    "sigwxArea",
     "icing",
     "turbulence",
     {
@@ -939,7 +1461,10 @@
         "frontCold",
         "frontWarm",
         "frontOccluded",
-        "frontStationary"
+        "frontStationary",
+        "frontConvergence",
+        "frontItcz",
+        "squallLine"
       ]
     },
     {
@@ -949,6 +1474,54 @@
         "tropicalCyclone",
         "radioactive"
       ]
+    },
+    {
+      "group": "WMO",
+      "items": [
+        "wmo-precipitation",
+        "wmo-others",
+        "wmo-visibility"
+      ]
     }
-  ]
+  ],
+  "glyphs": {
+    "cb": "buttons/cb.svg",
+    "icing": "buttons/icing.svg",
+    "jetStream": "buttons/jetStream.svg",
+    "radioactive": "buttons/radioactive.svg",
+    "tc-nh": "buttons/tc-nh.svg",
+    "tc-sh": "buttons/tc-sh.svg",
+    "tropopause": "buttons/tropopause.svg",
+    "turbulence": "buttons/turbulence.svg",
+    "volcano": "buttons/volcano.svg",
+    "widespread-fog": "wmo/visibility/widespread-fog.svg",
+    "widespread-mist": "wmo/visibility/widespread-mist.svg",
+    "severe-sand-or-dust-haze": "wmo/visibility/severe-sand-or-dust-haze.svg",
+    "widespread-haze": "wmo/visibility/widespread-haze.svg",
+    "widespread-blowing-snow": "wmo/visibility/widespread-blowing-snow.svg",
+    "widespread-smoke": "wmo/visibility/widespread-smoke.svg",
+    "widespread-sandstorm-or-duststorm": "wmo/visibility/widespread-sandstorm-or-duststorm.svg",
+    "thunderstorms": "wmo/convective/thunderstorms.svg",
+    "hail": "wmo/precipitation/hail.svg",
+    "mountain-obscuration": "wmo/relief/mountain-obscuration.svg",
+    "mountain-waves": "wmo/relief/mountain-waves.svg",
+    "visible-volcanic-ash-cloud": "wmo/hazards/visible-volcanic-ash-cloud.svg",
+    "drizzle": "wmo/precipitation/drizzle.svg",
+    "freezing-precipitation": "wmo/precipitation/freezing-precipitation.svg",
+    "rain": "wmo/precipitation/rain.svg",
+    "shower": "wmo/precipitation/shower.svg",
+    "snow": "wmo/precipitation/snow.svg",
+    "H": "wmo/cyclone-pressure/pressure-h.svg",
+    "L": "wmo/cyclone-pressure/pressure-l.svg",
+    "sigwxArea": "buttons/sigwxArea.svg",
+    "zeroIsotherm": "buttons/zeroIsotherm.svg",
+    "pressureCentre": "buttons/pressureCentre.svg",
+    "frontCold": "buttons/frontCold.svg",
+    "frontWarm": "buttons/frontWarm.svg",
+    "frontOccluded": "buttons/frontOccluded.svg",
+    "frontStationary": "buttons/frontStationary.svg",
+    "frontConvergence": "buttons/frontConvergence.svg",
+    "frontItcz": "buttons/frontItcz.svg",
+    "squallLine": "buttons/squallLine.svg"
+  }
 }
