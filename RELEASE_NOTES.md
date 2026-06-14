@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 1.2.0
+
 - **Add: declarative phenomenon framework** — phenomena are now pure-JSON **descriptors**
   compiled by `defFromDescriptor`; the only TS rendering code left is the **named extensions**
   (`jet-barbs`, `front-symbols`), registered explicitly via `registerExtensions`. Descriptor +
