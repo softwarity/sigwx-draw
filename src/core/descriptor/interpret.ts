@@ -6,7 +6,7 @@
  * the named-extension registries at COMPILE time, so unknown names fail fast
  * with the available ones listed.
  */
-import type { BoxShape, MarkerWidget, WidgetNode } from "@softwarity/draw-adapter";
+import type { BoxShape, MarkerWidget, WidgetNode, WidgetStackItem } from "@softwarity/draw-adapter";
 import type { Geometry } from "geojson";
 
 import {
@@ -56,6 +56,7 @@ import type {
   GlyphSpec,
   InkSpec,
   LabelSpec,
+  ListFieldDescriptor,
   PhenomenonDescriptor,
   RenderByGeometry,
   RenderSpec,
@@ -122,7 +123,11 @@ function compileField(f: DescriptorField): FieldSchema {
         ...(f.default !== undefined ? { default: f.default } : {}),
       };
     case "enum": {
-      const opt = (o: EnumOptionDescriptor): { value: string; label: string } => ({ value: o.value, label: o.label ?? o.value });
+      const opt = (o: EnumOptionDescriptor): { value: string; label: string; meta?: Record<string, unknown> } => ({
+        value: o.value,
+        label: o.label ?? o.value,
+        ...(o.meta ? { meta: o.meta } : {}),
+      });
       return {
         type: "enum", key: f.key, label, ...when, ...required,
         options: f.options.map(opt),
@@ -412,11 +417,28 @@ function compileAreaRender(d: PhenomenonDescriptor, spec: RenderSpec): DecorateF
 
     if (co) {
       const fmt: FormatContext = { metadata, flightLevel: flCtxWithFallback(input) };
-      let content = co.content.map((t) => evalTemplate(t, metadata, fmt)).join("\n");
+      // A repeated (layer-stack) area builds the cartouche by stacking ONE content block per
+      // layer (in the stored altitude order) — the "rest" view of the stack: `qty type top/base`
+      // per cloud layer. With a SINGLE layer, the compact stacked line gives way to the "normal"
+      // centered column (`contentSingle`, e.g. amount / type / top / base). A plain area evaluates
+      // `content` once over the feature metadata.
+      const repeatKey = d.repeat?.listField;
+      let content: string;
+      if (repeatKey) {
+        const layers = Array.isArray(metadata[repeatKey]) ? (metadata[repeatKey] as Metadata[]) : [];
+        const tmplOf = (it: Metadata, lines: string[]) =>
+          lines.map((t) => evalTemplate(t, it, { metadata: it, flightLevel: flCtxWithFallback(input) })).join("\n");
+        content = layers.length === 1 && co.contentSingle
+          ? tmplOf(layers[0]!, co.contentSingle)
+          : layers.map((it) => tmplOf(it, co.content)).join("\n");
+      } else {
+        content = co.content.map((t) => evalTemplate(t, metadata, fmt)).join("\n");
+      }
       const boxed = co.box !== false;
       // B&W panel: text/box/leader = `style.text.color` (black); bare call-out: the ink.
       const calloutInk = boxed ? (style.text?.color ?? "#1f2328") : ink;
-      const symbol = co.symbol ? str(metadata[co.symbol.byField]) : undefined;
+      // A per-layer area has no single feature-level symbol over the box.
+      const symbol = co.symbol && !repeatKey ? str(metadata[co.symbol.byField]) : undefined;
       // An inside glyph reserves its room with leading blank lines (engine convention).
       if (symbol !== undefined && co.symbol?.inside) content = ` \n \n${content}`;
       out.push(
@@ -480,12 +502,19 @@ function compileDecorate(d: PhenomenonDescriptor): DecorateFn {
 
 /** `side: "right"` origin policy per anchor strategy (the engine's screen layouts):
  *  beside a placed call-out (−1.0), beside a geometry label (−0.5), clear of a
- *  break-point dial ring (−1.6). */
+ *  break-point dial ring (−1.6). The offset is in units of the SATELLITE's own width
+ *  (the adapter shifts it `−x×100%` of its box) — a wide parent card needs a larger one. */
 const SIDE_X: Record<SatelliteSpec["anchor"], number> = {
   callout: -1.0,
   "geometry-mid": -0.85, // just clear of the geometry label box (−0.5 looked astride, −1.1 too far)
   "break-point": -1.6,
 };
+/** The layer-stack PANEL is a touch wider than a plain call-out (pickers + the FL-only layer
+ *  list + edit buttons), so its right-side gauge clears a bit more than the call-out default —
+ *  just enough to sit a hair's gap beside the card, not astride its edge nor floating off.
+ *  NB: this is a multiple of the GAUGE's own width vs the anchor, not a px gap from the card
+ *  edge — a precise edge gap needs an adapter placement feature (see the spec request). */
+const SIDE_X_STACK = -1.4;
 
 function compileSatellites(d: PhenomenonDescriptor): ((input: WidgetInput) => MarkerWidget[]) | undefined {
   const sats = d.satellites;
@@ -493,6 +522,10 @@ function compileSatellites(d: PhenomenonDescriptor): ((input: WidgetInput) => Ma
   const smooth = d.gesture.smooth === true;
   // Break-point satellites ride the schema's LIST field (the jet's `points`).
   const listField = (d.fields ?? []).find((f) => f.kind === "list");
+  // A stack (repeat) area scopes its callout gauge to the ACTIVE cloud layer (`layers.<i>.…`).
+  const repeatList = d.repeat
+    ? (d.fields ?? []).find((f): f is ListFieldDescriptor => f.kind === "list" && f.key === d.repeat!.listField)
+    : undefined;
   const itemField = (key: string) => listField?.kind === "list" ? listField.item.find((f) => f.key === key) : undefined;
   const pad3 = (v: number): string => String(Math.round(v)).padStart(3, "0");
   const chromeProps = (chrome: WidgetInput["chrome"], knobs: boolean): Record<string, string> => ({
@@ -504,8 +537,17 @@ function compileSatellites(d: PhenomenonDescriptor): ((input: WidgetInput) => Ma
   });
 
   return (input: WidgetInput): MarkerWidget[] => {
-    const { id, geometry, metadata, flightLevel, flRef, chrome, sub, limit } = input;
+    const { id, geometry, metadata, flightLevel, chrome, sub, limit } = input;
     const cards: MarkerWidget[] = [];
+    // Stack area: the ACTIVE layer (the expanded one — selected sub-item, else the top) the
+    // callout gauge edits. List-scoped so a drag routes through `updateListItem` like a layer body.
+    const repeatActive: { scope: string; item: Metadata } | null = (() => {
+      if (!repeatList) return null;
+      const arr = (metadata[repeatList.key] as Metadata[] | undefined) ?? [];
+      if (!arr.length) return null;
+      const a = sub != null && sub >= 0 && sub < arr.length ? sub : 0;
+      return { scope: `${repeatList.key}.${a}.`, item: arr[a]! };
+    })();
     // The selected break-point item (break-point anchors): ON the smoothed curve. A bare
     // terminator (t≈0/1) has nothing to edit — jets start/end at the floor (§3.5.1).
     let breakAt: Pt | null = null;
@@ -532,15 +574,25 @@ function compileSatellites(d: PhenomenonDescriptor): ((input: WidgetInput) => Ma
       const scope = sat.anchor === "break-point" && listField ? `${listField.key}.${sub}.` : "";
       const items: WidgetNode[] = [];
       let yPin: number | undefined;
-      const pin = (min: number, max: number, fallback: number): void => {
+      const pin = (min: number, max: number, _fallback: number): void => {
         if (sat.pin !== "flRef") return;
-        // Pin the card so the SELECTION-TIME level sits at the anchor's screen
-        // height — drag-stable since flRef is frozen at selection.
-        const ref = typeof flRef === "number" ? flRef : fallback;
-        yPin = 1 - (Math.max(min, Math.min(max, ref)) - min) / (max - min);
+        // Align the MIDDLE of the gauge range with the anchor (the call-out box) so the slider
+        // straddles the box symmetrically — drag-stable (a constant, independent of the live FL).
+        const ref = (min + max) / 2;
+        yPin = 1 - (ref - min) / (max - min); // = 0.5
       };
       for (const it of sat.items) {
-        if (it.gauge && !scope) {
+        if (it.gauge && repeatActive) {
+          // Stack FL gauge → list-scoped to the ACTIVE layer (`layers.<i>.baseFL/topFL`), XXX
+          // notches per side: the side-satellite sibling of a simple area's feature-level gauge.
+          const keys = it.gauge.cursors;
+          const scopedKeys = keys.map((k) => `${repeatActive.scope}${k}`);
+          const bag: Metadata = {};
+          keys.forEach((k, j) => { bag[scopedKeys[j]!] = repeatActive.item[k]; });
+          const gauge = flGaugeNode(bag, flightLevel, FALLBACK_FL.min, FALLBACK_FL.max, scopedKeys.length === 2 ? [scopedKeys[0]!, scopedKeys[1]!] : [scopedKeys[0]!], chrome);
+          items.push(gauge);
+          pin(gauge.min, gauge.max, keys.length === 1 ? num(repeatActive.item[keys[0]!], (gauge.min + gauge.max) / 2) : (gauge.min + gauge.max) / 2);
+        } else if (it.gauge && !scope) {
           // Feature-level FL gauge (1–2 cursors over the metadata, XXX notches per side).
           const keys = it.gauge.cursors;
           const gauge = flGaugeNode(metadata, flightLevel, FALLBACK_FL.min, FALLBACK_FL.max, keys.length === 2 ? [keys[0]!, keys[1]!] : [keys[0]!], chrome);
@@ -583,10 +635,29 @@ function compileSatellites(d: PhenomenonDescriptor): ((input: WidgetInput) => Ma
           const value = num(item[field], lim.min);
           const unit = f?.kind === "number" && f.unit ? f.unit.toUpperCase() : "";
           items.push({ kind: "dial", name: `${scope}${field}`, min: lim.min, max: lim.max, value, label: `${Math.round(value)}${unit}`, step: f?.kind === "number" ? (f.step ?? 5) : 5, ...chromeProps(chrome, false) } as WidgetNode);
+        } else if ((it.picker ?? it.carousel) && !scope) {
+          // A feature-level enum picker beside the label (the isotherm temperature). A satellite
+          // renders for BOTH a spot and a contour, so the picker works in either mode; its edit
+          // routes through the generic `onWidgetEdit` → `updateMetadata` path.
+          const pick = (it.picker ?? it.carousel)!;
+          const field = (d.fields ?? []).find((f): f is EnumFieldDescriptor => f.kind === "enum" && f.key === pick.field);
+          if (field) {
+            const live = liveOptions(field, metadata);
+            const value = live.some((o) => o.value === metadata[pick.field]) ? str(metadata[pick.field]) : (live[0]?.value ?? "");
+            const options = live.map((o) => {
+              if (pick.label !== undefined) {
+                const label = evalTemplate(pick.label, metadata, { metadata }, { value: o.value });
+                return { value: o.value, label, ...(o.label && o.label !== label ? { title: o.label } : {}) };
+              }
+              return o.label && o.label !== o.value ? { value: o.value, label: o.value, title: o.label } : { value: o.value, label: o.value };
+            });
+            items.push({ kind: "text", value, control: "picker", ...(pick.mode ? { mode: pick.mode } : {}), name: pick.field, options, ...(chrome?.handle?.fill ? { color: chrome.handle.fill } : {}) });
+          }
         }
       }
       if (!items.length) continue;
-      const sideX = sat.side === "center" ? undefined : SIDE_X[sat.anchor];
+      // A stack area's gauge clears the wider layer-stack panel (else it sits astride its edge).
+      const sideX = sat.side === "center" ? undefined : repeatActive ? SIDE_X_STACK : SIDE_X[sat.anchor];
       cards.push({
         id: `${id}#${sat.part}`,
         anchor: { lon: at[0]!, lat: at[1]! },
@@ -605,13 +676,17 @@ function compilePanelWidget(d: PhenomenonDescriptor, satellites: ((input: Widget
   const r = d.render as RenderSpec | undefined;
   const inkOf = compileInk(r?.ink);
   const framed = card.framed !== false;
-  const buttons = (card.buttons ?? []).map((b) => ({
-    event: getAction(b.action),
-    place: b.place,
-    svg: resolveGlyph(b.svg ?? (b.action === "erase" ? "atlas:minus" : "atlas:plus")),
-    bordered: true,
-    ...(b.title !== undefined ? { title: b.title } : {}),
-  }));
+  // `place: "anchor"` buttons live OFF the card (relocated to the arrow-tip by the
+  // controller via `def.anchorButton`); only card-edge buttons stay here.
+  const buttons = (card.buttons ?? [])
+    .filter((b) => b.place !== "anchor")
+    .map((b) => ({
+      event: getAction(b.action),
+      place: b.place as "left" | "right" | "h-edges",
+      svg: resolveGlyph(b.svg ?? (b.action === "erase" ? "atlas:minus" : "atlas:plus")),
+      bordered: true,
+      ...(b.title !== undefined ? { title: b.title } : {}),
+    }));
   // Carousels read their enum field's options (the descriptor's single source).
   const enumOf = (key: string): EnumFieldDescriptor | undefined =>
     (d.fields ?? []).find((f): f is EnumFieldDescriptor => f.kind === "enum" && f.key === key);
@@ -682,6 +757,153 @@ function compilePanelWidget(d: PhenomenonDescriptor, satellites: ((input: Widget
       ...(framed || buttons.length ? { padding: card.pad ?? "large" } : {}),
       font: { color: ink, size: fontPx },
       child: { dir: "v", align: "center", gap: card.gap ?? 0, items },
+      ...(buttons.length ? { buttons } : {}),
+    };
+    return [panel, ...(satellites ? satellites(input) : [])];
+  };
+}
+
+// ── The STACK panel (a repeated list: the TEMSI cloud-layer area) ─────────────
+
+/** Build ONE layer's editor body from the card items (pickers + FL gauge), with every control
+ *  list-scoped (`<listField>.<i>.<field>`) so the controller routes the edit to that item via
+ *  `updateListItem` — the same path as a jet break point. */
+function compileLayerBody(
+  d: PhenomenonDescriptor,
+  listField: ListFieldDescriptor,
+  item: Metadata,
+  i: number,
+  input: WidgetInput,
+): WidgetNode {
+  const card = d.card as CardSpec;
+  const scope = `${listField.key}.${i}.`;
+  const fmt: FormatContext = { metadata: item, flightLevel: flCtxWithFallback(input) };
+  const itemEnum = (key: string): EnumFieldDescriptor | undefined =>
+    listField.item.find((f): f is EnumFieldDescriptor => f.kind === "enum" && f.key === key);
+  const items: WidgetNode[] = [];
+  for (const it of card.items) {
+    const pick = it.picker ?? it.carousel; // `carousel` = deprecated alias of `picker`
+    if (pick) {
+      const field = itemEnum(pick.field);
+      if (!field) continue;
+      const live = liveOptions(field, item); // honours `optionsBy` (amount-by-type), resolved per ITEM
+      const value = live.some((o) => o.value === item[pick.field]) ? str(item[pick.field]) : (live[0]?.value ?? "");
+      const labelTpl = pick.label;
+      const options = live.map((o) => {
+        const tip = (o.label && o.label !== o.value) ? { title: o.label } : {};
+        if (labelTpl !== undefined) {
+          const label = evalTemplate(labelTpl, item, fmt, { value: o.value });
+          return { value: o.value, label, ...(o.label && o.label !== label ? { title: o.label } : {}) };
+        }
+        const svg = input.sprite?.(o.value);
+        return svg ? { value: o.value, svg, ...tip } : { value: o.value, label: o.value, ...tip };
+      });
+      items.push({ kind: "text", value, control: "picker", ...(pick.mode ? { mode: pick.mode } : {}), name: `${scope}${pick.field}`, options, ...(input.chrome?.handle?.fill ? { color: input.chrome.handle.fill } : {}) });
+    } else if (it.gauge) {
+      // List-scoped FL gauge: feed `flGaugeNode` a scoped-metadata bag so its cursor NAMES
+      // become `<listField>.<i>.<key>` (`layers.2.baseFL`) — routed through `updateListItem`.
+      const keys = it.gauge.cursors;
+      const scopedKeys = keys.map((k) => `${scope}${k}`);
+      const scopedMeta: Metadata = {};
+      for (const k of keys) scopedMeta[`${scope}${k}`] = item[k];
+      items.push(
+        flGaugeNode(
+          scopedMeta,
+          input.flightLevel,
+          FALLBACK_FL.min,
+          FALLBACK_FL.max,
+          scopedKeys.length === 2 ? [scopedKeys[0]!, scopedKeys[1]!] : [scopedKeys[0]!],
+          input.chrome,
+        ),
+      );
+    } else if (it.text !== undefined) {
+      items.push({ kind: "text", value: evalTemplate(it.text, item, fmt) });
+    }
+  }
+  return { dir: "v", align: "center", gap: card.gap ?? 2, items };
+}
+
+/** Compile a repeated-list area's selected PANEL: an adapter `stack` of layer cards (one
+ *  active/editable, the others collapsed to their one-line `preview`), anchored at the placed
+ *  call-out. The controller routes the stack's +/−/select events and keeps the list sorted. */
+function compileStackPanel(
+  d: PhenomenonDescriptor,
+  satellites: ((input: WidgetInput) => MarkerWidget[]) | undefined,
+): (input: WidgetInput) => MarkerWidget[] | null {
+  const card = d.card as CardSpec;
+  const repeat = d.repeat!;
+  const listField = (d.fields ?? []).find((f): f is ListFieldDescriptor => f.kind === "list" && f.key === repeat.listField);
+  if (!listField) fail(d.type, `repeat.listField "${repeat.listField}" is not a list field`);
+  const r = d.render as RenderSpec | undefined;
+  const inkOf = compileInk(r?.ink);
+  const framed = card.framed !== false;
+  const placement = repeat.editorPlacement ?? "pinned";
+  // `place: "anchor"` buttons live OFF the card (relocated to the arrow-tip by the
+  // controller via `def.anchorButton`); only card-edge buttons stay here.
+  const buttons = (card.buttons ?? [])
+    .filter((b) => b.place !== "anchor")
+    .map((b) => ({
+      event: getAction(b.action),
+      place: b.place as "left" | "right" | "h-edges",
+      svg: resolveGlyph(b.svg ?? (b.action === "erase" ? "atlas:minus" : "atlas:plus")),
+      bordered: true,
+      ...(b.title !== undefined ? { title: b.title } : {}),
+    }));
+
+  return (input: WidgetInput): MarkerWidget[] | null => {
+    const { id, metadata, editable, style, callout } = input;
+    if (!editable || !callout) return null;
+    const ink = framed ? (style.text?.color ?? "#1f2328") : inkOf(style, metadata);
+    const fontPx = style.text?.size ?? 13;
+    const layers = Array.isArray(metadata[listField.key]) ? (metadata[listField.key] as Metadata[]) : [];
+    // The active (expanded) layer = the selected sub-item; default to the top of the stack.
+    const active = input.sub != null && input.sub >= 0 && input.sub < layers.length ? input.sub : 0;
+    // ONE layer → a plain FRAMED card: the WHOLE card is boxed (bg + border), with the lone
+    // layer's amount/type pickers BARE inside it — NOT the stack, whose blue editor-highlight box
+    // would frame just amount+type (the thing we explicitly do NOT want). The FL keeps its side
+    // gauge; `+` adds a 2nd layer (→ switches to the stack).
+    if (layers.length === 1) {
+      const layer = layers[0]!;
+      const addBtns = repeat.max > 1
+        ? [{ event: "addLayer", place: "bottom" as const, svg: resolveGlyph("atlas:plus"), bordered: true }]
+        : [];
+      // A lone layer edits "as if there were a single simple card": the body MIRRORS the
+      // deselected single cartouche (`callout.contentSingle` — amount / type / top / base, each on
+      // its OWN line), with the enum lines (amount/type) swapped for pickers and the FL lines kept
+      // as plain text (the side gauge edits them). Without this the selected card dropped the level
+      // entirely (regression). Falls back to the compact `repeat.preview` line if no contentSingle.
+      const fmt: FormatContext = { metadata: layer, flightLevel: flCtxWithFallback(input) };
+      const pickerFields = new Set(card.items.map((it) => (it.picker ?? it.carousel)?.field).filter((f): f is string => !!f));
+      const flTmpls = (r?.callout?.contentSingle ?? []).filter((t) => ![...pickerFields].some((f) => t.includes(`{${f}`)));
+      const flItems: WidgetNode[] = (flTmpls.length ? flTmpls.map((t) => evalTemplate(t, layer, fmt)) : [evalTemplate(repeat.preview, layer, fmt)])
+        .map((value) => ({ kind: "text", value }));
+      const flat: MarkerWidget = {
+        id,
+        anchor: { lon: callout.at[0]!, lat: callout.at[1]! },
+        ...(framed ? { bg: style.text?.background ?? "#ffffff", border: ink, radius: "small" } : {}),
+        ...(framed || addBtns.length ? { padding: card.pad ?? "small" } : {}),
+        font: { color: ink, size: fontPx },
+        child: { dir: "v", align: "center", gap: card.gap ?? 2, items: [compileLayerBody(d, listField, layer, 0, input), ...flItems] },
+        ...(addBtns.length ? { buttons: addBtns } : {}),
+      };
+      return [flat, ...(satellites ? satellites(input) : [])];
+    }
+    // TWO+ layers → the adapter `stack` control (one active editor + collapsed peek previews).
+    const stackItems: WidgetStackItem[] = layers.map((it, i) => ({
+      id: String(i),
+      active: i === active,
+      disabled: i === active, // the active item isn't re-selectable (adapter contract)
+      preview: evalTemplate(repeat.preview, it, { metadata: it, flightLevel: flCtxWithFallback(input) }),
+      body: compileLayerBody(d, listField, it, i, input),
+    }));
+    const stack: WidgetNode = { kind: "stack", items: stackItems, min: repeat.min, max: repeat.max, editorPlacement: placement };
+    const panel: MarkerWidget = {
+      id,
+      anchor: { lon: callout.at[0]!, lat: callout.at[1]! },
+      ...(framed ? { bg: style.text?.background ?? "#ffffff", border: ink, radius: "small" } : {}),
+      ...(framed || buttons.length ? { padding: card.pad ?? "small" } : {}),
+      font: { color: ink, size: fontPx },
+      child: { dir: "v", align: "center", items: [stack] },
       ...(buttons.length ? { buttons } : {}),
     };
     return [panel, ...(satellites ? satellites(input) : [])];
@@ -860,7 +1082,9 @@ export function defFromDescriptor(d: PhenomenonDescriptor): PhenomenonDef {
             }
             return satellites && input.editable ? (satellites(input).length ? satellites(input) : null) : null;
           }
-        : compilePanelWidget(d, satellites)) // the panel replaces the placed call-out (areas)
+        : d.repeat
+          ? compileStackPanel(d, satellites) // the layer-stack panel (the TEMSI cloud-layer area)
+          : compilePanelWidget(d, satellites)) // the panel replaces the placed call-out (areas)
     : satellites
       ? (input: WidgetInput): MarkerWidget[] | null => {
           if (!input.editable) return null;
@@ -868,5 +1092,15 @@ export function defFromDescriptor(d: PhenomenonDescriptor): PhenomenonDef {
           return cards.length ? cards : null;
         }
       : undefined;
-  return { ...base, decorate, ...(widget ? { widget } : {}), ...(movableLabel ? { movableLabel } : {}) };
+  // The controller reads `repeat` to route the stack's add/remove/select + keep the list sorted.
+  const repeat = d.repeat
+    ? { listField: d.repeat.listField, min: d.repeat.min, max: d.repeat.max, editorPlacement: d.repeat.editorPlacement ?? ("pinned" as const) }
+    : undefined;
+  // A card button with `place: "anchor"` is relocated OFF the card to the feature's arrow-tip
+  // (the controller paints it there as a floating badge). Resolve its glyph once at compile time.
+  const anchorBtnSpec = ((d.card as CardSpec | undefined)?.buttons ?? []).find((b) => b.place === "anchor");
+  const anchorButton = anchorBtnSpec
+    ? { event: getAction(anchorBtnSpec.action), svg: resolveGlyph(anchorBtnSpec.svg ?? "atlas:plus"), ...(anchorBtnSpec.title !== undefined ? { title: anchorBtnSpec.title } : {}) }
+    : undefined;
+  return { ...base, decorate, ...(widget ? { widget } : {}), ...(movableLabel ? { movableLabel } : {}), ...(repeat ? { repeat } : {}), ...(anchorButton ? { anchorButton } : {}) };
 }

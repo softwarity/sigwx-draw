@@ -191,12 +191,19 @@ export interface ListField extends FieldBase {
   itemLabel?: (item: Metadata, index: number) => string;
   default?: Metadata[];
 }
+/** A compiled enum option: the value + display label, plus opaque `meta` carried from the
+ *  descriptor (e.g. a cloud `type`'s per-type FL defaults seeded when a layer is added). */
+export interface EnumOption {
+  value: string;
+  label: string;
+  meta?: Record<string, unknown>;
+}
 export interface EnumField extends FieldBase {
   type: "enum";
-  options: { value: string; label: string }[];
+  options: EnumOption[];
   default?: string;
   /** Conditional option set: live options depend on another field's value (resolved at render). */
-  optionsBy?: { field: string; map: Record<string, { value: string; label: string }[]> };
+  optionsBy?: { field: string; map: Record<string, EnumOption[]> };
 }
 export interface BoolField extends FieldBase {
   type: "bool";
@@ -281,6 +288,16 @@ export interface PhenomenonDef {
   /** LINE phenomena: the placed label can be slid ALONG the line (a drag handle shows while
    *  selected). Position rides `metadata.labelT` (fraction 0–1). Set from `render.line.label.movable`. */
   movableLabel?: boolean;
+  /** Multi-layer STACK editor (the TEMSI cloud-layer area): the named LIST field is edited as
+   *  an adapter `stack` control (one active layer, the rest collapsed). The controller reads
+   *  `listField`/`min`/`max` to route add/remove/select and keep the list altitude-sorted.
+   *  Set from the descriptor `repeat`. */
+  repeat?: { listField: string; min: number; max: number; editorPlacement: "pinned" | "inline" };
+  /** A card action button RELOCATED to the feature's arrow-tip anchor (a floating DOM badge
+   *  on the map) instead of a card edge — set from a descriptor card button with `place: "anchor"`.
+   *  The controller emits it at the selected area's primary arrow tip (where the leader points),
+   *  firing `event` via `onWidgetAction`. `draw_and_link` → re-enter draw to append another area. */
+  anchorButton?: { event: string; svg: string; title?: string };
 }
 
 // ── Registry ─────────────────────────────────────────────────────────────────

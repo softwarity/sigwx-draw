@@ -9,3 +9,4 @@ demo/node_modules
 demo/.angular
 out-tsc
 coverage/
+.op_token

@@ -78,6 +78,28 @@ const field: Record<string, unknown> = {
         },
       },
     },
+    // enum: conditional option SET (live options depend on another field's value)
+    optionsBy: {
+      type: "object",
+      additionalProperties: false,
+      required: ["field", "map"],
+      properties: {
+        field: { type: "string" },
+        map: {
+          type: "object",
+          description: 'Other-field value (or "*") → its option list.',
+          additionalProperties: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["value"],
+              properties: { value: { type: "string" }, label: { type: "string" }, glyph: glyphSpec, meta: { type: "object" } },
+            },
+          },
+        },
+      },
+    },
     // text
     maxLength: { type: "number" },
     // list
@@ -87,22 +109,27 @@ const field: Record<string, unknown> = {
   },
 };
 
+/** A picker (option control) bound to an enum field: `carousel` (≤5) / `flower` (6–10) / `grid`
+ *  (>10), each degrading to the next past its threshold (omit ⇒ adapter default). */
+const picker = {
+  type: "object",
+  additionalProperties: false,
+  required: ["field"],
+  properties: { field: { type: "string" }, label: { type: "string" }, mode: { enum: ["carousel", "flower", "grid"] } },
+};
+
 const cardItem = {
   type: "object",
   additionalProperties: false,
-  description: "Exactly ONE of text/glyph/input/coord/carousel/gauge/dial.",
+  description: "Exactly ONE of text/glyph/input/coord/picker/gauge/dial.",
   properties: {
     text: { type: "string" },
     glyph: glyphSpec,
     size: { type: "number" },
     input: { type: "object", additionalProperties: false, required: ["field"], properties: { field: { type: "string" } } },
     coord: { type: "boolean" },
-    carousel: {
-      type: "object",
-      additionalProperties: false,
-      required: ["field"],
-      properties: { field: { type: "string" }, label: { type: "string" } },
-    },
+    picker,
+    carousel: picker, // deprecated alias of `picker`
     gauge: {
       type: "object",
       additionalProperties: false,
@@ -137,6 +164,7 @@ const callout = {
     leader: { enum: ["lightning", "straight", "none"] },
     arrow: { type: "boolean" },
     content: { type: "array", items: { type: "string" } },
+    contentSingle: { type: "array", items: { type: "string" } },
     id: { type: "string" },
     box: { type: "boolean" },
     ink: { enum: ["text", "ink"] },
@@ -250,6 +278,19 @@ export const DESCRIPTOR_JSON_SCHEMA = {
             },
           },
         },
+      },
+    },
+    repeat: {
+      type: "object",
+      additionalProperties: false,
+      required: ["listField", "preview", "min", "max"],
+      description: "Stack a LIST field as repeated layer cards (the TEMSI cloud-layer area).",
+      properties: {
+        listField: { type: "string", minLength: 1 },
+        preview: { type: "string" },
+        min: { type: "number" },
+        max: { type: "number" },
+        editorPlacement: { enum: ["pinned", "inline"] },
       },
     },
     satellites: {

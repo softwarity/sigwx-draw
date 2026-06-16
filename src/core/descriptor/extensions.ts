@@ -145,6 +145,17 @@ registerExtensions({
       const xxx = (ctx.flightLevel?.beyond?.[isBase ? 0 : 1] ?? "xxx") === "xxx";
       return off && xxx ? "XXX" : `FL${pad3(n)}`;
     },
+    /** Like `flx` but WITHOUT the `FL` prefix — so a compact range can print `FL` once:
+     *  `FL{baseFL|flxn:base}/{topFL|flxn:top}` → `FL145/250` (off-chart side → `XXX`). */
+    flxn: (v, ctx, arg) => {
+      const n = num(v);
+      const isBase = arg !== "top";
+      const min = ctx.flightLevel?.min;
+      const max = ctx.flightLevel?.max;
+      const off = isBase ? (min !== undefined && n < min) : (max !== undefined && n > max);
+      const xxx = (ctx.flightLevel?.beyond?.[isBase ? 0 : 1] ?? "xxx") === "xxx";
+      return off && xxx ? "XXX" : pad3(n);
+    },
   },
   generators: {
     /** A regular polygon (closed ring) sized to the view — the area drop/fallback. */

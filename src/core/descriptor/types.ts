@@ -161,6 +161,11 @@ export interface CalloutSpec {
   arrow?: boolean;
   /** Box content: template lines (`{field|format}`). */
   content: string[];
+  /** Single-layer override for a `repeat` (layer-stack) area: when the stack holds exactly ONE
+   *  layer, the rest cartouche uses THESE lines (the "normal" centered column — e.g. amount /
+   *  type / top / base — each on its own line) instead of stacking the compact `content` line.
+   *  ≥2 layers fall back to `content` (one block per layer). Ignored for non-repeat areas. */
+  contentSingle?: string[];
   /** Stable label id (defaults to the phenomenon type). */
   id?: string;
   /** `true` ⇒ framed white box (panel); `false` ⇒ bare text+halo (turbulence). */
@@ -254,7 +259,9 @@ export interface CardItemSpec {
 }
 
 export interface CardButtonSpec {
-  place: "left" | "right" | "h-edges";
+  /** Card-edge slot, OR `"anchor"` = relocate the button OFF the card to the feature's
+   *  arrow-tip anchor (a floating badge on the map, emitted by the controller). */
+  place: "left" | "right" | "h-edges" | "anchor";
   /** Named action: `draw_and_link`, `erase`, `delete`, `detach`… (+ host-registered). */
   action: string;
   svg?: GlyphRef;
@@ -282,6 +289,29 @@ export interface CardSpec {
   boxShapeBy?: { field: string; map: Record<string, string> };
   items: CardItemSpec[];
   buttons?: CardButtonSpec[];
+}
+
+// ── Repeat (a stacked list editor: the TEMSI cloud-layer area) ─────────────────
+
+/** Turns a LIST field into a STACK editor (the adapter `stack` control): one layer is
+ *  active/editable at a time, the others collapse to a one-line `preview`. The card's
+ *  `items` describe ONE layer's body (its pickers + FL gauge), bound to the list item's
+ *  fields. The lib keeps the list SORTED (highest layer on top) and re-sorts ONLY on
+ *  discrete actions (add / remove / select a layer) — never mid-drag, so editing one
+ *  layer's FL never reorders the others under the cursor. The unselected cartouche stacks
+ *  one call-out `content` block PER layer. */
+export interface RepeatSpec {
+  /** The LIST field whose items are the stacked layers. */
+  listField: string;
+  /** One-line peek TEMPLATE for a collapsed layer (`{field|format}` over the item). */
+  preview: string;
+  /** Minimum layer count (the `−` button hides at this floor). */
+  min: number;
+  /** Maximum layer count (the `+` button hides at this ceiling). */
+  max: number;
+  /** `pinned` = a fixed editor above a read-only preview strip (drag-stable);
+   *  `inline` = the active layer unfolds in place. Default `pinned`. */
+  editorPlacement?: "pinned" | "inline";
 }
 
 export interface SatelliteSpec {
@@ -318,6 +348,9 @@ export interface PhenomenonDescriptor {
   flBeyond?: [FlMode, FlMode];
   render?: RenderSpec | RenderByGeometry;
   card?: CardSpec;
+  /** Stack a LIST field as repeated layer cards (the TEMSI cloud-layer area): the `card`
+   *  describes ONE layer's body, edited as the adapter `stack` control. */
+  repeat?: RepeatSpec;
   satellites?: SatelliteSpec[];
   /** Plain JSON style (the same shape host overrides patch). */
   style: PhenomenonStyle;

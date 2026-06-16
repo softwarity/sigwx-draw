@@ -24,129 +24,77 @@
       },
       "fields": [
         {
-          "key": "type",
-          "kind": "enum",
-          "label": "Type de nuage",
-          "default": "CB",
-          "options": [
+          "key": "layers",
+          "kind": "list",
+          "label": "Couches nuageuses",
+          "itemLabel": "{amount} {type}",
+          "default": [
             {
-              "value": "CI",
-              "label": "Cirrus"
-            },
-            {
-              "value": "CC",
-              "label": "Cirrocumulus"
-            },
-            {
-              "value": "CS",
-              "label": "Cirrostratus"
-            },
-            {
-              "value": "AC",
-              "label": "Altocumulus"
-            },
-            {
-              "value": "AS",
-              "label": "Altostratus"
-            },
-            {
-              "value": "NS",
-              "label": "Nimbostratus"
-            },
-            {
-              "value": "SC",
-              "label": "Stratocumulus"
-            },
-            {
-              "value": "ST",
-              "label": "Stratus"
-            },
-            {
-              "value": "CU",
-              "label": "Cumulus"
-            },
-            {
-              "value": "CB",
-              "label": "Cumulonimbus"
-            }
-          ]
-        },
-        {
-          "key": "amount",
-          "kind": "enum",
-          "label": "Quantité",
-          "default": "OCNL",
-          "options": [
-            {
-              "value": "ISOL",
-              "label": "ISOL — CB isolés"
-            },
-            {
-              "value": "OCNL",
-              "label": "OCNL — CB bien séparés"
-            },
-            {
-              "value": "FRQ",
-              "label": "FRQ — CB peu/pas séparés"
-            },
-            {
-              "value": "EMBD",
-              "label": "EMBD — CB noyés"
+              "type": "CB",
+              "amount": "OCNL",
+              "baseFL": 25,
+              "topFL": 455
             }
           ],
-          "optionsBy": {
-            "field": "type",
-            "map": {
-              "CB": [
-                {
-                  "value": "ISOL",
-                  "label": "ISOL — CB isolés"
-                },
-                {
-                  "value": "OCNL",
-                  "label": "OCNL — CB bien séparés"
-                },
-                {
-                  "value": "FRQ",
-                  "label": "FRQ — CB peu/pas séparés"
-                },
-                {
-                  "value": "EMBD",
-                  "label": "EMBD — CB noyés"
-                }
-              ],
-              "*": [
-                {
-                  "value": "FEW",
-                  "label": "FEW — 1-2/8"
-                },
-                {
-                  "value": "SCT",
-                  "label": "SCT — 3-4/8"
-                },
-                {
-                  "value": "BKN",
-                  "label": "BKN — 5-7/8"
-                },
-                {
-                  "value": "OVC",
-                  "label": "OVC — 8/8"
-                }
+          "item": [
+            {
+              "key": "type",
+              "kind": "enum",
+              "label": "Type de nuage",
+              "default": "CB",
+              "options": [
+                { "value": "CI", "label": "Cirrus", "meta": { "baseFL": 250, "topFL": 350 } },
+                { "value": "CC", "label": "Cirrocumulus", "meta": { "baseFL": 250, "topFL": 350 } },
+                { "value": "CS", "label": "Cirrostratus", "meta": { "baseFL": 250, "topFL": 350 } },
+                { "value": "AC", "label": "Altocumulus", "meta": { "baseFL": 80, "topFL": 150 } },
+                { "value": "AS", "label": "Altostratus", "meta": { "baseFL": 80, "topFL": 150 } },
+                { "value": "NS", "label": "Nimbostratus", "meta": { "baseFL": 80, "topFL": 150 } },
+                { "value": "SC", "label": "Stratocumulus", "meta": { "baseFL": 10, "topFL": 50 } },
+                { "value": "ST", "label": "Stratus", "meta": { "baseFL": 10, "topFL": 50 } },
+                { "value": "CU", "label": "Cumulus", "meta": { "baseFL": 25, "topFL": 80 } },
+                { "value": "CB", "label": "Cumulonimbus", "meta": { "baseFL": 25, "topFL": 455 } }
               ]
+            },
+            {
+              "key": "amount",
+              "kind": "enum",
+              "label": "Quantité",
+              "default": "OCNL",
+              "options": [
+                { "value": "ISOL", "label": "ISOL — CB isolés" },
+                { "value": "OCNL", "label": "OCNL — CB bien séparés" },
+                { "value": "FRQ", "label": "FRQ — CB peu/pas séparés" },
+                { "value": "EMBD", "label": "EMBD — CB noyés" }
+              ],
+              "optionsBy": {
+                "field": "type",
+                "map": {
+                  "CB": [
+                    { "value": "ISOL", "label": "ISOL — CB isolés" },
+                    { "value": "OCNL", "label": "OCNL — CB bien séparés" },
+                    { "value": "FRQ", "label": "FRQ — CB peu/pas séparés" },
+                    { "value": "EMBD", "label": "EMBD — CB noyés" }
+                  ],
+                  "*": [
+                    { "value": "BKN", "label": "BKN — 5-7/8" },
+                    { "value": "OVC", "label": "OVC — 8/8" }
+                  ]
+                }
+              }
+            },
+            {
+              "key": "baseFL",
+              "kind": "fl",
+              "label": "Base",
+              "default": 25
+            },
+            {
+              "key": "topFL",
+              "kind": "fl",
+              "label": "Top",
+              "default": 455
             }
-          }
-        },
-        {
-          "key": "baseFL",
-          "kind": "fl",
-          "label": "Base",
-          "default": 50
-        },
-        {
-          "key": "topFL",
-          "kind": "fl",
-          "label": "Top",
-          "default": 120
+          ]
         }
       ],
       "flBeyond": [
@@ -167,6 +115,9 @@
           "arrow": true,
           "box": true,
           "content": [
+            "{amount} {type} {baseFL|flx:base}/{topFL|flx:top}"
+          ],
+          "contentSingle": [
             "{amount}",
             "{type}",
             "{topFL|flx:top}",
@@ -190,19 +141,13 @@
               "field": "type",
               "label": "{value}"
             }
-          },
-          {
-            "text": "{topFL|flx:top}"
-          },
-          {
-            "text": "{baseFL|flx:base}"
           }
         ],
         "buttons": [
           {
-            "place": "h-edges",
+            "place": "anchor",
             "action": "draw_and_link",
-            "svg": "atlas:plus",
+            "svg": "atlas:draw",
             "title": "Ajouter une aire"
           }
         ]
@@ -225,6 +170,12 @@
           ]
         }
       ],
+      "repeat": {
+        "listField": "layers",
+        "preview": "FL{baseFL|flxn:base}/{topFL|flxn:top}",
+        "min": 1,
+        "max": 3
+      },
       "style": {
         "color": "#d1242f",
         "edge": {
@@ -240,7 +191,7 @@
           "size": 13
         }
       },
-      "summary": "{amount} {type} {topFL|fl}/{baseFL|fl}"
+      "summary": "SW area · top FL{layers|maxof:topFL}"
     },
     {
       "schemaVersion": 1,
@@ -493,14 +444,25 @@
     {
       "schemaVersion": 1,
       "type": "zeroIsotherm",
-      "label": "Isotherme 0°C",
+      "label": "Isotherme",
       "gesture": {
         "primitive": "polyline",
-        "draw": "lasso",
+        "draw": "lasso-or-spot",
         "smooth": true,
         "minVertices": 2
       },
       "fields": [
+        {
+          "key": "temp",
+          "kind": "enum",
+          "label": "Température",
+          "default": "0",
+          "options": [
+            { "value": "0", "label": "0 °C" },
+            { "value": "−10", "label": "−10 °C" },
+            { "value": "−20", "label": "−20 °C" }
+          ]
+        },
         {
           "key": "fl",
           "kind": "fl",
@@ -517,10 +479,20 @@
           "label": {
             "anchor": "geometry-mid",
             "content": [
-              "0°: {fl}"
+              "{temp}°: {fl}"
             ],
             "box": true,
             "movable": true,
+            "borderWidth": "small"
+          }
+        },
+        "point": {
+          "label": {
+            "anchor": "geometry-mid",
+            "content": [
+              "{temp}°: {fl}"
+            ],
+            "box": true,
             "borderWidth": "small"
           }
         }
@@ -532,6 +504,12 @@
           "pin": "flRef",
           "side": "right",
           "items": [
+            {
+              "picker": {
+                "field": "temp",
+                "label": "{value} °C"
+              }
+            },
             {
               "gauge": {
                 "cursors": [
@@ -555,7 +533,7 @@
           "background": "transparent"
         }
       },
-      "summary": "0°C {fl|fl}"
+      "summary": "{temp}°C {fl|fl}"
     },
     {
       "schemaVersion": 1,
@@ -714,9 +692,9 @@
         ],
         "buttons": [
           {
-            "place": "h-edges",
+            "place": "anchor",
             "action": "draw_and_link",
-            "svg": "atlas:plus",
+            "svg": "atlas:draw",
             "title": "Draw a linked area"
           }
         ]
@@ -865,9 +843,9 @@
         ],
         "buttons": [
           {
-            "place": "h-edges",
+            "place": "anchor",
             "action": "draw_and_link",
-            "svg": "atlas:plus",
+            "svg": "atlas:draw",
             "title": "Draw a linked area"
           }
         ]
@@ -1486,6 +1464,7 @@
   ],
   "glyphs": {
     "cb": "buttons/cb.svg",
+    "draw": "buttons/draw.svg",
     "icing": "buttons/icing.svg",
     "jetStream": "buttons/jetStream.svg",
     "radioactive": "buttons/radioactive.svg",

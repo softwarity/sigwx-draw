@@ -252,9 +252,9 @@
         ],
         "buttons": [
           {
-            "place": "h-edges",
+            "place": "anchor",
             "action": "draw_and_link",
-            "svg": "atlas:plus",
+            "svg": "atlas:draw",
             "title": "Draw a linked area"
           }
         ]
@@ -395,9 +395,9 @@
         ],
         "buttons": [
           {
-            "place": "h-edges",
+            "place": "anchor",
             "action": "draw_and_link",
-            "svg": "atlas:plus",
+            "svg": "atlas:draw",
             "title": "Draw a linked area"
           }
         ]
@@ -546,9 +546,9 @@
         ],
         "buttons": [
           {
-            "place": "h-edges",
+            "place": "anchor",
             "action": "draw_and_link",
-            "svg": "atlas:plus",
+            "svg": "atlas:draw",
             "title": "Draw a linked area"
           }
         ]
@@ -818,6 +818,7 @@
   ],
   "glyphs": {
     "cb": "buttons/cb.svg",
+    "draw": "buttons/draw.svg",
     "icing": "buttons/icing.svg",
     "jetStream": "buttons/jetStream.svg",
     "radioactive": "buttons/radioactive.svg",

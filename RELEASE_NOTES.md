@@ -2,6 +2,65 @@
 
 ## NEXT RELEASE
 
+- **Add: the TEMSI isotherm draws as a SPOT or a CONTOUR, with a selectable temperature** (like the
+  tropopause for the geometry) — its gesture is now `lasso-or-spot`, so a click drops a boxed
+  `<T>°: FL` spot and a stroke draws the contour line. A new `render.point` branch boxes the spot
+  label; the spot inherits the no-handle / drag-the-box behaviour. The temperature is a **discrete
+  enum picker** (chart convention — multiples of 5 °C, not free input): **France 0 / −10 °C**,
+  **EUROC 0 / −10 / −20 °C** (default 0). The picker rides the FL-gauge satellite, so it works in
+  BOTH spot and contour mode (a new `picker` item type is honoured in satellites). The label,
+  picker, and summary all read the chosen `temp`. Renamed in the UI to “Isotherme” (the type id
+  stays `zeroIsotherm`). Only the TEMSI profiles carry it.
+- **Fix: a tropopause SPOT is now moved by dragging its FL box; the move handle is gone** — a boxed
+  spot label sits centered ON its point, exactly where the vertex/selection handle used to be drawn.
+  That handle covered the value's most-significant digit, so dragging the FL gauge *looked* frozen
+  even though the box updated live. The handle is **removed** (a lone spot has no editable shape) and
+  the **box IS the spot**: drag the box to move the point, tap it to select. The box stays anchored
+  and centered on the spot. The contour (line) label/handles are unchanged.
+- **Change: the FL gauge satellite centres its RANGE on the call-out anchor** — the side gauge now
+  pins the **middle of its range** at the box anchor (so the slider straddles the box symmetrically)
+  instead of the selection-time level; still drag-stable. Applies to every FL gauge (tropopause,
+  turbulence/CB/icing areas, jet break point).
+- **Change: the "add another area" button moved from the card edge to the arrow TIP** — every
+  area phenomenon's `draw-more` (`+`) control now rides the selected zone's **leader arrow tip**
+  (where the old scallop-flip tap was), CENTERED on the tip — not straddling the call-out card.
+  It uses the **Material "draw" pencil** glyph in a **framed badge** styled like the card's own edge
+  buttons (white disc, hairline ink border, black glyph), a bit bigger than the former `+`. The badge
+  is **not a widget button** (a button swallows the pointer and would block the re-aim drag it sits
+  on): the controller treats it as the **anchor control itself** — **drag it to re-aim the arrow
+  tip**, **tap it to draw a linked area**. Declared in the
+  profile with a card button `place: "anchor"` (new): the lib relocates it to `def.anchorButton` and
+  the controller paints + drives it at the tip; the card itself now carries no edge buttons (so
+  unframed call-outs go truly bare). Same visibility gate as the anchor handle (selected + leader
+  showing).
+- **Add: multi-layer significant-weather area (TEMSI cloud-layer stack)** — `sigwxArea` now holds
+  a STACK of cloud layers, each `amount × type × base/top FL`, edited inline via the adapter's new
+  `stack` control: one layer expanded (the amount/type pickers), the others collapsed to a one-line
+  **FL-only** preview, with `+`/`−` to add/remove. The **FL gauge stays a side satellite** pinned to
+  the right of the card (so the card stays narrow), bound to the active layer and re-bound when you
+  switch layers. New **`repeat`** descriptor token
+  (`{ listField, preview, min, max, editorPlacement }`) compiles a list field into the stack panel.
+  The list stays **altitude-sorted** (highest on top), re-sorted on (re)selection / add / remove and
+  frozen during a single FL drag. **Per-type FL defaults on add** (read from each cloud type's
+  `meta`, coerced into the profile's `flightLevel`→`vertical` range — CB top defaults to XXX). The
+  **rest cartouche** stacks one `qty type base/top` line per layer; with a **single layer** it falls
+  back to the **normal centered column** (amount / type / top / base — each on its own line), via a
+  new `callout.contentSingle` descriptor template. **Edit mode mirrors this**: a single layer's
+  selected panel reads **as if it were one simple card** — framed like the deselected cartouche
+  (white box + ink border, so select/deselect don't flip boxed↔bare) with the **amount/type
+  pickers** over the **top and base FL each on its own line** (mirroring `contentSingle`; the side
+  gauge edits them), plus a bottom-edge `+` to add a layer. It carries **none of the stack chrome**
+  (no blue active-editor box); the adapter `stack` control only appears from **two layers up**.
+  France allows up to 4 layers (all cloud amounts), EUROC up to 3 (BKN/OVC only); `min:1` everywhere.
+- **Fix: a single-layer `sigwxArea` showed no flight level while selected** — the selected panel
+  rendered only the amount/type pickers, dropping the FL the deselected cartouche prints. It now
+  shows the top and base FL on their own lines (the side gauge edits them), matching the cartouche.
+- **Fix: the multi-layer `sigwxArea` rest cartouche read `top/base` (top first) while the selected
+  stack preview and the FL gauge cursors read `base/top` (base first)** — the deselected compact line
+  now reads **`base/top`** (e.g. `OCNL CB FL025/FL155`), consistent with the layer preview and the
+  `[baseFL, topFL]` gauge. The single-layer vertical column is unchanged (top stays the upper line —
+  higher on the page = higher altitude). Both TEMSI profiles (France + EUROC).
+
 ---
 
 ## 1.2.0

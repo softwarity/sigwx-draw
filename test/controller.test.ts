@@ -101,6 +101,46 @@ function stroke(sigwx: SigwxDraw, a: MockAdapter, type: string, pts: [number, nu
   return lastId(sigwx);
 }
 
+/** Walk a widget tree and collect every picker control node (a layer-stack panel nests its
+ *  pickers inside `stack.items[].body`, so a flat `child.items` scan no longer finds them). */
+type PickerNode = { kind?: string; control?: string; name?: string; value?: string; color?: string; mode?: string; options?: { value: string; label?: string; svg?: string; title?: string }[] };
+function collectPickers(node: unknown): PickerNode[] {
+  if (!node || typeof node !== "object") return [];
+  let out: PickerNode[] = [];
+  if ((node as PickerNode).control === "picker") out.push(node as PickerNode);
+  for (const v of Object.values(node as Record<string, unknown>)) {
+    if (Array.isArray(v)) for (const x of v) out = out.concat(collectPickers(x));
+    else if (v && typeof v === "object") out = out.concat(collectPickers(v));
+  }
+  return out;
+}
+
+/** Walk a widget tree and collect every gauge node (FL gauges live in a satellite card now). */
+type GaugeNode = { kind?: string; cursors?: { name: string; value: number; label: string }[] };
+function collectGauges(node: unknown): GaugeNode[] {
+  if (!node || typeof node !== "object") return [];
+  let out: GaugeNode[] = [];
+  if ((node as GaugeNode).kind === "gauge") out.push(node as GaugeNode);
+  for (const v of Object.values(node as Record<string, unknown>)) {
+    if (Array.isArray(v)) for (const x of v) out = out.concat(collectGauges(x));
+    else if (v && typeof v === "object") out = out.concat(collectGauges(v));
+  }
+  return out;
+}
+
+/** Walk a widget tree and collect every plain-text node's `value` (no `control`, e.g. the FL line). */
+function collectTextValues(node: unknown): string[] {
+  if (!node || typeof node !== "object") return [];
+  let out: string[] = [];
+  const n = node as { kind?: string; control?: string; value?: unknown };
+  if (n.kind === "text" && n.control === undefined && typeof n.value === "string") out.push(n.value);
+  for (const v of Object.values(node as Record<string, unknown>)) {
+    if (Array.isArray(v)) for (const x of v) out = out.concat(collectTextValues(x));
+    else if (v && typeof v === "object") out = out.concat(collectTextValues(v));
+  }
+  return out;
+}
+
 const JET: [number, number][] = [[0, 0], [2, 1], [4, 0], [6, 1]];
 const POLY: [number, number][] = [[0, 0], [4, 0], [4, 4], [0, 4]];
 
@@ -579,16 +619,26 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
     expect(sigwx.save().features).toHaveLength(0);
   });
 
-  it("a SELECTED CB carries the '+' edge-buttons control card; hidden once unselected; markers don't", () => {
+  it("a SELECTED CB shows the 'draw-more' badge at its arrow TIP (a draggable glyph, not a card edge button); both hidden once unselected; markers don't", () => {
     const id = stroke(sigwx, adapter, "cb", POLY); // drawn ⇒ selected
     const w = adapter.widget(id)!;
-    expect(w.buttons?.[0]?.event).toBe("draw-more");
-    expect(w.buttons?.[0]?.place).toBe("h-edges"); // + on top/bottom…
-    // The eraser is no longer a card button — it's Ctrl/⌘ + hover (brush) / click (dig),
-    // so the `+` is the ONLY edge button now.
-    expect(w.buttons).toHaveLength(1);
+    // The `+` moved OFF the card to a floating badge at the leader tip (where the old
+    // scallop-flip tap was). The eraser was already gone (Ctrl/⌘ + hover) → the card now
+    // carries NO edge buttons at all.
+    expect(w.buttons).toBeUndefined();
+    // The badge is a sizable GLYPH (not a button — a button would swallow the tip's re-aim
+    // drag it sits on); the controller drives it (tap = draw-more, drag = re-aim).
+    const tip = adapter.widget(`${id}#draw`)!;
+    expect(tip.buttons).toBeUndefined();
+    expect(tip.bg).toBe("#ffffff"); // framed like the card's edge buttons (white disc + ink border)
+    expect(tip.border).toBe("#1f2328");
+    const g = tip.child.items[0] as { kind: string; svg: string; size?: number; color?: string };
+    expect(g.kind).toBe("glyph");
+    expect(g.color).toBe("#1f2328"); // black glyph (orange was invisible)
+    expect(g.size).toBeGreaterThanOrEqual(14); // bigger than the former bordered `+` (~12px)
     sigwx.select(null);
     expect(adapter.widget(id)).toBeUndefined(); // the control card exists ONLY while selected
+    expect(adapter.widget(`${id}#draw`)).toBeUndefined(); // …and so does the draw badge
     const vid = sigwx.draw("volcano"); // markers no longer carry edge buttons
     expect(adapter.widget(vid)!.buttons).toBeUndefined();
   });
@@ -738,8 +788,9 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
     const w = adapter.widget(id)!;
     expect(w.bg).toBeUndefined();     // unframed: no box, no border (just bare text + glyph)
     expect(w.border).toBeUndefined();
-    // …yet it still REQUESTS inner padding (it has +/− edge buttons): the adapter applies it bare.
-    expect((w as { padding?: string }).padding).toBe("large");
+    // With the `+` moved to the arrow-tip and the eraser gone, the card has NO edge buttons,
+    // so it requests NO padding — the unframed card is now truly bare (like the call-out).
+    expect((w as { padding?: string }).padding).toBeUndefined();
     const sev = w.child.items[0] as { control?: string; name?: string; value?: string; options?: { value: string; svg?: string }[] };
     expect((adapter.widget(`${id}#gauge`)!.child.items[0] as { kind?: string }).kind).toBe("gauge"); // satellite gauge card
     expect(sev.control).toBe("picker");
@@ -804,13 +855,37 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
     expect(leaders).toHaveLength(4);
   });
 
-  it("turbulence and icing cards carry the '+' edge buttons (multi-area, like CB)", () => {
+  it("turbulence and icing show the 'draw-more' badge at the arrow TIP (a glyph, not the card edge), like CB", () => {
     for (const type of ["turbulence", "icing"]) {
       const id = stroke(sigwx, adapter, type, POLY);
-      const b = adapter.widget(id)!.buttons?.[0];
-      expect(b?.event).toBe("draw-more");
-      expect(b?.title).toBe("Draw a linked area");
+      expect(adapter.widget(id)!.buttons).toBeUndefined(); // not a card-edge button any more
+      const badge = adapter.widget(`${id}#draw`)!; // the floating arrow-tip badge
+      expect(badge.buttons).toBeUndefined();
+      const g = badge.child.items[0] as { kind: string; svg: string; size?: number };
+      expect(g.kind).toBe("glyph");
+      expect(g.svg).toBeTruthy();
     }
+  });
+
+  it("the arrow-tip 'draw' badge: a TAP enters append-draw; a DRAG re-aims the tip instead (never blocks it)", () => {
+    const id = stroke(sigwx, adapter, "cb", POLY);
+    const badgeHit = { overlay: "widget" as const, props: { id: `${id}#draw` } };
+    // DRAG the badge (down → move → up): re-aims the arrow tip, does NOT enter draw mode.
+    adapter.ev("down", 4, 4, badgeHit);
+    adapter.ev("move", 5, 5);
+    adapter.ev("up", 5, 5);
+    expect(sigwx.save().features).toHaveLength(1); // still ONE feature, no new draw armed
+    // TAP the badge (down → up → click, no move): enters append-draw on THIS feature. onUp
+    // harmlessly clears the armed anchor drag (no move ⇒ no re-aim); onClick fires draw-more.
+    adapter.ev("down", 4, 4, badgeHit);
+    adapter.ev("up", 4, 4, badgeHit);
+    adapter.ev("click", 4, 4, badgeHit);
+    adapter.ev("down", 6, 6); // draw the extra area
+    adapter.ev("move", 8, 6);
+    adapter.ev("move", 8, 8);
+    adapter.ev("up", 6, 8);
+    const f = sigwx.save().features.find((x) => x.properties!["id"] === id)!;
+    expect(f.geometry.type).toBe("MultiPolygon"); // the tap appended an area to the SAME CB
   });
 
   it("declutter: a tiny UNSELECTED zone hides its call-out; selecting (or a big zone) shows it", () => {
@@ -1091,11 +1166,9 @@ describe("sigwxArea — panel replaces the call-out (no double)", () => {
     await s.ready();
     const id = stroke(s, a, "sigwxArea", POLY); // draws + auto-selects
     const panel = a.widget(id)!;
-    const pickers = panel.child.items.filter(
-      (i): i is { kind: string; name?: string; value?: string; color?: string; options?: { value: string; label?: string; svg?: string; title?: string }[] } =>
-        "control" in i && (i as { control?: string }).control === "picker",
-    );
-    const amount = pickers.find((p) => p.name === "amount")!;
+    // The pickers now live in the stack's active-layer BODY, with list-scoped names.
+    const pickers = collectPickers(panel);
+    const amount = pickers.find((p) => p.name === "layers.0.amount")!;
     expect(amount.value).toBe("OCNL");                          // amount alone, no type appended
     expect(amount.options?.every((o) => o.svg === undefined && typeof o.label === "string")).toBe(true);
     // and nothing rendered for this field carries the leaked stacked-CB glyph
@@ -1103,7 +1176,7 @@ describe("sigwxArea — panel replaces the call-out (no double)", () => {
     // the picker text is tinted with the control HANDLE colour (like the gauge/dial knobs)
     expect(amount.color).toBe(DEFAULT_STYLE.control.handle.fill);
     // the terse cloud codes carry their full name as a tooltip (CB → "Cumulonimbus", CI → "Cirrus")
-    const type = pickers.find((p) => p.name === "type")!;
+    const type = pickers.find((p) => p.name === "layers.0.type")!;
     expect(type.options?.find((o) => o.value === "CB")).toMatchObject({ label: "CB", title: "Cumulonimbus" });
     expect(type.options?.find((o) => o.value === "CI")).toMatchObject({ label: "CI", title: "Cirrus" });
   });
@@ -1114,8 +1187,207 @@ describe("sigwxArea — panel replaces the call-out (no double)", () => {
     const s = new SigwxDraw({ adapter: a, profile, style: { control: { handle: { fill: "#0969da" } } } });
     await s.ready();
     const id = stroke(s, a, "sigwxArea", POLY);
-    const amount = (a.widget(id)!.child.items as { control?: string; name?: string; color?: string }[])
-      .find((i) => i.control === "picker" && i.name === "amount")!;
+    const amount = collectPickers(a.widget(id)!).find((i) => i.name === "layers.0.amount")!;
     expect(amount.color).toBe("#0969da");
+  });
+});
+
+describe("sigwxArea — cloud-layer stack (WP#173)", () => {
+  const loadFrance = async () => (await import("../src/profiles/temsi-france.json")).default as unknown as SigwxProfile;
+  type StackNode = { kind: string; min: number; max: number; editorPlacement?: string; items: { id: string; active: boolean; disabled: boolean; preview: unknown; body: unknown }[] };
+  const getStack = (a: MockAdapter, id: string): StackNode =>
+    (a.widget(id)!.child.items as unknown[]).find((n): n is StackNode => (n as { kind?: string }).kind === "stack")!;
+  const layersOf = (s: SigwxDraw): Record<string, unknown>[] => lastMeta(s)["layers"] as Record<string, unknown>[];
+
+  it("a drawn area seeds exactly one CB layer (the descriptor default)", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    stroke(s, a, "sigwxArea", POLY);
+    const layers = layersOf(s);
+    expect(layers).toHaveLength(1);
+    expect(layers[0]).toMatchObject({ type: "CB", amount: "OCNL", baseFL: 25, topFL: 155 });
+  });
+
+  it("a SINGLE layer's selected panel has NO stack chrome — framed like the cartouche, pickers + FL line + an add-layer +", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY); // ONE layer by default (CB / OCNL, base 25 / top 155)
+    const panel = a.widget(id)!;
+    // No `stack` node — the adapter's blue active-editor highlight only exists inside a stack,
+    // so a lone layer carries none of it.
+    expect((panel.child.items as unknown[]).some((n) => (n as { kind?: string }).kind === "stack")).toBe(false);
+    // …but the panel IS framed (white box + ink border) like the deselected cartouche it replaces —
+    // select/deselect must not flip between boxed and bare.
+    expect(panel.bg).toBe("#ffffff");
+    expect(panel.border).toBeDefined();
+    // The amount/type pickers are still there (list-scoped), edited exactly as in the stack.
+    expect(collectPickers(panel).map((p) => p.name).sort()).toEqual(["layers.0.amount", "layers.0.type"]);
+    // The FL is shown (regression guard) and mirrors the single cartouche: top and base on their
+    // OWN lines (not a compact slash form) — here top 155 off the FL150 ceiling → "XXX", base 25 →
+    // "FL025". Each is a distinct text node so the card reads "as if there were one simple card".
+    const texts = collectTextValues(panel);
+    expect(texts).toContain("XXX");
+    expect(texts.some((t) => /^FL0?25$/.test(t))).toBe(true);
+    // An add-layer "+" rides the panel edge so a 2nd layer can still be added (→ the stack).
+    expect((panel.buttons ?? []).some((b) => b.event === "addLayer")).toBe(true);
+  });
+
+  it("≥2 layers render the adapter layer stack carrying the profile min/max", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY);
+    a.actionWidget(id, "addLayer"); // → 2 layers ⇒ the stack appears
+    const stack = getStack(a, id);
+    expect(stack.kind).toBe("stack");
+    expect({ min: stack.min, max: stack.max }).toEqual({ min: 1, max: 4 });
+    expect(stack.items).toHaveLength(2);
+    expect(stack.items.find((it) => it.active)!.disabled).toBe(true); // active item not re-selectable
+  });
+
+  it("addLayer appends a CB layer (per-type FL defaults), selects it, and honours max:4", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY);
+    for (let i = 0; i < 3; i++) a.actionWidget(id, "addLayer");
+    expect(layersOf(s)).toHaveLength(4);
+    expect(layersOf(s).every((l) => l["type"] === "CB" && l["baseFL"] === 25 && l["topFL"] === 155)).toBe(true);
+    a.actionWidget(id, "addLayer"); // past max:4 → no-op
+    expect(layersOf(s)).toHaveLength(4);
+  });
+
+  it("removeLayer keeps at least min:1", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY);
+    a.actionWidget(id, "removeLayer:0"); // only layer → floored at min:1
+    expect(layersOf(s)).toHaveLength(1);
+    a.actionWidget(id, "addLayer");
+    expect(layersOf(s)).toHaveLength(2);
+    a.actionWidget(id, "removeLayer:1");
+    expect(layersOf(s)).toHaveLength(1);
+  });
+
+  it("a list-scoped FL edit clamps to 5-FL steps and keeps base ≤ top", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY);
+    a.dragGauge(id, "layers.0.topFL", 73); // → 75 (5-FL step)
+    expect(layersOf(s)[0]!["topFL"]).toBe(75);
+    a.dragGauge(id, "layers.0.baseFL", 120); // base can't pass the top → clamps to 75
+    expect(layersOf(s)[0]!["baseFL"]).toBe(75);
+  });
+
+  it("changing a layer's type resets its amount via optionsBy (CB → cloud amounts)", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY);
+    expect(layersOf(s)[0]!["amount"]).toBe("OCNL"); // a CB amount
+    a.editWidget(id, "SC", "layers.0.type");
+    expect(layersOf(s)[0]!["type"]).toBe("SC");
+    expect(layersOf(s)[0]!["amount"]).toBe("FEW"); // OCNL invalid for non-CB → first cloud amount
+  });
+
+  it("re-sorts the stack highest-on-top on (re)selection, frozen during a drag", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY);
+    a.actionWidget(id, "addLayer"); // 2 CB layers, both 25/155
+    a.dragGauge(id, "layers.0.topFL", 50); // a drag does NOT re-sort…
+    a.dragGauge(id, "layers.1.topFL", 100);
+    expect(layersOf(s).map((l) => l["topFL"])).toEqual([50, 100]); // …stored order unchanged
+    s.select(id); // (re)selection re-sorts highest-on-top
+    expect(layersOf(s).map((l) => l["topFL"])).toEqual([100, 50]);
+  });
+
+  it("the rest cartouche stacks one line per layer (qty type top/base)", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY);
+    a.actionWidget(id, "addLayer"); // 2 layers
+    s.select(null); // deselect → the canvas cartouche renders (panel no longer replaces it)
+    const box = (a.overlays.get("text-boxes")?.features ?? []).find((f) => f.properties?.["featureId"] === id);
+    expect(box).toBeDefined();
+    const text = String(box!.properties!["text"] ?? "");
+    expect(text.split("\n").filter((l) => l.includes("CB")).length).toBe(2); // one CB line per layer
+  });
+
+  it("a SINGLE layer's rest cartouche uses the NORMAL centered column (amount / type / top / base), not the compact stacked line", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY); // ONE layer by default (CB / OCNL)
+    s.select(null); // deselect → the canvas cartouche renders
+    const box = (a.overlays.get("text-boxes")?.features ?? []).find((f) => f.properties?.["featureId"] === id);
+    expect(box).toBeDefined();
+    const lines = String(box!.properties!["text"] ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+    expect(lines).toHaveLength(4); // a column, not one packed line
+    expect(lines[0]).toBe("OCNL"); // amount on its own line
+    expect(lines[1]).toBe("CB"); // type on its own line
+    expect(lines[2]).toMatch(/^(FL\d{3}|XXX)$/); // top
+    expect(lines[3]).toMatch(/^(FL\d{3}|XXX)$/); // base
+    expect(lines.some((l) => /OCNL.*CB/.test(l))).toBe(false); // NOT the compact "OCNL CB …/…" line
+  });
+
+  it("the FL gauge is a side satellite scoped to the active layer (not inline in the stack body)", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY);
+    // The panel body carries the pickers but NO gauge — it moved out to keep the card narrow.
+    expect(collectGauges(a.widget(id)!)).toHaveLength(0);
+    // …it lives in a side satellite `#gauge`, list-scoped to the active (top) layer.
+    const sat = a.widget(`${id}#gauge`);
+    expect(sat).toBeDefined();
+    const gauge = collectGauges(sat!)[0]!;
+    expect(gauge.cursors?.map((c) => c.name)).toEqual(["layers.0.baseFL", "layers.0.topFL"]);
+    // …and pushed clear of the (wider) stack panel — further out than a plain call-out gauge (−1.0).
+    const ox = (sat!.origin as { x: number }).x;
+    expect(ox).toBeLessThan(-1);
+  });
+
+  it("selecting another layer re-binds the satellite gauge to it", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY);
+    a.actionWidget(id, "addLayer"); // 2 layers
+    a.actionWidget(id, "selectLayer:0");
+    expect(collectGauges(a.widget(`${id}#gauge`)!)[0]!.cursors?.map((c) => c.name)).toEqual(["layers.0.baseFL", "layers.0.topFL"]);
+    a.actionWidget(id, "selectLayer:1");
+    expect(collectGauges(a.widget(`${id}#gauge`)!)[0]!.cursors?.map((c) => c.name)).toEqual(["layers.1.baseFL", "layers.1.topFL"]);
+  });
+
+  it("the folded layer preview shows the FL only (no amount/type) to keep the card narrow", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY);
+    a.actionWidget(id, "addLayer"); // ≥2 layers ⇒ a folded preview exists
+    const preview = String(getStack(a, id).items.find((it) => !it.active)!.preview);
+    expect(preview).not.toMatch(/CB|OCNL/);             // no amount/type…
+    expect(preview).toMatch(/^FL(\d{3}|XXX)\/(\d{3}|XXX)$/); // …`FL` once, then base/top (seed → FL025/XXX)
+  });
+
+  it("EUROC restricts cloud amounts to BKN/OVC and caps the stack at max:3", async () => {
+    const a = new MockAdapter();
+    const profile = (await import("../src/profiles/temsi-euroc.json")).default as unknown as SigwxProfile;
+    const s = new SigwxDraw({ adapter: a, profile });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY);
+    a.actionWidget(id, "addLayer"); // → 2 layers ⇒ the stack appears (single layer renders bare)
+    expect(getStack(a, id).max).toBe(3);
+    a.editWidget(id, "SC", "layers.0.type"); // a non-CB layer
+    const amount = collectPickers(a.widget(id)!).find((p) => p.name === "layers.0.amount")!;
+    expect(amount.options?.map((o) => o.value)).toEqual(["BKN", "OVC"]);
+    expect(layersOf(s)[0]!["amount"]).toBe("BKN"); // OCNL reset to the first valid amount
   });
 });

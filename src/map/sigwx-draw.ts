@@ -55,6 +55,7 @@ import {
 import type {
   CbCoverage,
   CbStyle,
+  EnumField,
   FieldSchema,
   FlMode,
   IcingStyle,
@@ -438,21 +439,39 @@ export class SigwxDraw {
             const v = Math.max(min, Math.min(max, Math.round(Number(e.value) / 5) * 5));
             this.updateListItem(fid, lf.key, idx, { [fieldKey]: v });
           } else if (fld?.type === "fl") {
-            // The break-point FL gauge: chart clamp + keep top ≥ FL ≥ base.
+            // The break-point / layer FL gauge: chart clamp, then keep the item's FLs ordered.
+            // A jet break point has a CORE `fl` flanked by `base`/`top` extents; a cloud layer has
+            // just a `baseFL`/`topFL` pair (no core). Detect the role by name and pair against the
+            // sibling FL (the core when present, else the opposite bound).
             const { lo, hi } = this.flGaugeRange(f.properties.phenomenon, fieldKey);
             let v = Math.max(lo, Math.min(hi, Math.round(Number(e.value) / 5) * 5));
-            const flCore = typeof item["fl"] === "number" ? (item["fl"] as number) : 300;
-            if (fieldKey === "fl") {
-              if (typeof item["base"] === "number") v = Math.max(item["base"] as number, v);
-              if (typeof item["top"] === "number") v = Math.min(item["top"] as number, v);
-            } else if (fieldKey === "top") {
-              v = Math.max(flCore, v);
-            } else if (fieldKey === "base") {
-              v = Math.min(flCore, v);
+            const coreV = typeof item["fl"] === "number" ? (item["fl"] as number) : undefined;
+            const baseSib = typeof item["base"] === "number" ? (item["base"] as number) : typeof item["baseFL"] === "number" ? (item["baseFL"] as number) : undefined;
+            const topSib = typeof item["top"] === "number" ? (item["top"] as number) : typeof item["topFL"] === "number" ? (item["topFL"] as number) : undefined;
+            const isCore = fieldKey === "fl";
+            if (isCore) {
+              if (baseSib !== undefined) v = Math.max(baseSib, v);
+              if (topSib !== undefined) v = Math.min(topSib, v);
+            } else if (/top/i.test(fieldKey)) {
+              const floor = coreV ?? baseSib; // top stays above the core (jet) / the base (layer)
+              if (floor !== undefined) v = Math.max(floor, v);
+            } else if (/base/i.test(fieldKey)) {
+              const ceil = coreV ?? topSib; // base stays below the core (jet) / the top (layer)
+              if (ceil !== undefined) v = Math.min(ceil, v);
             }
             this.updateListItem(fid, lf.key, idx, { [fieldKey]: v });
           } else {
             this.updateListItem(fid, lf.key, idx, { [fieldKey]: e.value });
+            // Item-scoped conditional-options dependents (`optionsBy`): a list field whose option
+            // SET depends on `fieldKey` (a cloud layer's `amount` by its `type`) — reset if invalid.
+            for (const s of lf.itemSchema) {
+              if (s.type === "enum" && s.optionsBy?.field === fieldKey) {
+                const opts = s.optionsBy.map[String(e.value)] ?? s.optionsBy.map["*"] ?? s.options;
+                if (!opts.some((o) => o.value === item[s.key])) {
+                  this.updateListItem(fid, lf.key, idx, { [s.key]: opts[0]?.value ?? "" });
+                }
+              }
+            }
           }
           return;
         }
@@ -498,13 +517,21 @@ export class SigwxDraw {
         const fid = widgetFeatureId(e.id);
         const f = this.doc.get(fid);
         if (e.event === "draw-more" && f) {
-          this.draw(f.properties.phenomenon);
-          this.appendTo = fid; // set AFTER draw() — it resets stale state via cancelDrawing
+          this.drawMore(fid);
         } else if (e.event === "erase" && f) {
           // ERASER: rub over the area — it gnaws LIVE (a hole inside, a reshaped border on
           // a bite, a split on a cut-through). Escape exits.
           this.erasing = { featureId: fid, r: this.brushRadiusPx(fid), lastPx: null };
           this.adapter.setCursor("crosshair");
+        } else if (e.event === "addLayer" && f) {
+          // Layer STACK (the TEMSI cloud-layer area): the adapter's `+` adds a layer.
+          this.addLayerTo(fid);
+        } else if (e.event.startsWith("selectLayer:") && f) {
+          const i = Number(e.event.slice("selectLayer:".length));
+          if (Number.isFinite(i)) this.selectSubItem(i);
+        } else if (e.event.startsWith("removeLayer:") && f) {
+          const i = Number(e.event.slice("removeLayer:".length));
+          if (Number.isFinite(i)) this.removeLayerFrom(fid, i);
         }
       });
       if (opts.toolbar) this.buildToolbar(opts.toolbar === true ? {} : opts.toolbar);
@@ -690,8 +717,17 @@ export class SigwxDraw {
     this.selectedAreas = []; // whole-feature selection; an AREA click then narrows it
     // Gauge reference: captured ONCE at selection so the card pinning is drag-stable.
     const f = this.selectedId ? this.doc.get(this.selectedId) : undefined;
+    const def = f ? this.registry.get(f.properties.phenomenon) : undefined;
+    // A layer-stack area keeps its list altitude-sorted; re-sort once at selection (the order is
+    // then frozen during a layer's FL drag — it only re-sorts on add/remove/select-layer).
+    if (this.selectedId && def?.repeat) this.resortLayers(this.selectedId);
     const m = f?.properties.metadata;
-    if (m && typeof m["fl"] === "number") this.flRef = m["fl"] as number;
+    // A stack area pins its FL gauge to the ACTIVE (top, index 0) layer; a simple area to its own FL.
+    if (def?.repeat && m) {
+      const lf = listFieldOf(def);
+      const layer = lf ? (m[lf.key] as Metadata[] | undefined)?.[0] : undefined;
+      this.flRef = layer ? this.layerFlRef(layer) : null;
+    } else if (m && typeof m["fl"] === "number") this.flRef = m["fl"] as number;
     else if (m && typeof m["topFL"] === "number" && typeof m["baseFL"] === "number") this.flRef = ((m["topFL"] as number) + (m["baseFL"] as number)) / 2;
     else this.flRef = null;
     this.syncDblClickZoom();
@@ -705,16 +741,29 @@ export class SigwxDraw {
     this.adapter.setDoubleClickZoom(this.mode !== "drawing" && this.selectedId == null);
   }
 
-  /** Select a sub-element (list item index, e.g. a jet break point), or clear it. */
+  /** The FL a card pins to for one list item: a jet break point's `fl`, or a cloud layer's
+   *  mid-extent (`topFL`/`baseFL`). Null when the item carries no flight level. */
+  private layerFlRef(item: Metadata): number | null {
+    if (typeof item["fl"] === "number") return item["fl"] as number;
+    if (typeof item["topFL"] === "number" && typeof item["baseFL"] === "number") return ((item["topFL"] as number) + (item["baseFL"] as number)) / 2;
+    if (typeof item["topFL"] === "number") return item["topFL"] as number;
+    if (typeof item["baseFL"] === "number") return item["baseFL"] as number;
+    return null;
+  }
+
+  /** Select a sub-element (list item index, e.g. a jet break point or a cloud layer), or clear it. */
   selectSubItem(index: number | null): void {
     this.selectedSub = index;
-    // Centre the break-point gauge on the point's CURRENT FL (drag-stable reference).
+    // Re-pin the gauge on the newly active item's CURRENT FL (drag-stable reference).
     if (index != null && this.selectedId) {
       const f = this.doc.get(this.selectedId);
       const def = f ? this.registry.get(f.properties.phenomenon) : undefined;
       const lf = def ? listFieldOf(def) : undefined;
       const item = lf && f ? (f.properties.metadata[lf.key] as Metadata[] | undefined)?.[index] : undefined;
-      if (item && typeof item["fl"] === "number") this.flRef = item["fl"] as number;
+      if (item) {
+        const r = this.layerFlRef(item);
+        if (r != null) this.flRef = r;
+      }
     }
     this.renderAll();
     this.emitSelect();
@@ -910,6 +959,92 @@ export class SigwxDraw {
       this.selectedSub = this.selectedSub === index ? null : this.selectedSub - 1;
     }
     this.afterEdit(id);
+  }
+
+  // ── layer stack (the TEMSI cloud-layer significant-weather area) ─────────────
+  // A `repeat` descriptor stacks a LIST field as layer cards kept altitude-sorted
+  // (highest on top). The order is recomputed only on discrete actions (select /
+  // add / remove) — NOT during a single layer's FL drag (the pinned editor would
+  // otherwise jump under the cursor), hence resortLayers() is called from select()
+  // and the add/remove helpers, never from updateListItem().
+
+  /** A layer's sort key: its top FL, else its base FL, else 0 (un-set layers sink). */
+  private layerAltitude(item: Metadata): number {
+    const top = typeof item["topFL"] === "number" ? (item["topFL"] as number) : undefined;
+    const base = typeof item["baseFL"] === "number" ? (item["baseFL"] as number) : undefined;
+    return top ?? base ?? 0;
+  }
+
+  /** Re-sort a layer-stack feature's list highest-on-top, keeping the selected layer selected. */
+  private resortLayers(id: string): void {
+    const f = this.doc.get(id);
+    if (!f) return;
+    const rep = this.registry.get(f.properties.phenomenon).repeat;
+    if (!rep) return;
+    const list = (f.properties.metadata[rep.listField] as Metadata[] | undefined) ?? [];
+    if (list.length < 2) return;
+    const selected = this.selectedSub != null ? list[this.selectedSub] : undefined;
+    const sorted = [...list].sort((a, b) => this.layerAltitude(b) - this.layerAltitude(a));
+    if (sorted.every((it, i) => it === list[i])) return; // already ordered — no churn
+    f.properties.metadata = { ...f.properties.metadata, [rep.listField]: sorted };
+    if (selected) {
+      const ni = sorted.indexOf(selected);
+      if (ni >= 0) this.selectedSub = ni;
+    }
+  }
+
+  /** Seed a new layer's FL bounds from the cloud TYPE's per-type defaults (carried as the
+   *  driver enum option's `meta:{baseFL,topFL}` — JSON-declared, surfaced through EnumOption),
+   *  each coerced into the profile's FL range (`flGaugeRange`, one XXX notch past a bound). */
+  private applyLayerTypeDefaults(type: string, lf: ListField, item: Metadata): void {
+    const amount = lf.itemSchema.find((s): s is EnumField => s.type === "enum" && !!s.optionsBy);
+    const driverKey = amount?.optionsBy?.field ?? "type";
+    const driver = lf.itemSchema.find((s): s is EnumField => s.type === "enum" && s.key === driverKey);
+    const opt = driver?.options.find((o) => o.value === item[driverKey]);
+    const meta = opt?.meta;
+    if (!meta) return;
+    for (const s of lf.itemSchema) {
+      if (s.type === "fl" && typeof meta[s.key] === "number") {
+        const { lo, hi } = this.flGaugeRange(type, s.key);
+        item[s.key] = Math.max(lo, Math.min(hi, meta[s.key] as number));
+      }
+    }
+  }
+
+  /** Add a layer to a stack feature (seeded from item-schema defaults + per-type FL defaults),
+   *  re-sorted highest-on-top and selected. No-op past `repeat.max`. Returns its new index. */
+  addLayerTo(id: string): number {
+    const f = this.doc.get(id);
+    if (!f) return -1;
+    const def = this.registry.get(f.properties.phenomenon);
+    const rep = def.repeat;
+    if (!rep) return -1;
+    const lf = def.schema.find((s): s is ListField => s.type === "list" && s.key === rep.listField);
+    if (!lf) return -1;
+    const list = (f.properties.metadata[lf.key] as Metadata[] | undefined) ?? [];
+    if (list.length >= rep.max) return -1;
+    const item: Metadata = {};
+    for (const s of lf.itemSchema) {
+      if (s.type !== "list" && "default" in s && s.default !== undefined) item[s.key] = s.default;
+      else if (s.type === "bool") item[s.key] = false;
+    }
+    this.applyLayerTypeDefaults(def.type, lf, item);
+    const next = [...list, item].sort((a, b) => this.layerAltitude(b) - this.layerAltitude(a));
+    f.properties.metadata = { ...f.properties.metadata, [lf.key]: next };
+    this.selectedSub = next.indexOf(item);
+    this.afterEdit(id);
+    return this.selectedSub;
+  }
+
+  /** Remove a layer from a stack feature, keeping ≥ `repeat.min`. */
+  removeLayerFrom(id: string, index: number): void {
+    const f = this.doc.get(id);
+    if (!f) return;
+    const rep = this.registry.get(f.properties.phenomenon).repeat;
+    if (!rep) return;
+    const list = (f.properties.metadata[rep.listField] as Metadata[] | undefined) ?? [];
+    if (list.length <= rep.min) return;
+    this.removeListItem(id, rep.listField, index);
   }
 
   delete(id: string): void {
@@ -1118,6 +1253,15 @@ export class SigwxDraw {
     this.select(id);
     this.emitChange();
     return id;
+  }
+
+  /** "draw-more": draw an EXTRA AREA appended to feature `fid` (one phenomenon, several zones,
+   *  one box, one arrow per zone). Fired by the arrow-tip badge tap (and the test harness). */
+  private drawMore(fid: string): void {
+    const f = this.doc.get(fid);
+    if (!f) return;
+    this.draw(f.properties.phenomenon);
+    this.appendTo = fid; // set AFTER draw() — it resets stale state via cancelDrawing
   }
 
   /** Commit a drawn geometry as a new feature, select it, leave drawing mode. */
@@ -1379,7 +1523,8 @@ export class SigwxDraw {
     // lives in its card (the severity carousel), not on the canvas.
     // Arrow-tip handle — only while its leader is VISIBLE, so it vanishes WITH the arrow
     // when the call-out sits over the tip (no lone handle without an arrow).
-    if (selAnchors.length && placed.leaders.some((l) => l.properties["featureId"] === this.selectedId)) {
+    const leaderVisible = selAnchors.length > 0 && placed.leaders.some((l) => l.properties["featureId"] === this.selectedId);
+    if (leaderVisible) {
       // One arrow-tip handle PER AREA (`area` index) — each drags its own tip. (The old
       // scallop-flip tap is gone: bump direction is a geometric fact now — holes invert.)
       selAnchors.forEach((a, k) => {
@@ -1398,6 +1543,31 @@ export class SigwxDraw {
     // such a widget REPLACES that call-out box (selected CB → the DOM card carries the same
     // content + the `+` edge buttons; the leader still points at the card).
     const widgets = this.collectWidgets();
+    // The "draw-more" button used to straddle the card edge; it now rides the SELECTED area's
+    // arrow tip (where the old scallop-flip tap was), CENTERED on the tip. It is NOT a widget
+    // button — those swallow the pointer and would block the tip's re-aim drag they sit on.
+    // It's a sizable GLYPH badge that the controller treats as the anchor control itself:
+    // a DRAG re-aims the tip (onDown → kind "anchor", area 0) and a plain TAP enters
+    // append-draw (onUp). One badge per feature, same visibility gate as the handle.
+    if (leaderVisible && this.selectedId) {
+      const selDef = this.registry.get(this.doc.get(this.selectedId)!.properties.phenomenon);
+      if (selDef.anchorButton) {
+        const tip = selAnchors[0]!;
+        widgets.push({
+          id: `${this.selectedId}#draw`,
+          anchor: { lon: tip[0], lat: tip[1] },
+          origin: "center",
+          // Framed like the card's own edge buttons (white disc, hairline ink border, black
+          // glyph) so it reads clearly on any map — orange was invisible. It is still a glyph
+          // (not a widget button): the controller drives the drag (re-aim) + tap (draw-more).
+          bg: "#ffffff",
+          border: "#1f2328",
+          radius: "round",
+          padding: "small",
+          child: { dir: "v", items: [{ kind: "glyph", svg: selDef.anchorButton.svg, size: 16, color: "#1f2328" }] },
+        });
+      }
+    }
     const replaced = new Set(widgets.map((w) => w.id));
     buckets["symbols"]!.push(...placed.symbols.filter((s) => !replaced.has(String(s.properties.featureId ?? ""))));
     for (const box of placed.boxes) {
@@ -1537,9 +1707,12 @@ export class SigwxDraw {
     // no on-map ✕ control, by design.
     // Point markers are edited via their DOM card, which sits over the point — no vertex handle.
     // (CB has a widget too, but it's an area control — its polygon still needs its handles.)
+    // A lone-POINT spot (a tropopause spot) has no editable shape: its one "vertex" handle only
+    // moved it AND sat ON the FL box, hiding the value during a gauge drag. Drop it — the box IS
+    // the spot now: drag the box to move the point (see onDown).
     // Area-narrowed selection ⇒ handles for THOSE rings only, roles kept in FLAT indexing
     // (`v${flatStart+i}`) so setVertex/removeVertex address the right vertex.
-    if (!isPointMarker(def)) {
+    if (!isPointMarker(def) && f.geometry.type !== "Point") {
       const groups = selRings
         ? selRings.map((fr) => ({ off: fr.off, verts: openRing(fr.ring) }))
         : [{ off: 0, verts: vertices(f.geometry) }];
@@ -1777,7 +1950,15 @@ export class SigwxDraw {
       // (onClick). Editing the enum (coverage / severity) happens on the SELECTED card's
       // carousel — the old unselected tap-to-cycle was removed (selection-first editing,
       // consistent across engines and phenomena, and animated).
-      this.dragTarget = { kind: "callout", featureId, labelId: String(hit.props["labelId"] ?? "l"), grab: this.calloutGrab(featureId, ev.lngLat) };
+      const cf = this.doc.get(featureId);
+      if (cf?.geometry.type === "Point") {
+        // A SPOT's box IS the spot (it sits centered on the point; the vertex handle is gone):
+        // dragging the box MOVES the point itself. A plain tap still just selects (onClick).
+        if (featureId !== this.selectedId) this.select(featureId);
+        this.dragTarget = { kind: "translate", featureId, lastPx: this.adapter.project(ev.lngLat) ?? [0, 0] };
+      } else {
+        this.dragTarget = { kind: "callout", featureId, labelId: String(hit.props["labelId"] ?? "l"), grab: this.calloutGrab(featureId, ev.lngLat) };
+      }
       this.didDrag = false;
       this.adapter.setPanEnabled(false);
     } else if ((hit.overlay === "edge" || hit.overlay === "decoration" || hit.overlay === "area-fill") && typeof featureId === "string") {
@@ -1817,8 +1998,18 @@ export class SigwxDraw {
       // (the input captures its own clicks/keys for editing, so this fires only off the body).
       // An area's control card (selected CB — it replaces the call-out) reuses the CALL-OUT
       // gestures: drag repositions the box, a tap cycles the carousel enum (coverage).
-      const fid = widgetFeatureId(hit.props["id"] as string);
+      const wid = hit.props["id"] as string;
+      const fid = widgetFeatureId(wid);
       if (fid !== this.selectedId) this.select(fid);
+      // The arrow-tip "draw" badge IS the anchor control: a DRAG re-aims the tip (area 0,
+      // same as grabbing the orange handle it covers), a plain TAP (onUp) enters append-draw.
+      // So the centered badge never blocks the very re-aim it sits on.
+      if (wid.endsWith("#draw")) {
+        this.dragTarget = { kind: "anchor", featureId: fid, area: 0 };
+        this.didDrag = false;
+        this.adapter.setPanEnabled(false);
+        return;
+      }
       const f = this.doc.get(fid);
       if (f) {
         const def = this.registry.get(f.properties.phenomenon);
@@ -2134,6 +2325,12 @@ export class SigwxDraw {
       this.didDrag = false;
       return;
     }
+    // A plain TAP on the arrow-tip "draw" badge → enter append-draw (a DRAG re-aimed the tip
+    // instead, and already returned at the didDrag guard above).
+    if (ev.hit?.overlay === "widget" && String(ev.hit.props["id"] ?? "").endsWith("#draw")) {
+      this.drawMore(widgetFeatureId(String(ev.hit.props["id"])));
+      return;
+    }
     // A widget card hit carries its feature id as `id`; every other overlay uses `featureId`.
     const fid = ev.hit?.overlay === "widget" ? widgetFeatureId(String(ev.hit.props["id"] ?? "")) : ev.hit?.props["featureId"];
     if (ev.hit && typeof fid === "string" && ev.hit.overlay !== "handles") {
@@ -2211,20 +2408,24 @@ export class SigwxDraw {
 
   /** Apply `flightLevel.default` to a freshly-built metadata: by order onto the top-level FL
    *  fields (`[base, top]`), or onto every break point's core FL for a list-based jet. */
-  /** Pull every FL default into the profile's `vertical` range so a placement never starts
-   *  off-chart ("XXX"). A stock descriptor carries WAFS-scale defaults (base 250 / top 400);
-   *  a low-level profile (TEMSI France, ceiling FL150) needs them clamped into [min, max].
-   *  No-op when no `vertical` is set, or when the descriptor defaults already fit (the JSON
-   *  is the source — coherent per-profile defaults bypass this entirely). */
+  /** Pull every FL default into the profile's FL range so a placement never starts BEYOND the
+   *  chart (one XXX notch past a bound is allowed — it IS the on-chart way to mark "off the top",
+   *  e.g. a CB whose default top is XXX). A stock descriptor carries WAFS-scale defaults (base
+   *  250 / top 400); a low-level profile (TEMSI France, ceiling FL150) needs them clamped via
+   *  `flGaugeRange` (per-field, XXX-notch-aware). No-op when no `vertical` is set, or when the
+   *  descriptor defaults already fit (the JSON is the source — coherent defaults bypass this). */
   private clampFlDefaults(type: string, metadata: Metadata): void {
-    const v = this.vertical;
-    if (!v) return;
-    const cl = (x: unknown): unknown => (typeof x === "number" ? Math.min(v.max, Math.max(v.min, x)) : x);
+    if (!this.vertical) return;
+    const cl = (key: string, x: unknown): unknown => {
+      if (typeof x !== "number") return x;
+      const { lo, hi } = this.flGaugeRange(type, key);
+      return Math.max(lo, Math.min(hi, x));
+    };
     for (const s of this.registry.get(type).schema) {
-      if (s.type === "fl") metadata[s.key] = cl(metadata[s.key]);
+      if (s.type === "fl") metadata[s.key] = cl(s.key, metadata[s.key]);
       else if (s.type === "list" && Array.isArray(metadata[s.key])) {
         for (const it of metadata[s.key] as Metadata[])
-          for (const x of s.itemSchema) if (x.type === "fl") it[x.key] = cl(it[x.key]);
+          for (const x of s.itemSchema) if (x.type === "fl") it[x.key] = cl(x.key, it[x.key]);
       }
     }
   }
