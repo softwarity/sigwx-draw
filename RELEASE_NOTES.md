@@ -2,7 +2,7 @@
 
 ## NEXT RELEASE
 
-- **Non-convective cloud → composite ICING (first cut)**: clicking the icing button on a
+- **Non-convective cloud → composite ICING + TURBULENCE**: clicking the icing button on a
   `cloudNonConvective` card creates a ZONE-LEVEL icing sub-object (`metadata.icing =
   { symbol, baseFL, topFL }`, moderate by default) and shows its OWN card glued above the zone card,
   edited like the stock icing (MOD/SEV picker + its own FL gauge). One icing + one turb per zone
@@ -19,6 +19,8 @@
     duplication. Controller mechanics: `composite:<key>` / `removeComposite:<key>` card actions,
     `focusedComposite` state with `focusComposite`/`focusZone`, the glued card rendered via the ref's
     own widget builder, and `#<key>`-suffixed edits routed into `metadata[key]` (FL-clamped, base ≤ top).
+    The composite card always renders as a framed **sidecar** (bg / border / `small` radius / `large`
+    padding) matching the other cards — even turbulence, whose standalone call-out is `framed:false`.
   - **Turbulence too** (the bottom button, `ref: "turbulence"`, `place: "bottom"`): same generic
     mechanism — clicking it creates `metadata.turb` (MOD default) glued BELOW the zone (`anchorTo`
     `side:"bottom"`), with its own severity picker + FL gauge and a ✕ on its top (frontier) edge. Both
@@ -37,16 +39,11 @@
   - **`cloudConvective`** — Cumulus / Cumulonimbus (CB keeps ISOL/OCNL/FRQ/EMBD, CU the octa amounts);
     toolbar icon `cb`.
   - **`cloudNonConvective`** — CI/CC/CS/AC/AS/NS/SC/ST, octa amounts; toolbar icon `sigwxArea` (the
-    generic scallop). This is the area that will host the composite icing/turbulence.
+    generic scallop). Hosts the icing/turbulence composites. The add buttons use new moderate-severity
+    *pure* glyphs `icingMod` (fork) / `turbulenceMod` (peak) — `svgs/buttons/*.svg`.
   Both stay scalloped multi-layer areas; everything else (gauge band, multi-layer stack, summary) is
   unchanged. ⚠️ the old `sigwxArea` type id is gone — its tests now target `cloudConvective`.
-- **The non-convective cloud card shows two placeholder buttons** — **icing (top)** / **turbulence
-  (bottom)**, drawn with the moderate-severity *pure* symbols (`icingMod` = fork, `turbulenceMod` =
-  single peak; new `svgs/buttons/*.svg`). They are **inert for now** (`noop`); composing the real
-  icing/turb sub-blocks (severity + own FL band in the call-out) is the next step.
-- **Mechanics (lib-only, no adapter change)**: `CardButtonSpec.place` now accepts `"top"`/`"bottom"`
-  (the adapter already supports them; the interpreter was bridling them); a new `noop` engine action
-  (a card button whose event the controller ignores — "show the button, wire it later"); the
+- **Supporting mechanics (lib-only)**: `CardButtonSpec.place` now accepts `"top"`/`"bottom"`; the
   multi-layer panel builder (`compileLayerPanel`) now emits card-edge buttons (it silently dropped
   them before, so a `repeat` area could never carry a top/bottom button).
 - **The multi-layer cloud-area (`sigwxArea`) editing box & gauge spacing match the other cards now**:

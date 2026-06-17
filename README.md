@@ -24,10 +24,12 @@ edge and an `ISOL/OCNL/FRQ` label; turbulence gets a dashed outline and a MOD/SE
 glyph. Each phenomenon is a self-contained, data-driven `PhenomenonDef` in a
 registry, so adding one never touches the controller.
 
-> Status: **v1 demonstrator** — `jetStream`, `cb`, `turbulence`. The architecture
-> (registry + decoration pipeline + layer manifest + schema-driven form) is built
-> so the remaining phenomena (icing, fronts, tropopause, tropical cyclone,
-> volcanic ash, …) plug in as new `PhenomenonDef`s.
+> Status: phenomena are pure-JSON **descriptors** compiled into a registry and bundled into
+> self-contained **profiles** — **WAFS SWH** (the inline default) and **TEMSI** (`temsi-france`
+> ground→FL150, `temsi-euroc` ground→FL450). Shipped phenomena: jet stream, CB, turbulence (CAT),
+> icing, tropopause, zero-isotherm, fronts, WMO point symbols, point markers (volcano / TC /
+> radioactive), and convective / non-convective cloud areas (the latter with zone-level
+> icing + turbulence composites). All metadata editing is **inline on the map** — there is no form.
 
 ## Install
 
@@ -40,22 +42,19 @@ npm i maplibre-gl   # and/or  ol   and/or  leaflet
 ## Quick start (MapLibre)
 
 ```ts
-import { SigwxDraw } from "@softwarity/sigwx-draw";
+import { SigwxDraw, type SigwxProfile } from "@softwarity/sigwx-draw";
 import { MapLibreAdapter, createMapLibreMap } from "@softwarity/sigwx-draw/maplibre";
-import { registerSigwxMetadataForm } from "@softwarity/sigwx-draw/form";
+import temsiEuroc from "@softwarity/sigwx-draw/profiles/temsi-euroc.json";
 
-const map = createMapLibreMap({ container: "map", center: [2.3, 46.6], zoom: 5 });
-const sigwx = new SigwxDraw({ adapter: new MapLibreAdapter({ map }), toolbar: true });
+const map = createMapLibreMap({ container: "map", center: [10, 48], zoom: 4 });
+const sigwx = new SigwxDraw({
+  adapter: new MapLibreAdapter({ map }),
+  toolbar: true,
+  profile: temsiEuroc as unknown as SigwxProfile, // omit ⇒ WAFS SWH (the inline default)
+});
+await sigwx.ready();
 
-// Drive the metadata form (optional convenience web component):
-registerSigwxMetadataForm();
-const form = document.querySelector("sigwx-metadata-form");
-sigwx.on("select",   (spec) => (form.spec = spec));   // selection changed
-sigwx.on("metadata", (spec) => (form.spec = spec));   // values/visibility/errors
-form.addEventListener("change", (e) =>
-  sigwx.updateMetadata(e.detail.featureId, { [e.detail.key]: e.detail.value }),
-);
-
+// All metadata editing is INLINE on the map (cards / pickers / FL gauges) — there is no form.
 sigwx.on("change", (geojson) => console.log(geojson)); // FeatureCollection output
 ```
 
@@ -69,14 +68,33 @@ projection is MapLibre-only (OpenLayers & Leaflet are 2D).
 
 ## API
 
-- `new SigwxDraw({ adapter, registry?, style?, toolbar?, symbolSprite?, phenomena?, turbulenceTypes? })`
+- `new SigwxDraw({ adapter, profile?, registry?, style?, toolbar?, symbolSprite?, phenomena?, turbulenceTypes? })`
+  — `profile` defaults to WAFS SWH (inline); pass a `SigwxProfile` (e.g. a TEMSI JSON) to swap the set.
 - `draw(type) → id` (enter draw mode), `select(id|null)`, `updateMetadata(id, patch)`,
   `updateListItem(id, list, i, patch)`, `removeListItem(id, list, i)`,
   `delete(id)`, `clear()`, `bringToFront(id)`, `sendToBack(id)`
 - `save(): FeatureCollection`, `load(fc)` — metadata lives in feature `properties`
 - `on("change" | "select" | "metadata", cb)`, `off(...)`, `ready()`, `destroy()`
-- `setStyle(partial)`, `setPhenomenonStyle(type, style)`,
+- `setProfile(profile)` (live re-ingest, document preserved), `setArea(id|null)` (frame a chart area),
+  `setStyle(partial)`, `setPhenomenonStyle(type, style)`,
   `setPhenomenonFlightLevel(type, { min, max })`, `addTurbulenceTypes(types)`
+
+## Profiles & phenomena
+
+Phenomena are pure-JSON **descriptors** bundled into self-contained **profiles** (descriptors + glyph
+atlas + grouped toolbar), each npm/CDN-servable on its own and loaded via `new SigwxDraw({ profile })`
+or live `setProfile()`. Bundled under the `./profiles` entry point:
+
+- **`wafs`** — WAFS SWH, the **inline default**: jet stream, CB, turbulence (CAT), icing, …
+- **`temsi-france`** (ground→FL150) and **`temsi-euroc`** (ground→FL450): cloud areas, fronts,
+  tropopause, zero-isotherm, WMO point-symbol pickers, point markers, …
+
+**Cloud areas** follow ICAO/WAFC doctrine and split in two: **`cloudConvective`** (CU / CB — a CB
+already *implies* turbulence + icing via the chart legend) and **`cloudNonConvective`** (CI / CC / CS /
+AC / AS / NS / SC / ST). A non-convective cloud zone can carry **zone-level icing and turbulence
+composites** — each one its own card glued above / below the zone (severity picker + its own FL gauge,
+delete ✕), declared with a `composites: [{ key, ref, place }]` token that reuses the stock
+`icing` / `turbulence` descriptors (no data duplication). Editing is fully inline.
 
 ## Headless core (no map)
 
