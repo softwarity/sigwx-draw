@@ -1,5 +1,5 @@
 /**
- * `front-symbols` — the named decorator for TEMSI fronts (OBJECTS-ROADMAP.md family B):
+ * `front-symbols` — the named decorator for TEMSI fronts (TEMSI family B):
  * a smooth line with the WMO front pips placed at a constant SCREEN interval along it,
  * on the warm side. Classic surface fronts:
  *   • `cold`       — filled triangles (blue), pointing to the warm side;

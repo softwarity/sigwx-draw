@@ -288,11 +288,11 @@ export interface PhenomenonDef {
   /** LINE phenomena: the placed label can be slid ALONG the line (a drag handle shows while
    *  selected). Position rides `metadata.labelT` (fraction 0–1). Set from `render.line.label.movable`. */
   movableLabel?: boolean;
-  /** Multi-layer STACK editor (the TEMSI cloud-layer area): the named LIST field is edited as
-   *  an adapter `stack` control (one active layer, the rest collapsed). The controller reads
-   *  `listField`/`min`/`max` to route add/remove/select and keep the list altitude-sorted.
+  /** Multi-layer cloud-area editor (the TEMSI cloud-layer area): the named LIST field is edited as
+   *  the active layer's flat card + a side multi-range FL gauge (one band per layer). The controller
+   *  reads `listField`/`min`/`max` to route add/remove/select and keep the list altitude-sorted.
    *  Set from the descriptor `repeat`. */
-  repeat?: { listField: string; min: number; max: number; editorPlacement: "pinned" | "inline" };
+  repeat?: { listField: string; min: number; max: number };
   /** A card action button RELOCATED to the feature's arrow-tip anchor (a floating DOM badge
    *  on the map) instead of a card edge — set from a descriptor card button with `place: "anchor"`.
    *  The controller emits it at the selected area's primary arrow tip (where the leader points),

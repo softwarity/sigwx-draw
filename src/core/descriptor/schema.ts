@@ -284,13 +284,12 @@ export const DESCRIPTOR_JSON_SCHEMA = {
       type: "object",
       additionalProperties: false,
       required: ["listField", "preview", "min", "max"],
-      description: "Stack a LIST field as repeated layer cards (the TEMSI cloud-layer area).",
+      description: "Edit a LIST field as the multi-layer cloud-area (the TEMSI cloud-layer area).",
       properties: {
         listField: { type: "string", minLength: 1 },
         preview: { type: "string" },
         min: { type: "number" },
         max: { type: "number" },
-        editorPlacement: { enum: ["pinned", "inline"] },
       },
     },
     satellites: {

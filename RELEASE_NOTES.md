@@ -2,6 +2,65 @@
 
 ## NEXT RELEASE
 
+- **The multi-layer cloud-area (`sigwxArea`) editing box & gauge spacing match the other cards now**:
+  - its box gets the same `"large"` padding (it defaulted to `"small"` — the multi-layer panel's
+    default — while single areas default to `"large"`, so it looked tighter); pinned explicitly to
+    `"large"` in temsi-france + temsi-euroc.
+  - its side FL gauge no longer sits FURTHER from the card than the others — the `SIDE_X_STACK` (−1.4)
+    offset was a leftover from the (removed) wide layer-stack panel; the panel is now the same flat
+    card as a simple area, so the gauge uses the same `−1.0` offset (~16px gap → ~2px, like icing).
+- **The turbulence & icing symbols in the editing card are bigger** (the MOD/SEV glyph was too small) —
+  single-area panels (`compilePanelWidget`) now honour a card item's `size` on its picker trigger glyph,
+  like the marker/layer cards already did. Turbulence's `symbol` carousel carries `size: 36` (its glyph
+  is a sparse curve, so it needs more), icing's `size: 24` (a denser fork) — each tuned to its glyph.
+- **Base/top AREA FL gauges are now a single DRAGGABLE band** (CB, icing, turbulence/CAT) — they were
+  two independent cursors; they now render as a 1-band `WidgetGauge.ranges` (grab the middle → base+top
+  move together), inked in the phenomenon's identity colour (CB red, icing violet, CAT grey — the band
+  stays VISIBLE so it's grab-able), consistent with the multi-layer cloud zone. One band code path now
+  serves every base/top FL area (`flBandNode`); `flGaugeNode` shrinks to the single-FL case (tropopause,
+  isotherm). Single-FL gauges and the jet's 3-cursor break-point gauge keep the cursor mode (a point /
+  a labelled core can't be a band). The band is the default render for any 2-cursor base/top area (no
+  per-profile opt-in). Lib-only — no adapter change.
+- **The multi-layer cloud-layer area (`sigwxArea`) is edited on ONE shared multi-range FL gauge**
+  (adapter `WidgetGauge.ranges`): N coloured `[base, top]` bands on a single axis, one colour per
+  layer, the active layer on top, the editing card framed in the active layer's accent over a
+  very-light tint. The PANEL always shows just the active layer's flat card (1 or N layers look
+  identical); the per-layer bands + add/remove all live on the side gauge. Behaviours:
+  - **First segment CENTRED on the range** — a lone default layer is a 1/`max`-tall band centred on
+    the mid-altitude (France 0–150/max 4 ⇒ `[55,95]`; EUROC 0–450/max 3 ⇒ `[150,300]`), leaving room
+    BOTH above and below so either add works straight away (not pinned to the floor).
+  - **Add a layer by hovering an EMPTY axis span** — the adapter's hover-`+` ("add here", anywhere a
+    band isn't — including a GAP between two layers) emits `addLayerAt:<fl>`; the lib inserts a band
+    **centred on that FL** (a 1/`max`-tall slice, 5-FL snapped, clamped). The old fixed `+` at the
+    axis ends (`addLayer`/`addLayerBelow`, `place:"axis-top"/"axis-bottom"`) are **removed** in favour
+    of this. The lib gates the whole affordance with a new `WidgetGauge.canAdd` (false at `repeat.max`,
+    so no `+` is offered when full); `addLayer` survives as a generic "stack one on top" (programmatic).
+  - **Fling a band off the axis to delete it** — dragging a layer's band horizontally clear of the
+    track (adapter gesture, danger-tinted) emits `removeRange:<index>`; the lib drops that layer,
+    **min-1 guarded**, survivors keep their FL (no re-slice).
+  - **The editing UI no longer slides sideways when you add/remove a layer** — a selected call-out's
+    box offset is FROZEN at selection (like the FL `flRef`): previously the cartouche grew a line per
+    layer, widening the placement box and sliding its centre — where the gauge+card pin — ~55px right
+    on every add. A manual box drag promotes the freeze to a sticky pin.
+  - **Track length is STABLE (~3× its card)** instead of resizing with the FL extent — was
+    `(max−min)×0.5` clamped 110–200px (a tall EUROC chart drew a longer slider than a short France
+    one, the control jumping between profiles); now a fixed `GAUGE_STACK_LENGTH` (~230px ≈ 3× the
+    editor card, itself constant). The FL extent is absorbed by the **ticks**: the adapter maps
+    `[min,max]` onto the fixed length, so a wider range just packs the step-5 notches tighter.
+  - **Requires the adapter release** carrying `WidgetGauge.ranges` + the band drag-off-axis gesture +
+    the new hover-`+` over empty axis spans (`canAdd` gate → `addLayerAt:<fl>`). Spec:
+    `ADAPTER-GAUGE-HOVER-ADD.md`.
+- **Removed: the old layer-`stack` editor** (the adapter `stack` control — the "multicard with the FL
+  listed below"). The cloud-layer area is now ALWAYS the multi-range gauge above, and the redundant
+  `sigwxAreaGauges` button (identical bar the editor) was folded back into `sigwxArea` — one button,
+  canonical name. The `repeat.editor` / `editorPlacement` descriptor tokens are gone (a `repeat` now
+  means exactly this editor). sigwx-draw no longer emits the adapter's `WidgetStack` / `WidgetStackItem`
+  (`kind:"stack"`) controls — they can be retired adapter-side if nothing else uses them.
+- **Fix: a multi-layer area (`sigwxArea`) no longer shows a stray draggable handle** — the on-path
+  break-point sliders (a jet feature, items parameterized by `t`) were also rendered for the
+  cloud-layer list, whose items are FL LAYERS with no `t` ⇒ a phantom slider landed at the path start
+  (vertex 0). It dragged with no effect and flashed the danger colour. The slider pass is now gated to
+  non-`repeat` lists.
 - **Add: the TEMSI isotherm draws as a SPOT or a CONTOUR, with a selectable temperature** (like the
   tropopause for the geometry) — its gesture is now `lasso-or-spot`, so a click drops a boxed
   `<T>°: FL` spot and a stroke draws the contour line. A new `render.point` branch boxes the spot

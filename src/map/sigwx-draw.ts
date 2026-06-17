@@ -344,6 +344,11 @@ export class SigwxDraw {
   private appendTo: string | null = null;
   /** Where each feature's call-out box was last placed (lon/lat) — so the area FL gauge follows it. */
   private readonly placedAt = new Map<string, [number, number]>();
+  /** Pin key (`featureId:labelId`) of the call-out frozen ON SELECTION (captured once, like `flRef`),
+   *  so editing the selected feature — adding cloud layers WIDENS its cartouche — does NOT re-place
+   *  the box (which would slide the gauge+card sideways). Released on re-select; PROMOTED to a sticky
+   *  manual pin if the user drags the box. Null when no auto-freeze is active. */
+  private autoPinKey: string | null = null;
   private lastAnnReqs: AnnReq[] = [];
   /** Merged sprite catalogue (defaults + host overrides + turbulence extensions) — the
    *  widget builders resolve their glyph carousel options from it. */
@@ -432,6 +437,12 @@ export class SigwxDraw {
           const fieldKey = lm[3]!;
           const item = lf ? ((f.properties.metadata[lf.key] as Metadata[] | undefined) ?? [])[idx] : undefined;
           if (!lf || !item) return;
+          // Multi-layer cloud area: touching ANY layer's gauge band makes it the active (edited)
+          // layer, so the panel pickers (amount/type/FL) sync to the band being dragged. No-op for
+          // jet break points, whose satellite controls are already scoped to the selected sub-item.
+          if (def.repeat?.listField === lf.key && this.selectedSub !== idx) {
+            this.selectedSub = idx;
+          }
           const fld = lf.itemSchema.find((s) => s.key === fieldKey);
           if (fld?.type === "number") {
             // The speed dial: clamp to the configured range, rounded to 5 kt.
@@ -524,13 +535,26 @@ export class SigwxDraw {
           this.erasing = { featureId: fid, r: this.brushRadiusPx(fid), lastPx: null };
           this.adapter.setCursor("crosshair");
         } else if (e.event === "addLayer" && f) {
-          // Layer STACK (the TEMSI cloud-layer area): the adapter's `+` adds a layer.
-          this.addLayerTo(fid);
+          // Layer STACK (the TEMSI cloud-layer area): a generic add — stacks a layer ABOVE the
+          // highest band (programmatic / fallback; the gauge's primary add is `addLayerAt:<fl>`).
+          this.addLayerTo(fid, "top");
+        } else if (e.event.startsWith("addLayerAt:") && f) {
+          // Gauge HOVER-`+`: the adapter offers an "add here" `+` over an empty axis span and emits
+          // `addLayerAt:<fl>`; insert a layer whose band is CENTRED on that FL.
+          const v = Number(e.event.slice("addLayerAt:".length));
+          if (Number.isFinite(v)) this.addLayerAt(fid, v);
         } else if (e.event.startsWith("selectLayer:") && f) {
           const i = Number(e.event.slice("selectLayer:".length));
           if (Number.isFinite(i)) this.selectSubItem(i);
         } else if (e.event.startsWith("removeLayer:") && f) {
           const i = Number(e.event.slice("removeLayer:".length));
+          if (Number.isFinite(i)) this.removeLayerFrom(fid, i);
+        } else if (e.event.startsWith("removeRange:") && f) {
+          // GAUGES editor: a layer band flung sideways off the axis (adapter gesture) emits
+          // `removeRange:<index>[:<rangeId>]` — drops layer i (min-1 guarded, remaining bands keep
+          // their FL: no re-slice). parseInt takes the leading index, tolerating the optional
+          // `:<id>` suffix the adapter appends when a range carries an id. See GAUGE-AXIS-BUTTON-SPEC.
+          const i = Number.parseInt(e.event.slice("removeRange:".length), 10);
           if (Number.isFinite(i)) this.removeLayerFrom(fid, i);
         }
       });
@@ -711,6 +735,12 @@ export class SigwxDraw {
     if (this.erasing && id !== this.erasing.featureId) {
       this.erasing = null; // leaving the erased feature exits the eraser
       this.adapter.setCursor("");
+    }
+    // Release the previous selection's AUTO-frozen call-out pin (a manual drag promoted it to a
+    // sticky pin by clearing autoPinKey, so we never drop a user-moved box here).
+    if (this.autoPinKey) {
+      this.pins.delete(this.autoPinKey);
+      this.autoPinKey = null;
     }
     this.selectedId = id != null && this.doc.has(id) ? id : null;
     this.selectedSub = null;
@@ -1011,9 +1041,104 @@ export class SigwxDraw {
     }
   }
 
-  /** Add a layer to a stack feature (seeded from item-schema defaults + per-type FL defaults),
-   *  re-sorted highest-on-top and selected. No-op past `repeat.max`. Returns its new index. */
-  addLayerTo(id: string): number {
+  /** The bottom/top FL field keys of a stack layer (the `base`/`top` naming convention shared with
+   *  {@link flGaugeRange}): the list item's two FL fields, base = the one matching /base/, top /top/
+   *  (falling back to schema order). `null` when the item has fewer than two FL fields. */
+  private layerFlKeys(lf: ListField): [string, string] | null {
+    const fls = lf.itemSchema.filter((s) => s.type === "fl");
+    if (fls.length < 2) return null;
+    const base = fls.find((s) => /base/i.test(s.key)) ?? fls[0]!;
+    const top = fls.find((s) => /top/i.test(s.key)) ?? fls[1]!;
+    return base.key === top.key ? null : [base.key, top.key];
+  }
+
+  /** The FL band a stack layer at `index` should occupy by default in the GAUGES editor: the
+   *  `index`-th of `repeat.max` equal slices of the resolved FL range (5-FL snapped), so the FIRST
+   *  layer takes the bottom 1/max and leaves the rest of the axis free instead of spanning it all.
+   *  `null` unless the phenomenon has a `repeat` (multi-layer) with a usable FL range. */
+  private layerSlice(type: string, index: number): { base: number; top: number } | null {
+    const rep = this.registry.get(type).repeat;
+    if (!rep) return null;
+    const { min, max } = this.flResolved(type);
+    if (min == null || max == null || max <= min) return null;
+    const n = Math.max(1, rep.max);
+    const h = Math.round((max - min) / n / 5) * 5;
+    if (h <= 0) return null;
+    const k = Math.max(0, Math.min(n - 1, index));
+    const base = min + k * h;
+    return { base, top: k === n - 1 ? max : Math.min(max, base + h) };
+  }
+
+  /** The FL band a NEW layer should take when added on the `side` clicked (gauges editor): a 1/max
+   *  slice butting against the current stack — ABOVE its highest top (`"top"`) or BELOW its lowest
+   *  base (`"bottom"`), clamped into the resolved FL range. `null` for a non-gauges repeat / no FL
+   *  range / no FL fields. (Visibility of each side's `+` is gated on there being room — see the
+   *  interpreter — so this only runs when the clicked side actually has space.) */
+  private adjacentLayerBand(type: string, list: Metadata[], side: "top" | "bottom"): { base: number; top: number } | null {
+    const def = this.registry.get(type);
+    const rep = def.repeat;
+    if (!rep) return null;
+    const { min, max } = this.flResolved(type);
+    if (min == null || max == null || max <= min) return null;
+    const lf = def.schema.find((s): s is ListField => s.type === "list" && s.key === rep.listField);
+    const keys = lf && this.layerFlKeys(lf);
+    if (!keys) return null;
+    const [bk, tk] = keys;
+    const n = Math.max(1, rep.max);
+    const h = Math.max(5, Math.round((max - min) / n / 5) * 5);
+    const numOf = (v: unknown, d: number): number => (typeof v === "number" && isFinite(v) ? v : d);
+    if (!list.length) return { base: min, top: Math.min(max, min + h) };
+    if (side === "top") {
+      const base = Math.min(max - 5, Math.max(...list.map((l) => numOf(l[tk], max))));
+      return { base, top: Math.min(max, base + h) };
+    }
+    const top = Math.max(min + 5, Math.min(...list.map((l) => numOf(l[bk], min))));
+    return { base: Math.max(min, top - h), top };
+  }
+
+  /** A single layer's default FL band CENTRED on the resolved range: one 1/max-tall slice around the
+   *  mid-altitude, so BOTH the top and bottom `+` have room from the start. `null` for a non-gauges
+   *  repeat / no usable range. */
+  private centeredLayerSlice(type: string): { base: number; top: number } | null {
+    const rep = this.registry.get(type).repeat;
+    if (!rep) return null;
+    const { min, max } = this.flResolved(type);
+    if (min == null || max == null || max <= min) return null;
+    const n = Math.max(1, rep.max);
+    const h = Math.max(5, Math.round((max - min) / n / 5) * 5);
+    const base = Math.max(min, Math.min(max - h, Math.round(((min + max) / 2 - h / 2) / 5) * 5));
+    return { base, top: base + h };
+  }
+
+  /** Lay a freshly-built stack's default layer(s) into their gauges-editor FL bands: a lone layer
+   *  sits CENTRED on the range ({@link centeredLayerSlice}) — leaving room above AND below so either
+   *  `+` works straight away; a multi-layer default falls back to a bottom-up partition
+   *  ({@link layerSlice}). No-op for a non-gauges repeat or without FL fields. */
+  private applyLayerSlices(type: string, metadata: Metadata): void {
+    const def = this.registry.get(type);
+    const rep = def.repeat;
+    if (!rep) return;
+    const lf = def.schema.find((s): s is ListField => s.type === "list" && s.key === rep.listField);
+    if (!lf) return;
+    const keys = this.layerFlKeys(lf);
+    const list = metadata[lf.key];
+    if (!keys || !Array.isArray(list) || !list.length) return;
+    const place = (it: Metadata, band: { base: number; top: number } | null): void => {
+      if (band) {
+        it[keys[0]] = band.base;
+        it[keys[1]] = band.top;
+      }
+    };
+    if (list.length === 1) {
+      place(list[0] as Metadata, this.centeredLayerSlice(type));
+      return;
+    }
+    list.forEach((it, i) => place(it as Metadata, this.layerSlice(type, i)));
+  }
+
+  /** Insert a new layer (item-schema defaults + per-type FL defaults) with its FL band from `bandFor`,
+   *  re-sorted highest-on-top and selected. No-op past `repeat.max`. Returns its new index (or -1). */
+  private insertLayer(id: string, bandFor: (type: string, list: Metadata[]) => { base: number; top: number } | null): number {
     const f = this.doc.get(id);
     if (!f) return -1;
     const def = this.registry.get(f.properties.phenomenon);
@@ -1029,11 +1154,47 @@ export class SigwxDraw {
       else if (s.type === "bool") item[s.key] = false;
     }
     this.applyLayerTypeDefaults(def.type, lf, item);
+    const band = bandFor(def.type, list);
+    const flKeys = this.layerFlKeys(lf);
+    if (band && flKeys) {
+      item[flKeys[0]] = band.base;
+      item[flKeys[1]] = band.top;
+    }
     const next = [...list, item].sort((a, b) => this.layerAltitude(b) - this.layerAltitude(a));
     f.properties.metadata = { ...f.properties.metadata, [lf.key]: next };
     this.selectedSub = next.indexOf(item);
     this.afterEdit(id);
     return this.selectedSub;
+  }
+
+  /** Add a layer to a stack feature. `side` butts the new FL band against one end — `"top"` stacks
+   *  ABOVE the highest layer, `"bottom"` slides one in BELOW the lowest (see {@link adjacentLayerBand}). */
+  addLayerTo(id: string, side: "top" | "bottom" = "top"): number {
+    return this.insertLayer(id, (type, list) => this.adjacentLayerBand(type, list, side));
+  }
+
+  /** Add a layer whose FL band is CENTRED on `fl` — the gauge HOVER-`+` ("add here" over an empty
+   *  axis span, `addLayerAt:<fl>`). The band is a default-height slice around `fl` (see
+   *  {@link bandAround}); re-sorted + selected; no-op past `repeat.max`. */
+  addLayerAt(id: string, fl: number): number {
+    return this.insertLayer(id, (type) => this.bandAround(type, fl));
+  }
+
+  /** A default-height (1/`max`) FL band CENTRED on `fl`, 5-FL snapped and clamped to the resolved
+   *  range (shifted wholly inside if `fl` sits near a bound). `null` for a non-multi-layer phenomenon
+   *  / no usable range. */
+  private bandAround(type: string, fl: number): { base: number; top: number } | null {
+    const rep = this.registry.get(type).repeat;
+    if (!rep) return null;
+    const { min, max } = this.flResolved(type);
+    if (min == null || max == null || max <= min) return null;
+    const n = Math.max(1, rep.max);
+    const h = Math.min(max - min, Math.max(5, Math.round((max - min) / n / 5) * 5));
+    const c = Math.round(Math.max(min, Math.min(max, fl)) / 5) * 5;
+    let base = Math.round((c - h / 2) / 5) * 5;
+    if (base < min) base = min;
+    if (base + h > max) base = max - h;
+    return { base, top: base + h };
   }
 
   /** Remove a layer from a stack feature, keeping ≥ `repeat.min`. */
@@ -1051,6 +1212,7 @@ export class SigwxDraw {
     if (!this.doc.delete(id)) return;
     this.order = this.order.filter((x) => x !== id);
     for (const k of [...this.pins.keys()]) if (k.startsWith(`${id}:`)) this.pins.delete(k);
+    if (this.autoPinKey?.startsWith(`${id}:`)) this.autoPinKey = null;
     this.anchorPins.delete(id);
     this.calloutShown.delete(id);
     if (this.selectedId === id) {
@@ -1067,6 +1229,7 @@ export class SigwxDraw {
     this.doc.clear();
     this.order = [];
     this.pins.clear();
+    this.autoPinKey = null;
     this.selectedId = null;
     this.selectedSub = null;
     this.cancelDrawing();
@@ -1098,6 +1261,7 @@ export class SigwxDraw {
     this.doc.clear();
     this.order = [];
     this.pins.clear();
+    this.autoPinKey = null;
     for (const f of fromFeatureCollection(fcIn, this.registry)) {
       const id = f.properties.id || `f${this.idSeq++}`;
       f.properties.id = id;
@@ -1247,6 +1411,7 @@ export class SigwxDraw {
       : ({ type: "Point", coordinates: [center.lon, center.lat] } as Geometry);
     const metadata = defaultMetadata(def);
     this.clampFlDefaults(def.type, metadata); // keep defaults on-chart (profile `vertical`)
+    this.applyLayerSlices(def.type, metadata); // gauges editor: first layer = bottom 1/max slice
     this.doc.set(id, { type: "Feature", geometry, properties: { id, phenomenon: def.type, metadata } });
     this.order.push(id);
     this.mode = "editing";
@@ -1296,6 +1461,7 @@ export class SigwxDraw {
     const metadata = defaultMetadata(this.registry.get(type));
     this.applyFlDefault(type, metadata); // override FL defaults from `phenomena[type].flightLevel.default`
     this.clampFlDefaults(type, metadata); // then keep them on-chart (profile `vertical`)
+    this.applyLayerSlices(type, metadata); // gauges editor: first layer = bottom 1/max slice
     this.doc.set(id, { type: "Feature", geometry, properties: { id, phenomenon: type, metadata } });
     this.order.push(id);
     this.drawing = null;
@@ -1539,6 +1705,25 @@ export class SigwxDraw {
       const id = box.properties.featureId;
       if (id && box.geometry.type === "Point") this.placedAt.set(id, box.geometry.coordinates as [number, number]);
     }
+    // Freeze the SELECTED call-out's offset once (so it stops auto-placing while edited): a
+    // multi-layer area's cartouche grows a line per cloud layer, widening the box → its centre
+    // (where the gauge/card pin) would slide right on every add. Capturing the current offset as a
+    // pin makes later placements width-independent (`cx = anchor + pin.dx`). No-op for features
+    // whose content doesn't change; released/re-promoted in select() and the call-out drag.
+    if (this.selectedId) {
+      const sel = this.selectedId;
+      const req = this.lastAnnReqs.find((r) => r.featureId === sel);
+      const box = this.placedAt.get(sel);
+      const k = req ? `${req.featureId}:${req.labelId}` : null;
+      if (req && box && k && !this.pins.has(k)) {
+        const a = this.adapter.project(req.anchor);
+        const b = this.adapter.project({ lon: box[0], lat: box[1] });
+        if (a && b) {
+          this.pins.set(k, { dx: b[0] - a[0], dy: b[1] - a[1] });
+          this.autoPinKey = k;
+        }
+      }
+    }
     // Widgets are built AFTER placement so one can ride its feature's placed call-out:
     // such a widget REPLACES that call-out box (selected CB → the DOM card carries the same
     // content + the `+` edge buttons; the leader still points at the card).
@@ -1726,8 +1911,10 @@ export class SigwxDraw {
         });
       }
     }
-    // Slider handles for the list field (jet break points), placed on the curve.
-    const lf = listFieldOf(def);
+    // Slider handles for a list whose items live ON the geometry (jet break points, parameterized
+    // by `t`). A `repeat`/stack list is the OPPOSITE: its items are FL cloud LAYERS, edited on the
+    // card/gauge — they carry no `t`, so this would plant a stray slider at the path start (vertex 0).
+    const lf = !def.repeat ? listFieldOf(def) : undefined;
     if (lf) {
       const items = (f.properties.metadata[lf.key] as Metadata[] | undefined) ?? [];
       const path = this.renderPath(f.geometry, it);
@@ -2161,7 +2348,11 @@ export class SigwxDraw {
       const cursorPx = this.adapter.project(ev.lngLat);
       // Place the box centre at (cursor − grab) so the grabbed spot stays under the cursor
       // (no first-move jump), then express that as the pin offset from the anchor.
-      if (anchorPx && cursorPx) this.pins.set(`${t.featureId}:${t.labelId}`, { dx: cursorPx[0] - t.grab[0] - anchorPx[0], dy: cursorPx[1] - t.grab[1] - anchorPx[1] });
+      if (anchorPx && cursorPx) {
+        const pk = `${t.featureId}:${t.labelId}`;
+        this.pins.set(pk, { dx: cursorPx[0] - t.grab[0] - anchorPx[0], dy: cursorPx[1] - t.grab[1] - anchorPx[1] });
+        if (this.autoPinKey === pk) this.autoPinKey = null; // user took over → keep this pin sticky
+      }
     } else if (t.kind === "anchor") {
       // Move ONE leader anchor (this area's arrow tip) — kept inside ITS zone AND outside
       // its erased holes (the tip must always point at cloud).

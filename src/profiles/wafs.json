@@ -384,7 +384,8 @@
           {
             "carousel": {
               "field": "symbol"
-            }
+            },
+            "size": 24
           },
           {
             "text": "{topFL|flx:top}"
@@ -535,7 +536,8 @@
           {
             "carousel": {
               "field": "symbol"
-            }
+            },
+            "size": 36
           },
           {
             "text": "{topFL|flx:top}"

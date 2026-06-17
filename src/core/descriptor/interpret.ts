@@ -6,7 +6,7 @@
  * the named-extension registries at COMPILE time, so unknown names fail fast
  * with the available ones listed.
  */
-import type { BoxShape, MarkerWidget, WidgetNode, WidgetStackItem } from "@softwarity/draw-adapter";
+import type { BoxShape, MarkerWidget, WidgetNode } from "@softwarity/draw-adapter";
 import type { Geometry } from "geojson";
 
 import {
@@ -42,7 +42,7 @@ import type {
   RenderFeature,
   WidgetInput,
 } from "../phenomenon.js";
-import { flGaugeNode, num, ringCentroid } from "../phenomena/util.js";
+import { flBandNode, flGaugeNode, flRangesNode, num, ringCentroid } from "../phenomena/util.js";
 import type { PhenomenonStyle } from "../style.js";
 import { compileCondition, getAction, getDecorator, getGenerator, resolveGlyph } from "./extensions.js";
 import type { FormatContext } from "./extensions.js";
@@ -509,12 +509,21 @@ const SIDE_X: Record<SatelliteSpec["anchor"], number> = {
   "geometry-mid": -0.85, // just clear of the geometry label box (−0.5 looked astride, −1.1 too far)
   "break-point": -1.6,
 };
-/** The layer-stack PANEL is a touch wider than a plain call-out (pickers + the FL-only layer
- *  list + edit buttons), so its right-side gauge clears a bit more than the call-out default —
- *  just enough to sit a hair's gap beside the card, not astride its edge nor floating off.
- *  NB: this is a multiple of the GAUGE's own width vs the anchor, not a px gap from the card
- *  edge — a precise edge gap needs an adapter placement feature (see the spec request). */
-const SIDE_X_STACK = -1.4;
+/** Per-layer accent palette for the multi-range FL editor (the multi-layer cloud area): each
+ *  cloud layer's band + handles take the next colour so overlapping ranges read apart. A lib
+ *  fallback (engine-chrome-style, not phenomenon data); a profile may override later. */
+const LAYER_GAUGE_COLORS = ["#d1242f", "#0969da", "#1a7f37", "#bf8700", "#8250df", "#bf3989"];
+/** The active cloud layer's accent (band/handle colour AND the panel frame — they match). */
+const layerColor = (i: number): string => LAYER_GAUGE_COLORS[i % LAYER_GAUGE_COLORS.length]!;
+/** Mix a `#rrggbb` toward white by `t` (0 = unchanged, 1 = white): the very-light card tint. */
+function lighten(hex: string, t: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return hex;
+  const n = parseInt(m[1]!, 16);
+  const mix = (c: number): number => Math.round(c + (255 - c) * t);
+  const r = mix((n >> 16) & 255), g = mix((n >> 8) & 255), b = mix(n & 255);
+  return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+}
 
 function compileSatellites(d: PhenomenonDescriptor): ((input: WidgetInput) => MarkerWidget[]) | undefined {
   const sats = d.satellites;
@@ -526,6 +535,7 @@ function compileSatellites(d: PhenomenonDescriptor): ((input: WidgetInput) => Ma
   const repeatList = d.repeat
     ? (d.fields ?? []).find((f): f is ListFieldDescriptor => f.kind === "list" && f.key === d.repeat!.listField)
     : undefined;
+  const repeatMax = d.repeat?.max ?? 1;
   const itemField = (key: string) => listField?.kind === "list" ? listField.item.find((f) => f.key === key) : undefined;
   const pad3 = (v: number): string => String(Math.round(v)).padStart(3, "0");
   const chromeProps = (chrome: WidgetInput["chrome"], knobs: boolean): Record<string, string> => ({
@@ -539,15 +549,6 @@ function compileSatellites(d: PhenomenonDescriptor): ((input: WidgetInput) => Ma
   return (input: WidgetInput): MarkerWidget[] => {
     const { id, geometry, metadata, flightLevel, chrome, sub, limit } = input;
     const cards: MarkerWidget[] = [];
-    // Stack area: the ACTIVE layer (the expanded one — selected sub-item, else the top) the
-    // callout gauge edits. List-scoped so a drag routes through `updateListItem` like a layer body.
-    const repeatActive: { scope: string; item: Metadata } | null = (() => {
-      if (!repeatList) return null;
-      const arr = (metadata[repeatList.key] as Metadata[] | undefined) ?? [];
-      if (!arr.length) return null;
-      const a = sub != null && sub >= 0 && sub < arr.length ? sub : 0;
-      return { scope: `${repeatList.key}.${a}.`, item: arr[a]! };
-    })();
     // The selected break-point item (break-point anchors): ON the smoothed curve. A bare
     // terminator (t≈0/1) has nothing to edit — jets start/end at the floor (§3.5.1).
     let breakAt: Pt | null = null;
@@ -582,22 +583,50 @@ function compileSatellites(d: PhenomenonDescriptor): ((input: WidgetInput) => Ma
         yPin = 1 - (ref - min) / (max - min); // = 0.5
       };
       for (const it of sat.items) {
-        if (it.gauge && repeatActive) {
-          // Stack FL gauge → list-scoped to the ACTIVE layer (`layers.<i>.baseFL/topFL`), XXX
-          // notches per side: the side-satellite sibling of a simple area's feature-level gauge.
+        if (it.gauge && repeatList) {
+          // Multi-layer cloud area: ONE multi-range FL gauge — N overlapping [base,top] bands on a SHARED
+          // axis (the adapter's `WidgetGauge.ranges` mode), one DISTINCT colour per layer. Cursor
+          // names are list-scoped (`layers.<i>.baseFL/topFL`) so a knob/band drag routes through
+          // `updateListItem`; the controller flips the active layer to the touched one so the
+          // panel pickers follow. `active` = the current layer (rendered on top when knobs
+          // coincide). The `+` to add a layer hangs off this card (place: top).
           const keys = it.gauge.cursors;
-          const scopedKeys = keys.map((k) => `${repeatActive.scope}${k}`);
-          const bag: Metadata = {};
-          keys.forEach((k, j) => { bag[scopedKeys[j]!] = repeatActive.item[k]; });
-          const gauge = flGaugeNode(bag, flightLevel, FALLBACK_FL.min, FALLBACK_FL.max, scopedKeys.length === 2 ? [scopedKeys[0]!, scopedKeys[1]!] : [scopedKeys[0]!], chrome);
+          if (keys.length !== 2) continue; // multi-range = base/top only
+          const arr = (metadata[repeatList.key] as Metadata[] | undefined) ?? [];
+          const activeIdx = sub != null && sub >= 0 && sub < arr.length ? sub : 0;
+          const rangeChrome = { ...(chrome?.text ? { text: chrome.text } : {}), handle: { stroke: "#ffffff" } };
+          const gauge = flRangesNode(
+            arr,
+            repeatList.key,
+            flightLevel,
+            FALLBACK_FL.min,
+            FALLBACK_FL.max,
+            [keys[0]!, keys[1]!],
+            layerColor,
+            activeIdx,
+            rangeChrome,
+          );
+          // `canAdd` (lib gate, read by the adapter): another layer is allowed below `repeat.max`.
+          // The adapter's hover-`+` (add a layer in an empty axis span) is suppressed when false.
+          gauge.canAdd = arr.length < repeatMax;
           items.push(gauge);
-          pin(gauge.min, gauge.max, keys.length === 1 ? num(repeatActive.item[keys[0]!], (gauge.min + gauge.max) / 2) : (gauge.min + gauge.max) / 2);
+          pin(gauge.min, gauge.max, (gauge.min + gauge.max) / 2);
         } else if (it.gauge && !scope) {
-          // Feature-level FL gauge (1–2 cursors over the metadata, XXX notches per side).
+          // Feature-level FL gauge. A base/top pair (CB, icing, turbulence) → a DRAGGABLE 1-band
+          // `ranges` gauge (grab the middle, base+top move together), inked in the phenomenon's
+          // identity colour (visible/grab-able). A lone cursor (single FL — tropopause, isotherm)
+          // stays a plain 1-cursor gauge: a point has no band.
           const keys = it.gauge.cursors;
-          const gauge = flGaugeNode(metadata, flightLevel, FALLBACK_FL.min, FALLBACK_FL.max, keys.length === 2 ? [keys[0]!, keys[1]!] : [keys[0]!], chrome);
-          items.push(gauge);
-          pin(gauge.min, gauge.max, keys.length === 1 ? num(metadata[keys[0]!], (gauge.min + gauge.max) / 2) : (gauge.min + gauge.max) / 2);
+          if (keys.length === 2) {
+            const bandColor = input.style?.color ?? chrome?.line?.color ?? chrome?.handle?.fill ?? "#1f2328";
+            const gauge = flBandNode(metadata, flightLevel, FALLBACK_FL.min, FALLBACK_FL.max, [keys[0]!, keys[1]!], bandColor);
+            items.push(gauge);
+            pin(gauge.min, gauge.max, (gauge.min + gauge.max) / 2);
+          } else {
+            const gauge = flGaugeNode(metadata, flightLevel, FALLBACK_FL.min, FALLBACK_FL.max, [keys[0]!], chrome);
+            items.push(gauge);
+            pin(gauge.min, gauge.max, num(metadata[keys[0]!], (gauge.min + gauge.max) / 2));
+          }
         } else if (it.gauge && scope && item) {
           // Break-point gauge: list-scoped cursor names (`points.N.fl` — engine-routed
           // through `updateListItem`), core cursor + conditional EXTENT cursors.
@@ -656,8 +685,12 @@ function compileSatellites(d: PhenomenonDescriptor): ((input: WidgetInput) => Ma
         }
       }
       if (!items.length) continue;
-      // A stack area's gauge clears the wider layer-stack panel (else it sits astride its edge).
-      const sideX = sat.side === "center" ? undefined : repeatActive ? SIDE_X_STACK : SIDE_X[sat.anchor];
+      // The gauge sits a hair's gap beside its anchor card. A multi-layer area's panel is now the same
+      // flat card as a simple area (the wide layer-stack is gone), so it uses the SAME offset.
+      const sideX = sat.side === "center" ? undefined : SIDE_X[sat.anchor];
+      // Adding a layer is the adapter's HOVER-`+`: hovering an empty span of the axis offers an
+      // "add here" `+` that emits `addLayerAt:<fl>` (gated by the gauge's `canAdd`). No fixed
+      // axis-end buttons here anymore.
       cards.push({
         id: `${id}#${sat.part}`,
         anchor: { lon: at[0]!, lat: at[1]! },
@@ -726,8 +759,9 @@ function compilePanelWidget(d: PhenomenonDescriptor, satellites: ((input: Widget
         if (labelTpl === undefined) hasGlyphCarousel = true;
         // The adapter `picker` control (carousel ≤5 / flower 6–10 / grid >10, auto-degrading).
         // Its text is tinted with the control HANDLE colour (like the gauge/dial knobs) so the
-        // clickable value reads as a control — customisable via `style.control.handle`.
-        items.push({ kind: "text", value, control: "picker", ...(pick.mode ? { mode: pick.mode } : {}), name: pick.field, options, ...(chrome?.handle?.fill ? { color: chrome.handle.fill } : {}) });
+        // clickable value reads as a control — customisable via `style.control.handle`. `it.size`
+        // enlarges the trigger glyph while selected (e.g. the icing ICE_MOD/SEV symbol).
+        items.push({ kind: "text", value, control: "picker", ...(pick.mode ? { mode: pick.mode } : {}), name: pick.field, options, ...(it.size ? { size: it.size } : {}), ...(chrome?.handle?.fill ? { color: chrome.handle.fill } : {}) });
       } else if (it.gauge) {
         // FL gauge INLINE in the card (1–2 cursors over the metadata, XXX notches per side) —
         // same control as the satellite gauge, but stacked in the panel under the pickers.
@@ -823,10 +857,11 @@ function compileLayerBody(
   return { dir: "v", align: "center", gap: card.gap ?? 2, items };
 }
 
-/** Compile a repeated-list area's selected PANEL: an adapter `stack` of layer cards (one
- *  active/editable, the others collapsed to their one-line `preview`), anchored at the placed
- *  call-out. The controller routes the stack's +/−/select events and keeps the list sorted. */
-function compileStackPanel(
+/** Compile a multi-layer area's selected PANEL: the ACTIVE layer's flat card (pickers + FL text),
+ *  framed in that layer's accent and anchored at the placed call-out. The per-layer FL bands + the
+ *  add/remove all live on the side satellite (the multi-range gauge); the controller routes those
+ *  events and keeps the list altitude-sorted. */
+function compileLayerPanel(
   d: PhenomenonDescriptor,
   satellites: ((input: WidgetInput) => MarkerWidget[]) | undefined,
 ): (input: WidgetInput) => MarkerWidget[] | null {
@@ -837,18 +872,6 @@ function compileStackPanel(
   const r = d.render as RenderSpec | undefined;
   const inkOf = compileInk(r?.ink);
   const framed = card.framed !== false;
-  const placement = repeat.editorPlacement ?? "pinned";
-  // `place: "anchor"` buttons live OFF the card (relocated to the arrow-tip by the
-  // controller via `def.anchorButton`); only card-edge buttons stay here.
-  const buttons = (card.buttons ?? [])
-    .filter((b) => b.place !== "anchor")
-    .map((b) => ({
-      event: getAction(b.action),
-      place: b.place as "left" | "right" | "h-edges",
-      svg: resolveGlyph(b.svg ?? (b.action === "erase" ? "atlas:minus" : "atlas:plus")),
-      bordered: true,
-      ...(b.title !== undefined ? { title: b.title } : {}),
-    }));
 
   return (input: WidgetInput): MarkerWidget[] | null => {
     const { id, metadata, editable, style, callout } = input;
@@ -856,57 +879,34 @@ function compileStackPanel(
     const ink = framed ? (style.text?.color ?? "#1f2328") : inkOf(style, metadata);
     const fontPx = style.text?.size ?? 13;
     const layers = Array.isArray(metadata[listField.key]) ? (metadata[listField.key] as Metadata[]) : [];
-    // The active (expanded) layer = the selected sub-item; default to the top of the stack.
-    const active = input.sub != null && input.sub >= 0 && input.sub < layers.length ? input.sub : 0;
-    // ONE layer → a plain FRAMED card: the WHOLE card is boxed (bg + border), with the lone
-    // layer's amount/type pickers BARE inside it — NOT the stack, whose blue editor-highlight box
-    // would frame just amount+type (the thing we explicitly do NOT want). The FL keeps its side
-    // gauge; `+` adds a 2nd layer (→ switches to the stack).
-    if (layers.length === 1) {
-      const layer = layers[0]!;
-      const addBtns = repeat.max > 1
-        ? [{ event: "addLayer", place: "bottom" as const, svg: resolveGlyph("atlas:plus"), bordered: true }]
-        : [];
-      // A lone layer edits "as if there were a single simple card": the body MIRRORS the
-      // deselected single cartouche (`callout.contentSingle` — amount / type / top / base, each on
-      // its OWN line), with the enum lines (amount/type) swapped for pickers and the FL lines kept
-      // as plain text (the side gauge edits them). Without this the selected card dropped the level
-      // entirely (regression). Falls back to the compact `repeat.preview` line if no contentSingle.
-      const fmt: FormatContext = { metadata: layer, flightLevel: flCtxWithFallback(input) };
-      const pickerFields = new Set(card.items.map((it) => (it.picker ?? it.carousel)?.field).filter((f): f is string => !!f));
-      const flTmpls = (r?.callout?.contentSingle ?? []).filter((t) => ![...pickerFields].some((f) => t.includes(`{${f}`)));
-      const flItems: WidgetNode[] = (flTmpls.length ? flTmpls.map((t) => evalTemplate(t, layer, fmt)) : [evalTemplate(repeat.preview, layer, fmt)])
-        .map((value) => ({ kind: "text", value }));
-      const flat: MarkerWidget = {
-        id,
-        anchor: { lon: callout.at[0]!, lat: callout.at[1]! },
-        ...(framed ? { bg: style.text?.background ?? "#ffffff", border: ink, radius: "small" } : {}),
-        ...(framed || addBtns.length ? { padding: card.pad ?? "small" } : {}),
-        font: { color: ink, size: fontPx },
-        child: { dir: "v", align: "center", gap: card.gap ?? 2, items: [compileLayerBody(d, listField, layer, 0, input), ...flItems] },
-        ...(addBtns.length ? { buttons: addBtns } : {}),
-      };
-      return [flat, ...(satellites ? satellites(input) : [])];
-    }
-    // TWO+ layers → the adapter `stack` control (one active editor + collapsed peek previews).
-    const stackItems: WidgetStackItem[] = layers.map((it, i) => ({
-      id: String(i),
-      active: i === active,
-      disabled: i === active, // the active item isn't re-selectable (adapter contract)
-      preview: evalTemplate(repeat.preview, it, { metadata: it, flightLevel: flCtxWithFallback(input) }),
-      body: compileLayerBody(d, listField, it, i, input),
-    }));
-    const stack: WidgetNode = { kind: "stack", items: stackItems, min: repeat.min, max: repeat.max, editorPlacement: placement };
-    const panel: MarkerWidget = {
+    // The PANEL is ALWAYS just the ACTIVE layer's flat card (1 or N layers look identical) — the
+    // per-layer FL bands + the `+` live on the side satellite (the multi-range gauge), never in the
+    // panel. The active (edited) layer = the selected sub-item, else the top of the stack.
+    const idx = input.sub != null && input.sub >= 0 && input.sub < layers.length ? input.sub : 0;
+    const layer = layers[idx] ?? layers[0]!;
+    // The body MIRRORS the deselected single cartouche (`callout.contentSingle` — amount / type /
+    // top / base, each on its OWN line), with the enum lines (amount/type) swapped for pickers and
+    // the FL lines kept as plain text (the side gauge edits them). Falls back to the compact
+    // `repeat.preview` line if no contentSingle.
+    const fmt: FormatContext = { metadata: layer, flightLevel: flCtxWithFallback(input) };
+    const pickerFields = new Set(card.items.map((it) => (it.picker ?? it.carousel)?.field).filter((f): f is string => !!f));
+    const flTmpls = (r?.callout?.contentSingle ?? []).filter((t) => ![...pickerFields].some((f) => t.includes(`{${f}`)));
+    const flItems: WidgetNode[] = (flTmpls.length ? flTmpls.map((t) => evalTemplate(t, layer, fmt)) : [evalTemplate(repeat.preview, layer, fmt)])
+      .map((value) => ({ kind: "text", value }));
+    // The editing card takes the ACTIVE layer's accent — frame in that colour (so the card visually
+    // belongs to the band being edited) over a very-light tint of it. The frame colour matches the
+    // active range's band/handles exactly (same `layerColor`).
+    const accent = layerColor(idx);
+    const frame = { bg: lighten(accent, 0.9), border: accent, borderWidth: "medium" as const, radius: "small" as const };
+    const flat: MarkerWidget = {
       id,
       anchor: { lon: callout.at[0]!, lat: callout.at[1]! },
-      ...(framed ? { bg: style.text?.background ?? "#ffffff", border: ink, radius: "small" } : {}),
-      ...(framed || buttons.length ? { padding: card.pad ?? "small" } : {}),
+      ...(framed ? frame : {}),
+      ...(framed ? { padding: card.pad ?? "small" } : {}),
       font: { color: ink, size: fontPx },
-      child: { dir: "v", align: "center", items: [stack] },
-      ...(buttons.length ? { buttons } : {}),
+      child: { dir: "v", align: "center", gap: card.gap ?? 2, items: [compileLayerBody(d, listField, layer, idx, input), ...flItems] },
     };
-    return [panel, ...(satellites ? satellites(input) : [])];
+    return [flat, ...(satellites ? satellites(input) : [])];
   };
 }
 
@@ -1083,7 +1083,7 @@ export function defFromDescriptor(d: PhenomenonDescriptor): PhenomenonDef {
             return satellites && input.editable ? (satellites(input).length ? satellites(input) : null) : null;
           }
         : d.repeat
-          ? compileStackPanel(d, satellites) // the layer-stack panel (the TEMSI cloud-layer area)
+          ? compileLayerPanel(d, satellites) // the multi-layer panel (the TEMSI cloud-layer area)
           : compilePanelWidget(d, satellites)) // the panel replaces the placed call-out (areas)
     : satellites
       ? (input: WidgetInput): MarkerWidget[] | null => {
@@ -1092,9 +1092,9 @@ export function defFromDescriptor(d: PhenomenonDescriptor): PhenomenonDef {
           return cards.length ? cards : null;
         }
       : undefined;
-  // The controller reads `repeat` to route the stack's add/remove/select + keep the list sorted.
+  // The controller reads `repeat` to route the layers' add/remove/select + keep the list sorted.
   const repeat = d.repeat
-    ? { listField: d.repeat.listField, min: d.repeat.min, max: d.repeat.max, editorPlacement: d.repeat.editorPlacement ?? ("pinned" as const) }
+    ? { listField: d.repeat.listField, min: d.repeat.min, max: d.repeat.max }
     : undefined;
   // A card button with `place: "anchor"` is relocated OFF the card to the feature's arrow-tip
   // (the controller paints it there as a floating badge). Resolve its glyph once at compile time.

@@ -291,27 +291,24 @@ export interface CardSpec {
   buttons?: CardButtonSpec[];
 }
 
-// ── Repeat (a stacked list editor: the TEMSI cloud-layer area) ─────────────────
+// ── Repeat (a multi-layer list editor: the TEMSI cloud-layer area) ─────────────
 
-/** Turns a LIST field into a STACK editor (the adapter `stack` control): one layer is
- *  active/editable at a time, the others collapse to a one-line `preview`. The card's
- *  `items` describe ONE layer's body (its pickers + FL gauge), bound to the list item's
- *  fields. The lib keeps the list SORTED (highest layer on top) and re-sorts ONLY on
- *  discrete actions (add / remove / select a layer) — never mid-drag, so editing one
- *  layer's FL never reorders the others under the cursor. The unselected cartouche stacks
- *  one call-out `content` block PER layer. */
+/** Turns a LIST field into the multi-layer cloud-area editor: the PANEL shows just the ACTIVE
+ *  layer's flat card (its pickers + FL text, so 1 or N layers look identical), and the side
+ *  satellite carries ONE multi-range FL gauge — every layer's `[base, top]` band on a shared axis,
+ *  a distinct colour each, all visible/editable at once, with a `+` at each end to add a layer and
+ *  a fling-off-axis to delete one. Touching a band makes it the active (edited) layer. The lib keeps
+ *  the list SORTED (highest layer on top), re-sorting ONLY on discrete actions (add / remove /
+ *  select) — never mid-drag. The unselected cartouche stacks one call-out `content` block PER layer. */
 export interface RepeatSpec {
-  /** The LIST field whose items are the stacked layers. */
+  /** The LIST field whose items are the layers. */
   listField: string;
-  /** One-line peek TEMPLATE for a collapsed layer (`{field|format}` over the item). */
+  /** One-line peek TEMPLATE for a layer (`{field|format}` over the item). */
   preview: string;
-  /** Minimum layer count (the `−` button hides at this floor). */
+  /** Minimum layer count (the `−`/fling-delete hides at this floor). */
   min: number;
-  /** Maximum layer count (the `+` button hides at this ceiling). */
+  /** Maximum layer count (the `+` hides at this ceiling). */
   max: number;
-  /** `pinned` = a fixed editor above a read-only preview strip (drag-stable);
-   *  `inline` = the active layer unfolds in place. Default `pinned`. */
-  editorPlacement?: "pinned" | "inline";
 }
 
 export interface SatelliteSpec {

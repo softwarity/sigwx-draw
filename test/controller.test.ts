@@ -116,7 +116,9 @@ function collectPickers(node: unknown): PickerNode[] {
 }
 
 /** Walk a widget tree and collect every gauge node (FL gauges live in a satellite card now). */
-type GaugeNode = { kind?: string; cursors?: { name: string; value: number; label: string }[] };
+type Cursor = { name: string; value: number; label: string };
+type Range = { id?: string; base: Cursor; top: Cursor; color: string };
+type GaugeNode = { kind?: string; cursors?: Cursor[]; ranges?: Range[]; active?: number | string };
 function collectGauges(node: unknown): GaugeNode[] {
   if (!node || typeof node !== "object") return [];
   let out: GaugeNode[] = [];
@@ -128,21 +130,33 @@ function collectGauges(node: unknown): GaugeNode[] {
   return out;
 }
 
-/** Walk a widget tree and collect every plain-text node's `value` (no `control`, e.g. the FL line). */
-function collectTextValues(node: unknown): string[] {
-  if (!node || typeof node !== "object") return [];
-  let out: string[] = [];
-  const n = node as { kind?: string; control?: string; value?: unknown };
-  if (n.kind === "text" && n.control === undefined && typeof n.value === "string") out.push(n.value);
-  for (const v of Object.values(node as Record<string, unknown>)) {
-    if (Array.isArray(v)) for (const x of v) out = out.concat(collectTextValues(x));
-    else if (v && typeof v === "object") out = out.concat(collectTextValues(v));
-  }
-  return out;
-}
-
 const JET: [number, number][] = [[0, 0], [2, 1], [4, 0], [6, 1]];
 const POLY: [number, number][] = [[0, 0], [4, 0], [4, 4], [0, 4]];
+
+describe("handle hygiene — a layer-stack area shows NO on-path slider", () => {
+  const sliders = (a: MockAdapter): unknown[] =>
+    (a.overlays.get("handles")?.features ?? []).filter((h) => {
+      const cls = (h.properties as Record<string, unknown>)["hClass"];
+      return cls === "slider" || cls === "end"; // the jet break-point sliders
+    });
+  it("a `repeat` area (sigwxArea) draws only vertices + the arrow anchor — no `t`-parameterized slider", async () => {
+    const france = (await import("../src/profiles/temsi-france.json")).default as unknown as SigwxProfile;
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: france });
+    await s.ready();
+    stroke(s, a, "sigwxArea", POLY); // drawn ⇒ selected; its list items are FL layers, NOT path points
+    // Bug regression: the layer-stack list used to spawn a stray slider handle at the path start
+    // (item `t` defaults to 0 ⇒ vertex 0). The stack edits on the card/gauge, so: no slider.
+    expect(sliders(a)).toHaveLength(0);
+  });
+  it("a non-`repeat` list (jet) KEEPS its break-point sliders on the curve", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a });
+    await s.ready();
+    stroke(s, a, "jetStream", JET);
+    expect(sliders(a).length).toBeGreaterThan(0);
+  });
+});
 
 describe("SigwxDraw controller (draw mode)", () => {
   let adapter: MockAdapter;
@@ -213,6 +227,23 @@ describe("SigwxDraw controller (draw mode)", () => {
     expect(pts.every((p) => p.fl === 320)).toBe(true);
   });
 
+  it("coincident jet FL cursors stay clean & ordered LIB-side (label overlap is the adapter's job)", () => {
+    const id = stroke(sigwx, adapter, "jetStream", JET);
+    sigwx.selectSubItem(1);
+    const cursors = (): { name: string; value: number; label: string }[] =>
+      (adapter.widget(`${id}#gauge`)!.child.items[0] as { cursors: { name: string; value: number; label: string }[] }).cursors;
+    adapter.dragGauge(id, "points.1.speed", 220); // ⇒ 3 cursors (base / fl / top)
+    adapter.dragGauge(id, "points.1.top", 9999); // top → ceiling
+    adapter.dragGauge(id, "points.1.fl", 9999); // core dragged up to MEET top ⇒ they coincide
+    const pts = (lastMeta(sigwx)["points"] as Record<string, unknown>[])[1]!;
+    // The lib clamps to the chart ceiling and keeps base ≤ fl ≤ top — never a runaway "60000".
+    expect(pts["fl"]).toBe(600);
+    expect(pts["top"]).toBe(600);
+    // Each cursor keeps a clean ≤3-digit (or `FL###`) label even when two share a value — so a
+    // garbled on-screen number is purely the adapter overlapping two labels at the same Y.
+    for (const c of cursors()) expect(c.label.replace(/^FL/, "")).toMatch(/^\d{3}$/);
+    expect(cursors().filter((c) => c.value === 600)).toHaveLength(2); // fl + top coincide, both valid
+  });
   it("a jet break point's editor is TWO cards: a speed dial ON the point + an FL gauge beside (3 cursors past 120 kt)", () => {
     const id = stroke(sigwx, adapter, "jetStream", JET);
     expect(adapter.widget(`${id}#dial`)).toBeUndefined(); // no sub-selection → no cards
@@ -417,15 +448,28 @@ describe("SigwxDraw controller (draw mode)", () => {
   it("turbulence FL gauge (card): base drags to the off-chart (XXX) notch below the floor; flightLevel moves it live", () => {
     const id = stroke(sigwx, adapter, "turbulence", [[0, 0], [4, 0], [4, 4], [0, 4]]);
     const baseFL = (): unknown => (sigwx.save().features[0]!.properties!["metadata"] as Record<string, unknown>)["baseFL"];
-    const gauge = () => (adapter.widget(`${id}#gauge`)!.child.items[0] as { kind: string; beyond?: { below?: boolean }; cursors: { name: string; value: number; label?: string }[] });
+    const gauge = () => (adapter.widget(`${id}#gauge`)!.child.items[0] as { kind: string; beyond?: { below?: boolean }; ranges: { base: { name: string; label?: string }; top: { label?: string }; color: string }[] });
     expect(gauge().kind).toBe("gauge"); // a SATELLITE card beside the call-out carries the gauge
+    expect(gauge().ranges[0]!.base.name).toBe("baseFL"); // a draggable 1-band (ranges), feature-scoped
+    expect(gauge().ranges[0]!.color).toBe("#5f6368"); // band inked in the turbulence colour (visible, grab-able)
     expect(gauge().beyond?.below).toBe(true); // areas default to the off-chart XXX notch
     adapter.dragGauge(id, "baseFL", -99999); // way past the floor → clamps to the notch
     expect(baseFL()).toBe(245); // norm floor 250 − 5 = the off-chart notch…
-    expect(gauge().cursors[0]!.label).toBe("XXX"); // …labelled XXX on the re-rendered card
+    expect(gauge().ranges[0]!.base.label).toBe("XXX"); // …labelled XXX on the re-rendered band
     sigwx.setPhenomenonFlightLevel("turbulence", { min: 100 }); // lower the floor live
     adapter.dragGauge(id, "baseFL", -99999);
     expect(baseFL()).toBe(95); // notch follows the new floor (100 − 5)
+  });
+
+  it("a base/top area FL gauge (CB) is a draggable 1-band (ranges) inked in the phenomenon colour, band FILLED", () => {
+    const id = stroke(sigwx, adapter, "cb", [[0, 0], [4, 0], [4, 4], [0, 4]]);
+    const gauge = adapter.widget(`${id}#gauge`)!.child.items[0] as { kind: string; cursors?: unknown; ranges: { base: { name: string }; top: { name: string }; color: string; fill?: string }[] };
+    expect(gauge.kind).toBe("gauge");
+    expect(gauge.cursors).toBeUndefined(); // a draggable band, NOT two independent cursors
+    expect(gauge.ranges).toHaveLength(1);
+    expect([gauge.ranges[0]!.base.name, gauge.ranges[0]!.top.name]).toEqual(["baseFL", "topFL"]); // feature-scoped
+    expect(gauge.ranges[0]!.color).toBe("#d1242f"); // CB identity colour (style.color)
+    expect(gauge.ranges[0]!.fill).toBeUndefined(); // CB/icing keep a FILLED band (no transparent override)
   });
 
   it("turbulenceTypes extends the symbol catalogue (MOD/SEV + added), keeping MOD the default", async () => {
@@ -1192,79 +1236,16 @@ describe("sigwxArea — panel replaces the call-out (no double)", () => {
   });
 });
 
-describe("sigwxArea — cloud-layer stack (WP#173)", () => {
+describe("sigwxArea — multi-layer data & cartouche", () => {
   const loadFrance = async () => (await import("../src/profiles/temsi-france.json")).default as unknown as SigwxProfile;
-  type StackNode = { kind: string; min: number; max: number; editorPlacement?: string; items: { id: string; active: boolean; disabled: boolean; preview: unknown; body: unknown }[] };
-  const getStack = (a: MockAdapter, id: string): StackNode =>
-    (a.widget(id)!.child.items as unknown[]).find((n): n is StackNode => (n as { kind?: string }).kind === "stack")!;
   const layersOf = (s: SigwxDraw): Record<string, unknown>[] => lastMeta(s)["layers"] as Record<string, unknown>[];
-
-  it("a drawn area seeds exactly one CB layer (the descriptor default)", async () => {
-    const a = new MockAdapter();
-    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
-    await s.ready();
-    stroke(s, a, "sigwxArea", POLY);
-    const layers = layersOf(s);
-    expect(layers).toHaveLength(1);
-    expect(layers[0]).toMatchObject({ type: "CB", amount: "OCNL", baseFL: 25, topFL: 155 });
-  });
-
-  it("a SINGLE layer's selected panel has NO stack chrome — framed like the cartouche, pickers + FL line + an add-layer +", async () => {
-    const a = new MockAdapter();
-    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
-    await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY); // ONE layer by default (CB / OCNL, base 25 / top 155)
-    const panel = a.widget(id)!;
-    // No `stack` node — the adapter's blue active-editor highlight only exists inside a stack,
-    // so a lone layer carries none of it.
-    expect((panel.child.items as unknown[]).some((n) => (n as { kind?: string }).kind === "stack")).toBe(false);
-    // …but the panel IS framed (white box + ink border) like the deselected cartouche it replaces —
-    // select/deselect must not flip between boxed and bare.
-    expect(panel.bg).toBe("#ffffff");
-    expect(panel.border).toBeDefined();
-    // The amount/type pickers are still there (list-scoped), edited exactly as in the stack.
-    expect(collectPickers(panel).map((p) => p.name).sort()).toEqual(["layers.0.amount", "layers.0.type"]);
-    // The FL is shown (regression guard) and mirrors the single cartouche: top and base on their
-    // OWN lines (not a compact slash form) — here top 155 off the FL150 ceiling → "XXX", base 25 →
-    // "FL025". Each is a distinct text node so the card reads "as if there were one simple card".
-    const texts = collectTextValues(panel);
-    expect(texts).toContain("XXX");
-    expect(texts.some((t) => /^FL0?25$/.test(t))).toBe(true);
-    // An add-layer "+" rides the panel edge so a 2nd layer can still be added (→ the stack).
-    expect((panel.buttons ?? []).some((b) => b.event === "addLayer")).toBe(true);
-  });
-
-  it("≥2 layers render the adapter layer stack carrying the profile min/max", async () => {
-    const a = new MockAdapter();
-    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
-    await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY);
-    a.actionWidget(id, "addLayer"); // → 2 layers ⇒ the stack appears
-    const stack = getStack(a, id);
-    expect(stack.kind).toBe("stack");
-    expect({ min: stack.min, max: stack.max }).toEqual({ min: 1, max: 4 });
-    expect(stack.items).toHaveLength(2);
-    expect(stack.items.find((it) => it.active)!.disabled).toBe(true); // active item not re-selectable
-  });
-
-  it("addLayer appends a CB layer (per-type FL defaults), selects it, and honours max:4", async () => {
-    const a = new MockAdapter();
-    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
-    await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY);
-    for (let i = 0; i < 3; i++) a.actionWidget(id, "addLayer");
-    expect(layersOf(s)).toHaveLength(4);
-    expect(layersOf(s).every((l) => l["type"] === "CB" && l["baseFL"] === 25 && l["topFL"] === 155)).toBe(true);
-    a.actionWidget(id, "addLayer"); // past max:4 → no-op
-    expect(layersOf(s)).toHaveLength(4);
-  });
 
   it("removeLayer keeps at least min:1", async () => {
     const a = new MockAdapter();
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
     await s.ready();
     const id = stroke(s, a, "sigwxArea", POLY);
-    a.actionWidget(id, "removeLayer:0"); // only layer → floored at min:1
+    a.actionWidget(id, "removeLayer:0"); // only layer -> floored at min:1
     expect(layersOf(s)).toHaveLength(1);
     a.actionWidget(id, "addLayer");
     expect(layersOf(s)).toHaveLength(2);
@@ -1272,18 +1253,18 @@ describe("sigwxArea — cloud-layer stack (WP#173)", () => {
     expect(layersOf(s)).toHaveLength(1);
   });
 
-  it("a list-scoped FL edit clamps to 5-FL steps and keeps base ≤ top", async () => {
+  it("a list-scoped FL edit clamps to 5-FL steps and keeps base <= top", async () => {
     const a = new MockAdapter();
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
     await s.ready();
     const id = stroke(s, a, "sigwxArea", POLY);
-    a.dragGauge(id, "layers.0.topFL", 73); // → 75 (5-FL step)
+    a.dragGauge(id, "layers.0.topFL", 73); // -> 75 (5-FL step)
     expect(layersOf(s)[0]!["topFL"]).toBe(75);
-    a.dragGauge(id, "layers.0.baseFL", 120); // base can't pass the top → clamps to 75
+    a.dragGauge(id, "layers.0.baseFL", 120); // base can't pass the top -> clamps to 75
     expect(layersOf(s)[0]!["baseFL"]).toBe(75);
   });
 
-  it("changing a layer's type resets its amount via optionsBy (CB → cloud amounts)", async () => {
+  it("changing a layer's type resets its amount via optionsBy (CB -> cloud amounts)", async () => {
     const a = new MockAdapter();
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
     await s.ready();
@@ -1291,20 +1272,7 @@ describe("sigwxArea — cloud-layer stack (WP#173)", () => {
     expect(layersOf(s)[0]!["amount"]).toBe("OCNL"); // a CB amount
     a.editWidget(id, "SC", "layers.0.type");
     expect(layersOf(s)[0]!["type"]).toBe("SC");
-    expect(layersOf(s)[0]!["amount"]).toBe("FEW"); // OCNL invalid for non-CB → first cloud amount
-  });
-
-  it("re-sorts the stack highest-on-top on (re)selection, frozen during a drag", async () => {
-    const a = new MockAdapter();
-    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
-    await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY);
-    a.actionWidget(id, "addLayer"); // 2 CB layers, both 25/155
-    a.dragGauge(id, "layers.0.topFL", 50); // a drag does NOT re-sort…
-    a.dragGauge(id, "layers.1.topFL", 100);
-    expect(layersOf(s).map((l) => l["topFL"])).toEqual([50, 100]); // …stored order unchanged
-    s.select(id); // (re)selection re-sorts highest-on-top
-    expect(layersOf(s).map((l) => l["topFL"])).toEqual([100, 50]);
+    expect(layersOf(s)[0]!["amount"]).toBe("FEW"); // OCNL invalid for non-CB -> first cloud amount
   });
 
   it("the rest cartouche stacks one line per layer (qty type top/base)", async () => {
@@ -1313,7 +1281,7 @@ describe("sigwxArea — cloud-layer stack (WP#173)", () => {
     await s.ready();
     const id = stroke(s, a, "sigwxArea", POLY);
     a.actionWidget(id, "addLayer"); // 2 layers
-    s.select(null); // deselect → the canvas cartouche renders (panel no longer replaces it)
+    s.select(null); // deselect -> the canvas cartouche renders (panel no longer replaces it)
     const box = (a.overlays.get("text-boxes")?.features ?? []).find((f) => f.properties?.["featureId"] === id);
     expect(box).toBeDefined();
     const text = String(box!.properties!["text"] ?? "");
@@ -1325,7 +1293,7 @@ describe("sigwxArea — cloud-layer stack (WP#173)", () => {
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
     await s.ready();
     const id = stroke(s, a, "sigwxArea", POLY); // ONE layer by default (CB / OCNL)
-    s.select(null); // deselect → the canvas cartouche renders
+    s.select(null); // deselect -> the canvas cartouche renders
     const box = (a.overlays.get("text-boxes")?.features ?? []).find((f) => f.properties?.["featureId"] === id);
     expect(box).toBeDefined();
     const lines = String(box!.properties!["text"] ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
@@ -1334,60 +1302,203 @@ describe("sigwxArea — cloud-layer stack (WP#173)", () => {
     expect(lines[1]).toBe("CB"); // type on its own line
     expect(lines[2]).toMatch(/^(FL\d{3}|XXX)$/); // top
     expect(lines[3]).toMatch(/^(FL\d{3}|XXX)$/); // base
-    expect(lines.some((l) => /OCNL.*CB/.test(l))).toBe(false); // NOT the compact "OCNL CB …/…" line
+    expect(lines.some((l) => /OCNL.*CB/.test(l))).toBe(false); // NOT the compact "OCNL CB .../..." line
   });
 
-  it("the FL gauge is a side satellite scoped to the active layer (not inline in the stack body)", async () => {
-    const a = new MockAdapter();
-    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
-    await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY);
-    // The panel body carries the pickers but NO gauge — it moved out to keep the card narrow.
-    expect(collectGauges(a.widget(id)!)).toHaveLength(0);
-    // …it lives in a side satellite `#gauge`, list-scoped to the active (top) layer.
-    const sat = a.widget(`${id}#gauge`);
-    expect(sat).toBeDefined();
-    const gauge = collectGauges(sat!)[0]!;
-    expect(gauge.cursors?.map((c) => c.name)).toEqual(["layers.0.baseFL", "layers.0.topFL"]);
-    // …and pushed clear of the (wider) stack panel — further out than a plain call-out gauge (−1.0).
-    const ox = (sat!.origin as { x: number }).x;
-    expect(ox).toBeLessThan(-1);
-  });
-
-  it("selecting another layer re-binds the satellite gauge to it", async () => {
-    const a = new MockAdapter();
-    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
-    await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY);
-    a.actionWidget(id, "addLayer"); // 2 layers
-    a.actionWidget(id, "selectLayer:0");
-    expect(collectGauges(a.widget(`${id}#gauge`)!)[0]!.cursors?.map((c) => c.name)).toEqual(["layers.0.baseFL", "layers.0.topFL"]);
-    a.actionWidget(id, "selectLayer:1");
-    expect(collectGauges(a.widget(`${id}#gauge`)!)[0]!.cursors?.map((c) => c.name)).toEqual(["layers.1.baseFL", "layers.1.topFL"]);
-  });
-
-  it("the folded layer preview shows the FL only (no amount/type) to keep the card narrow", async () => {
-    const a = new MockAdapter();
-    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
-    await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY);
-    a.actionWidget(id, "addLayer"); // ≥2 layers ⇒ a folded preview exists
-    const preview = String(getStack(a, id).items.find((it) => !it.active)!.preview);
-    expect(preview).not.toMatch(/CB|OCNL/);             // no amount/type…
-    expect(preview).toMatch(/^FL(\d{3}|XXX)\/(\d{3}|XXX)$/); // …`FL` once, then base/top (seed → FL025/XXX)
-  });
-
-  it("EUROC restricts cloud amounts to BKN/OVC and caps the stack at max:3", async () => {
+  it("EUROC restricts a non-CB layer's cloud amounts to BKN/OVC (optionsBy reset)", async () => {
     const a = new MockAdapter();
     const profile = (await import("../src/profiles/temsi-euroc.json")).default as unknown as SigwxProfile;
     const s = new SigwxDraw({ adapter: a, profile });
     await s.ready();
     const id = stroke(s, a, "sigwxArea", POLY);
-    a.actionWidget(id, "addLayer"); // → 2 layers ⇒ the stack appears (single layer renders bare)
-    expect(getStack(a, id).max).toBe(3);
     a.editWidget(id, "SC", "layers.0.type"); // a non-CB layer
     const amount = collectPickers(a.widget(id)!).find((p) => p.name === "layers.0.amount")!;
     expect(amount.options?.map((o) => o.value)).toEqual(["BKN", "OVC"]);
     expect(layersOf(s)[0]!["amount"]).toBe("BKN"); // OCNL reset to the first valid amount
   });
+});
+
+describe("sigwxArea — multi-layer GAUGES editor (one gauge per layer, panel = active layer)", () => {
+  const loadFrance = async () => (await import("../src/profiles/temsi-france.json")).default as unknown as SigwxProfile;
+  const layersOf = (s: SigwxDraw): Record<string, unknown>[] => lastMeta(s)["layers"] as Record<string, unknown>[];
+  const hasStack = (a: MockAdapter, id: string): boolean =>
+    (a.widget(id)!.child.items as unknown[]).some((n) => (n as { kind?: string }).kind === "stack");
+
+  it("the selected panel is ALWAYS the flat active-layer card — never the adapter `stack`, even with N layers", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY); // 1 layer
+    expect(hasStack(a, id)).toBe(false);
+    expect(collectGauges(a.widget(id)!)).toHaveLength(0); // gauges live in the satellite, not the panel
+    a.actionWidget(id, "addLayer"); // 2 layers — the stack editor would switch to a `stack` here
+    a.actionWidget(id, "addLayer"); // 3 layers
+    expect(hasStack(a, id)).toBe(false); // …the gauges editor stays flat
+    // The panel pickers belong to ONE (the active) layer — not a per-layer pile.
+    const names = collectPickers(a.widget(id)!).map((p) => p.name).sort();
+    expect(names).toHaveLength(2);
+    expect(names.every((n) => /^layers\.\d+\.(amount|type)$/.test(n!))).toBe(true);
+    expect(new Set(names.map((n) => n!.split(".")[1])).size).toBe(1); // both scoped to the SAME layer index
+  });
+
+  it("the side satellite carries ONE multi-range gauge — N overlapping bands on a shared axis, one colour per layer, `canAdd` below max", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY);
+    a.actionWidget(id, "addLayer");
+    a.actionWidget(id, "addLayer"); // 3 layers
+    const sat = a.widget(`${id}#gauge`)!;
+    const gauges = collectGauges(sat);
+    expect(gauges).toHaveLength(1); // ONE gauge, N ranges (shared axis)
+    const gauge = gauges[0]!;
+    expect(gauge.ranges).toHaveLength(3); // one range per layer
+    expect(gauge.cursors).toBeUndefined(); // ranges mode, not cursors
+    expect(gauge.ranges!.map((r) => [r.base.name, r.top.name])).toEqual([
+      ["layers.0.baseFL", "layers.0.topFL"],
+      ["layers.1.baseFL", "layers.1.topFL"],
+      ["layers.2.baseFL", "layers.2.topFL"],
+    ]);
+    // each layer's band + handles take a DISTINCT colour (so overlapping ranges read apart).
+    const colors = gauge.ranges!.map((r) => r.color);
+    expect(colors.every((c) => typeof c === "string" && c.length > 0)).toBe(true);
+    expect(new Set(colors).size).toBe(3);
+    // adding a layer is the adapter's hover-`+` (an "add here" over an empty axis span emitting
+    // `addLayerAt:<fl>`), GATED by the gauge's `canAdd` (true below max). No fixed axis buttons ride
+    // the satellite or the panel anymore.
+    expect((gauge as { canAdd?: boolean }).canAdd).toBe(true);
+    expect(sat.buttons ?? []).toHaveLength(0);
+    expect(a.widget(id)!.buttons ?? []).toHaveLength(0);
+  });
+
+  it("the multi-range track length is STABLE — independent of the chart's FL extent (the ticks absorb it, not the slider)", async () => {
+    const loadEuroc = async () => (await import("../src/profiles/temsi-euroc.json")).default as unknown as SigwxProfile;
+    const lengthFor = async (profile: SigwxProfile) => {
+      const a = new MockAdapter();
+      const s = new SigwxDraw({ adapter: a, profile });
+      await s.ready();
+      const id = stroke(s, a, "sigwxArea", POLY);
+      return collectGauges(a.widget(`${id}#gauge`)!)[0]!.length;
+    };
+    const franceLen = await lengthFor(await loadFrance()); // ground→FL150 (narrow extent)
+    const eurocLen = await lengthFor(await loadEuroc()); //   ground→FL450 (3× the extent)
+    expect(franceLen).toBe(eurocLen); // same slider size despite very different FL ranges
+    expect(franceLen).toBe(230); // ~3× the editor card (GAUGE_STACK_LENGTH), NOT (max-min)*0.5
+  });
+
+  it("touching a layer's gauge makes it the active (edited) layer — the panel pickers follow", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY);
+    a.actionWidget(id, "addLayer"); // 2 layers
+    a.dragGauge(id, "layers.1.topFL", 90); // touch layer 1's band → it becomes active
+    expect(collectPickers(a.widget(id)!).map((p) => p.name).sort()).toEqual(["layers.1.amount", "layers.1.type"]);
+    expect(collectGauges(a.widget(`${id}#gauge`)!)[0]!.active).toBe(1); // active range = touched layer (rendered on top)
+    a.dragGauge(id, "layers.0.topFL", 90); // touch layer 0's band → the panel syncs back to 0
+    expect(collectPickers(a.widget(id)!).map((p) => p.name).sort()).toEqual(["layers.0.amount", "layers.0.type"]);
+    expect(collectGauges(a.widget(`${id}#gauge`)!)[0]!.active).toBe(0);
+  });
+
+  it("the editing card is framed in the ACTIVE layer's accent colour over a very-light tint of it", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY);
+    a.actionWidget(id, "addLayer"); // 2 layers
+    const panel = () => a.widget(id)! as unknown as { border?: string; bg?: string };
+    const gaugeColor = (i: number) => collectGauges(a.widget(`${id}#gauge`)!)[0]!.ranges![i]!.color;
+    // layer 0 active by default → frame in its colour; bg is a pale (mostly-white) tint of it.
+    a.dragGauge(id, "layers.0.topFL", 90); // make 0 active
+    expect(panel().border).toBe(gaugeColor(0)); // frame == active range colour
+    expect(panel().bg).toMatch(/^#f/i); // very-light tint (near white)
+    expect(panel().bg).not.toBe(gaugeColor(0));
+    // touch layer 1 → both the frame AND the band colour switch together.
+    a.dragGauge(id, "layers.1.topFL", 90);
+    expect(panel().border).toBe(gaugeColor(1));
+    expect(gaugeColor(1)).not.toBe(gaugeColor(0)); // distinct per layer
+  });
+
+  it("a hover-`+` add (`addLayerAt:<fl>`) seeds a layer; `canAdd` flips false at max:4", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY);
+    const canAdd = () => (collectGauges(a.widget(`${id}#gauge`)!)[0] as { canAdd?: boolean }).canAdd;
+    expect(canAdd()).toBe(true);
+    for (let i = 0; i < 3; i++) a.actionWidget(`${id}#gauge`, "addLayerAt:70"); // → 4 layers (max)
+    expect(layersOf(s)).toHaveLength(4);
+    expect(canAdd()).toBe(false); // at the ceiling no further add is offered
+    a.actionWidget(`${id}#gauge`, "addLayerAt:70"); // past max → no-op
+    expect(layersOf(s)).toHaveLength(4);
+  });
+
+  it("the FIRST layer is CENTRED on the FL range; a hover-`+` (`addLayerAt:<fl>`) drops a band CENTRED on the hovered FL", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() }); // range 0–150, max:4
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY);
+    const band = (l: Record<string, unknown>): [number, number] => [l["baseFL"] as number, l["topFL"] as number];
+    // one layer ⇒ a 1/max-tall slice (150/4 = 37.5 → 40) CENTRED on the axis (mid 75 ⇒ [55,95]).
+    expect(layersOf(s).map(band)).toEqual([[55, 95]]);
+    // addLayerAt:<fl> → a 40-tall band CENTRED on the snapped FL, clamped wholly inside the range.
+    a.actionWidget(`${id}#gauge`, "addLayerAt:120"); // centred on 120 → [100,140]
+    expect(layersOf(s).map(band)).toContainEqual([100, 140]);
+    a.actionWidget(`${id}#gauge`, "addLayerAt:20"); // near the floor → shifts inside → [0,40]
+    expect(layersOf(s).map(band)).toContainEqual([0, 40]);
+  });
+
+  it("the editing control stays put when a layer is added/removed (call-out frozen at selection)", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY); // drawn ⇒ selected ⇒ call-out offset frozen
+    // The gauge + panel both ride the placed call-out (`anchor`). A growing cartouche used to widen
+    // the box and slide its centre sideways on every add; the freeze keeps the anchor fixed.
+    const gaugeAt = (): unknown => JSON.stringify(a.widget(`${id}#gauge`)!.anchor);
+    const panelAt = (): unknown => JSON.stringify(a.widget(id)!.anchor);
+    const g0 = gaugeAt();
+    const p0 = panelAt();
+    a.actionWidget(`${id}#gauge`, "addLayer"); // 2 layers — cartouche grows a line
+    a.actionWidget(`${id}#gauge`, "addLayer"); // 3 layers
+    expect(gaugeAt()).toBe(g0);
+    expect(panelAt()).toBe(p0);
+    a.actionWidget(`${id}#gauge`, "removeRange:0:0"); // drop one back
+    expect(gaugeAt()).toBe(g0);
+  });
+
+  it("a hover-`+` can add a band IN A GAP (mid-axis, not just at the ends)", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() }); // range 0–150, max:4
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY); // 1 layer CENTRED: [55,95]
+    const band = (l: Record<string, unknown>): [number, number] => [l["baseFL"] as number, l["topFL"] as number];
+    a.actionWidget(`${id}#gauge`, "addLayerAt:130"); // a band up high → [110,150]
+    a.actionWidget(`${id}#gauge`, "addLayerAt:20"); //  one down low  → [0,40] (a gap stays at [40,55] & [95,110])
+    expect(layersOf(s).map(band)).toEqual([[110, 150], [55, 95], [0, 40]]); // sorted top-first, gaps are fine
+  });
+
+  it("a band flung off the axis (`removeRange:<i>`) drops THAT layer; survivors keep their FL; min-1 guarded", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() }); // range 0–150, max:4, min:1
+    await s.ready();
+    const id = stroke(s, a, "sigwxArea", POLY); // [55,95]
+    a.actionWidget(`${id}#gauge`, "addLayer"); // [95,135] (generic add, stacks on top)
+    a.actionWidget(`${id}#gauge`, "addLayerAt:35"); // [15,55] (hover-add centred low)
+    const band = (l: Record<string, unknown>): [number, number] => [l["baseFL"] as number, l["topFL"] as number];
+    expect(layersOf(s).map(band)).toEqual([[95, 135], [55, 95], [15, 55]]);
+    // fling the MIDDLE band off the axis ⇒ only it goes; the other two keep their FL (NO re-slice ⇒ a gap is fine).
+    // (the adapter emits `removeRange:<idx>:<rangeId>` — the lib parses the leading index, ignoring the id suffix.)
+    a.actionWidget(`${id}#gauge`, "removeRange:1:1");
+    expect(layersOf(s).map(band)).toEqual([[95, 135], [15, 55]]);
+    // flinging down to the last layer is REFUSED (min:1): the lone survivor stays put.
+    a.actionWidget(`${id}#gauge`, "removeRange:0:0");
+    expect(layersOf(s)).toHaveLength(1);
+    a.actionWidget(`${id}#gauge`, "removeRange:0:0"); // last one — guarded, no-op
+    expect(layersOf(s)).toHaveLength(1);
+  });
+
+  // (Per-END room gating — "nothing fits above the ceiling" — moved to the adapter: its hover-`+`
+  // only appears over an EMPTY axis span, so the lib no longer pre-computes top/bottom availability.
+  // The lib's only gate is `canAdd` at `repeat.max`, covered above.)
 });
