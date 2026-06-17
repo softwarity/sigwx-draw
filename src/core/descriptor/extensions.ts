@@ -114,6 +114,13 @@ registerExtensions({
     // Engine actions: the widget EVENT the controller already routes.
     draw_and_link: "draw-more",
     erase: "erase",
+    // Inert placeholder: a card button that emits an event the controller ignores
+    // (used for "show the button now, wire its behaviour later").
+    noop: "noop",
+    // Zone-level composite add/focus (the non-convective cloud's icing/turbulence): the controller
+    // creates the `metadata[key]` sub-object (if absent) and focuses its glued card. `composite:<key>`.
+    addIcing: "composite:icing",
+    addTurb: "composite:turb",
   },
   formats: {
     /** `FLnnn` (pad-3). */

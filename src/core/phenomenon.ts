@@ -298,6 +298,11 @@ export interface PhenomenonDef {
    *  The controller emits it at the selected area's primary arrow tip (where the leader points),
    *  firing `event` via `onWidgetAction`. `draw_and_link` → re-enter draw to append another area. */
   anchorButton?: { event: string; svg: string; title?: string };
+  /** Zone-level composites (the non-convective cloud's icing/turbulence): each `{ key, ref, place }`
+   *  stores a `{ symbol, baseFL, topFL }` sub-object at `metadata[key]`, edited on its own card
+   *  (glued above/below the zone card) reusing the `ref` phenomenon's def. Set from descriptor
+   *  `composites`. */
+  composites?: { key: string; ref: string; place: "top" | "bottom" }[];
 }
 
 // ── Registry ─────────────────────────────────────────────────────────────────

@@ -261,7 +261,7 @@ export interface CardItemSpec {
 export interface CardButtonSpec {
   /** Card-edge slot, OR `"anchor"` = relocate the button OFF the card to the feature's
    *  arrow-tip anchor (a floating badge on the map, emitted by the controller). */
-  place: "left" | "right" | "h-edges" | "anchor";
+  place: "left" | "right" | "h-edges" | "top" | "bottom" | "anchor";
   /** Named action: `draw_and_link`, `erase`, `delete`, `detach`… (+ host-registered). */
   action: string;
   svg?: GlyphRef;
@@ -311,6 +311,18 @@ export interface RepeatSpec {
   max: number;
 }
 
+/** A zone-level composite (the non-convective cloud's icing / turbulence). Its data lives at
+ *  `metadata[key]` ({ symbol, baseFL, topFL }); its editing card/picker/gauge are those of the
+ *  referenced stock phenomenon (`ref`), glued to the zone card on the given `place`. */
+export interface CompositeSpec {
+  /** Metadata sub-object key (`"icing"` / `"turb"`). */
+  key: string;
+  /** Registry type whose fields/card/style this composite reuses (`"icing"` / `"turbulence"`). */
+  ref: string;
+  /** Which edge of the zone card its own card glues to. */
+  place: "top" | "bottom";
+}
+
 export interface SatelliteSpec {
   /** Card id suffix (`featureId#part`) — engine-routed. */
   part: string;
@@ -349,6 +361,11 @@ export interface PhenomenonDescriptor {
    *  describes ONE layer's body, edited as the adapter `stack` control. */
   repeat?: RepeatSpec;
   satellites?: SatelliteSpec[];
+  /** Optional zone-level COMPOSITES (the non-convective cloud's icing/turbulence): each is a
+   *  symbol+FL sub-object stored at `metadata[key]`, edited on its OWN card glued to the zone card
+   *  (icing above, turb below). Its fields/picker/gauge REUSE the referenced phenomenon's
+   *  descriptor (`ref` → the stock `icing`/`turbulence` def), so there's no data duplication. */
+  composites?: CompositeSpec[];
   /** Plain JSON style (the same shape host overrides patch). */
   style: PhenomenonStyle;
   /** One-line summary TEMPLATE (`{field|format}`). */

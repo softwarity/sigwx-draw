@@ -688,13 +688,22 @@ function compileSatellites(d: PhenomenonDescriptor): ((input: WidgetInput) => Ma
       // The gauge sits a hair's gap beside its anchor card. A multi-layer area's panel is now the same
       // flat card as a simple area (the wide layer-stack is gone), so it uses the SAME offset.
       const sideX = sat.side === "center" ? undefined : SIDE_X[sat.anchor];
+      // A CALL-OUT satellite (the FL gauge beside an area/composite panel) glues to that panel's
+      // MEASURED right edge via `anchorTo` (exact hair-gap, re-snapped on resize) — keeping its
+      // FL-pinned vertical position on the cross axis (`origin.y`). Other satellites (the jet's
+      // break-point dial/gauge, geometry-mid labels) keep the legacy self-relative origin offset.
+      const anchorTo = sat.anchor === "callout" && sideX !== undefined ? { id, side: "right" as const, gap: 2 } : undefined;
       // Adding a layer is the adapter's HOVER-`+`: hovering an empty span of the axis offers an
       // "add here" `+` that emits `addLayerAt:<fl>` (gated by the gauge's `canAdd`). No fixed
       // axis-end buttons here anymore.
       cards.push({
         id: `${id}#${sat.part}`,
         anchor: { lon: at[0]!, lat: at[1]! },
-        ...(sideX !== undefined ? { origin: { x: sideX, y: yPin ?? 0.5 } } : {}),
+        ...(anchorTo
+          ? { anchorTo, origin: { x: 0.5, y: yPin ?? 0.5 } }
+          : sideX !== undefined
+            ? { origin: { x: sideX, y: yPin ?? 0.5 } }
+            : {}),
         child: { dir: "v", items },
       });
     }
@@ -715,7 +724,7 @@ function compilePanelWidget(d: PhenomenonDescriptor, satellites: ((input: Widget
     .filter((b) => b.place !== "anchor")
     .map((b) => ({
       event: getAction(b.action),
-      place: b.place as "left" | "right" | "h-edges",
+      place: b.place as "left" | "right" | "h-edges" | "top" | "bottom",
       svg: resolveGlyph(b.svg ?? (b.action === "erase" ? "atlas:minus" : "atlas:plus")),
       bordered: true,
       ...(b.title !== undefined ? { title: b.title } : {}),
@@ -872,6 +881,18 @@ function compileLayerPanel(
   const r = d.render as RenderSpec | undefined;
   const inkOf = compileInk(r?.ink);
   const framed = card.framed !== false;
+  // Card-edge buttons (everything but the `place:"anchor"` draw, which the controller relocates
+  // to the arrow-tip): the layer panel carries them too — e.g. the non-convective cloud's
+  // icing(top)/turbulence(bottom) composite buttons.
+  const buttons = (card.buttons ?? [])
+    .filter((b) => b.place !== "anchor")
+    .map((b) => ({
+      event: getAction(b.action),
+      place: b.place as "left" | "right" | "h-edges" | "top" | "bottom",
+      svg: resolveGlyph(b.svg ?? (b.action === "erase" ? "atlas:minus" : "atlas:plus")),
+      bordered: true,
+      ...(b.title !== undefined ? { title: b.title } : {}),
+    }));
 
   return (input: WidgetInput): MarkerWidget[] | null => {
     const { id, metadata, editable, style, callout } = input;
@@ -905,6 +926,7 @@ function compileLayerPanel(
       ...(framed ? { padding: card.pad ?? "small" } : {}),
       font: { color: ink, size: fontPx },
       child: { dir: "v", align: "center", gap: card.gap ?? 2, items: [compileLayerBody(d, listField, layer, idx, input), ...flItems] },
+      ...(buttons.length ? { buttons } : {}),
     };
     return [flat, ...(satellites ? satellites(input) : [])];
   };
@@ -1102,5 +1124,5 @@ export function defFromDescriptor(d: PhenomenonDescriptor): PhenomenonDef {
   const anchorButton = anchorBtnSpec
     ? { event: getAction(anchorBtnSpec.action), svg: resolveGlyph(anchorBtnSpec.svg ?? "atlas:plus"), ...(anchorBtnSpec.title !== undefined ? { title: anchorBtnSpec.title } : {}) }
     : undefined;
-  return { ...base, decorate, ...(widget ? { widget } : {}), ...(movableLabel ? { movableLabel } : {}), ...(repeat ? { repeat } : {}), ...(anchorButton ? { anchorButton } : {}) };
+  return { ...base, decorate, ...(widget ? { widget } : {}), ...(movableLabel ? { movableLabel } : {}), ...(repeat ? { repeat } : {}), ...(anchorButton ? { anchorButton } : {}), ...(d.composites ? { composites: d.composites } : {}) };
 }

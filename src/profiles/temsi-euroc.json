@@ -12,8 +12,9 @@
   "objects": [
     {
       "schemaVersion": 1,
-      "type": "sigwxArea",
-      "label": "Zone de temps significatif",
+      "type": "cloudConvective",
+      "label": "Nuage convectif",
+      "icon": "atlas:cb",
       "gesture": {
         "primitive": "polygon",
         "draw": "lasso",
@@ -43,14 +44,6 @@
               "label": "Type de nuage",
               "default": "CB",
               "options": [
-                { "value": "CI", "label": "Cirrus", "meta": { "baseFL": 250, "topFL": 350 } },
-                { "value": "CC", "label": "Cirrocumulus", "meta": { "baseFL": 250, "topFL": 350 } },
-                { "value": "CS", "label": "Cirrostratus", "meta": { "baseFL": 250, "topFL": 350 } },
-                { "value": "AC", "label": "Altocumulus", "meta": { "baseFL": 80, "topFL": 150 } },
-                { "value": "AS", "label": "Altostratus", "meta": { "baseFL": 80, "topFL": 150 } },
-                { "value": "NS", "label": "Nimbostratus", "meta": { "baseFL": 80, "topFL": 150 } },
-                { "value": "SC", "label": "Stratocumulus", "meta": { "baseFL": 10, "topFL": 50 } },
-                { "value": "ST", "label": "Stratus", "meta": { "baseFL": 10, "topFL": 50 } },
                 { "value": "CU", "label": "Cumulus", "meta": { "baseFL": 25, "topFL": 80 } },
                 { "value": "CB", "label": "Cumulonimbus", "meta": { "baseFL": 25, "topFL": 455 } }
               ]
@@ -150,6 +143,188 @@
             "action": "draw_and_link",
             "svg": "atlas:draw",
             "title": "Ajouter une aire"
+          }
+        ]
+      },
+      "satellites": [
+        {
+          "part": "gauge",
+          "anchor": "callout",
+          "pin": "flRef",
+          "side": "right",
+          "items": [
+            {
+              "gauge": {
+                "cursors": [
+                  "baseFL",
+                  "topFL"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "repeat": {
+        "listField": "layers",
+        "preview": "FL{baseFL|flxn:base}/{topFL|flxn:top}",
+        "min": 1,
+        "max": 3
+      },
+      "style": {
+        "color": "#d1242f",
+        "edge": {
+          "width": 2,
+          "decorator": "scallop"
+        },
+        "area": {
+          "color": "#d1242f",
+          "opacity": 0.12
+        },
+        "text": {
+          "halo": "#ffffff",
+          "size": 13
+        }
+      },
+      "summary": "SW area · top FL{layers|maxof:topFL}"
+    },
+    {
+      "schemaVersion": 1,
+      "type": "cloudNonConvective",
+      "label": "Nuage non-convectif",
+      "icon": "atlas:sigwxArea",
+      "composites": [
+        { "key": "icing", "ref": "icing", "place": "top" },
+        { "key": "turb", "ref": "turbulence", "place": "bottom" }
+      ],
+      "gesture": {
+        "primitive": "polygon",
+        "draw": "lasso",
+        "smooth": true,
+        "multiArea": true,
+        "erasable": true,
+        "default": "regular-polygon"
+      },
+      "fields": [
+        {
+          "key": "layers",
+          "kind": "list",
+          "label": "Couches nuageuses",
+          "itemLabel": "{amount} {type}",
+          "default": [
+            {
+              "type": "AS",
+              "amount": "BKN",
+              "baseFL": 80,
+              "topFL": 150
+            }
+          ],
+          "item": [
+            {
+              "key": "type",
+              "kind": "enum",
+              "label": "Type de nuage",
+              "default": "AS",
+              "options": [
+                { "value": "CI", "label": "Cirrus", "meta": { "baseFL": 250, "topFL": 350 } },
+                { "value": "CC", "label": "Cirrocumulus", "meta": { "baseFL": 250, "topFL": 350 } },
+                { "value": "CS", "label": "Cirrostratus", "meta": { "baseFL": 250, "topFL": 350 } },
+                { "value": "AC", "label": "Altocumulus", "meta": { "baseFL": 80, "topFL": 150 } },
+                { "value": "AS", "label": "Altostratus", "meta": { "baseFL": 80, "topFL": 150 } },
+                { "value": "NS", "label": "Nimbostratus", "meta": { "baseFL": 80, "topFL": 150 } },
+                { "value": "SC", "label": "Stratocumulus", "meta": { "baseFL": 10, "topFL": 50 } },
+                { "value": "ST", "label": "Stratus", "meta": { "baseFL": 10, "topFL": 50 } }
+              ]
+            },
+            {
+              "key": "amount",
+              "kind": "enum",
+              "label": "Quantité",
+              "default": "BKN",
+              "options": [
+                { "value": "BKN", "label": "BKN — 5-7/8" },
+                { "value": "OVC", "label": "OVC — 8/8" }
+              ]
+            },
+            {
+              "key": "baseFL",
+              "kind": "fl",
+              "label": "Base",
+              "default": 80
+            },
+            {
+              "key": "topFL",
+              "kind": "fl",
+              "label": "Top",
+              "default": 150
+            }
+          ]
+        }
+      ],
+      "flBeyond": [
+        "xxx",
+        "xxx"
+      ],
+      "render": {
+        "edge": {
+          "treatment": "scallop",
+          "width": 2
+        },
+        "fill": {
+          "opacity": 0.12
+        },
+        "callout": {
+          "anchor": "largest-area-centroid",
+          "leader": "straight",
+          "arrow": true,
+          "box": true,
+          "content": [
+            "{amount} {type} {baseFL|flx:base}/{topFL|flx:top}"
+          ],
+          "contentSingle": [
+            "{amount}",
+            "{type}",
+            "{topFL|flx:top}",
+            "{baseFL|flx:base}"
+          ]
+        }
+      },
+      "card": {
+        "framed": true,
+        "pad": "large",
+        "origin": "bottom",
+        "gap": 2,
+        "items": [
+          {
+            "picker": {
+              "field": "amount",
+              "label": "{value}"
+            }
+          },
+          {
+            "picker": {
+              "field": "type",
+              "label": "{value}"
+            }
+          }
+        ],
+        "buttons": [
+          {
+            "place": "anchor",
+            "action": "draw_and_link",
+            "svg": "atlas:draw",
+            "title": "Ajouter une aire"
+          },
+          {
+            "place": "top",
+            "action": "addIcing",
+            "svg": "atlas:icingMod",
+            "title": "Ajouter du givrage"
+          },
+          {
+            "place": "bottom",
+            "action": "addTurb",
+            "svg": "atlas:turbulenceMod",
+            "title": "Ajouter de la turbulence"
           }
         ]
       },
@@ -1433,7 +1608,8 @@
     "tropopause",
     "zeroIsotherm",
     "pressureCentre",
-    "sigwxArea",
+    "cloudConvective",
+    "cloudNonConvective",
     "icing",
     "turbulence",
     {
@@ -1469,6 +1645,8 @@
     "cb": "buttons/cb.svg",
     "draw": "buttons/draw.svg",
     "icing": "buttons/icing.svg",
+    "icingMod": "buttons/icingMod.svg",
+    "turbulenceMod": "buttons/turbulenceMod.svg",
     "jetStream": "buttons/jetStream.svg",
     "radioactive": "buttons/radioactive.svg",
     "tc-nh": "buttons/tc-nh.svg",

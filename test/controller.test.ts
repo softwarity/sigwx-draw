@@ -139,12 +139,12 @@ describe("handle hygiene — a layer-stack area shows NO on-path slider", () => 
       const cls = (h.properties as Record<string, unknown>)["hClass"];
       return cls === "slider" || cls === "end"; // the jet break-point sliders
     });
-  it("a `repeat` area (sigwxArea) draws only vertices + the arrow anchor — no `t`-parameterized slider", async () => {
+  it("a `repeat` area (cloudConvective) draws only vertices + the arrow anchor — no `t`-parameterized slider", async () => {
     const france = (await import("../src/profiles/temsi-france.json")).default as unknown as SigwxProfile;
     const a = new MockAdapter();
     const s = new SigwxDraw({ adapter: a, profile: france });
     await s.ready();
-    stroke(s, a, "sigwxArea", POLY); // drawn ⇒ selected; its list items are FL layers, NOT path points
+    stroke(s, a, "cloudConvective", POLY); // drawn ⇒ selected; its list items are FL layers, NOT path points
     // Bug regression: the layer-stack list used to spawn a stray slider handle at the path start
     // (item `t` defaults to 0 ⇒ vertex 0). The stack edits on the card/gauge, so: no slider.
     expect(sliders(a)).toHaveLength(0);
@@ -1185,13 +1185,13 @@ describe("setProfile — live re-ingestion, document preserved", () => {
   });
 });
 
-describe("sigwxArea — panel replaces the call-out (no double)", () => {
-  it("selected sigwxArea: NO call-out text-box remains for the feature", async () => {
+describe("cloudConvective — panel replaces the call-out (no double)", () => {
+  it("selected cloudConvective: NO call-out text-box remains for the feature", async () => {
     const a = new MockAdapter();
     const profile = (await import("../src/profiles/temsi-france.json")).default as unknown as SigwxProfile;
     const s = new SigwxDraw({ adapter: a, profile });
     await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY); // draws + auto-selects
+    const id = stroke(s, a, "cloudConvective", POLY); // draws + auto-selects
     const widgetIds = a.widgets.map((w) => w.id);
     const boxFids = (a.overlays.get("text-boxes")?.features ?? []).map((f) => f.properties?.["featureId"]);
     expect(widgetIds).toContain(id);     // the panel exists
@@ -1208,7 +1208,7 @@ describe("sigwxArea — panel replaces the call-out (no double)", () => {
     const profile = (await import("../src/profiles/temsi-france.json")).default as unknown as SigwxProfile;
     const s = new SigwxDraw({ adapter: a, profile });
     await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY); // draws + auto-selects
+    const id = stroke(s, a, "cloudConvective", POLY); // draws + auto-selects
     const panel = a.widget(id)!;
     // The pickers now live in the stack's active-layer BODY, with list-scoped names.
     const pickers = collectPickers(panel);
@@ -1219,10 +1219,10 @@ describe("sigwxArea — panel replaces the call-out (no double)", () => {
     expect(JSON.stringify(amount)).not.toContain("\\nCB");
     // the picker text is tinted with the control HANDLE colour (like the gauge/dial knobs)
     expect(amount.color).toBe(DEFAULT_STYLE.control.handle.fill);
-    // the terse cloud codes carry their full name as a tooltip (CB → "Cumulonimbus", CI → "Cirrus")
+    // the terse cloud codes carry their full name as a tooltip (CB → "Cumulonimbus", CU → "Cumulus")
     const type = pickers.find((p) => p.name === "layers.0.type")!;
     expect(type.options?.find((o) => o.value === "CB")).toMatchObject({ label: "CB", title: "Cumulonimbus" });
-    expect(type.options?.find((o) => o.value === "CI")).toMatchObject({ label: "CI", title: "Cirrus" });
+    expect(type.options?.find((o) => o.value === "CU")).toMatchObject({ label: "CU", title: "Cumulus" });
   });
 
   it("picker text colour follows style.control.handle (customisable like the gauge/dial)", async () => {
@@ -1230,13 +1230,13 @@ describe("sigwxArea — panel replaces the call-out (no double)", () => {
     const profile = (await import("../src/profiles/temsi-france.json")).default as unknown as SigwxProfile;
     const s = new SigwxDraw({ adapter: a, profile, style: { control: { handle: { fill: "#0969da" } } } });
     await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY);
+    const id = stroke(s, a, "cloudConvective", POLY);
     const amount = collectPickers(a.widget(id)!).find((i) => i.name === "layers.0.amount")!;
     expect(amount.color).toBe("#0969da");
   });
 });
 
-describe("sigwxArea — multi-layer data & cartouche", () => {
+describe("cloudConvective — multi-layer data & cartouche", () => {
   const loadFrance = async () => (await import("../src/profiles/temsi-france.json")).default as unknown as SigwxProfile;
   const layersOf = (s: SigwxDraw): Record<string, unknown>[] => lastMeta(s)["layers"] as Record<string, unknown>[];
 
@@ -1244,7 +1244,7 @@ describe("sigwxArea — multi-layer data & cartouche", () => {
     const a = new MockAdapter();
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
     await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY);
+    const id = stroke(s, a, "cloudConvective", POLY);
     a.actionWidget(id, "removeLayer:0"); // only layer -> floored at min:1
     expect(layersOf(s)).toHaveLength(1);
     a.actionWidget(id, "addLayer");
@@ -1257,7 +1257,7 @@ describe("sigwxArea — multi-layer data & cartouche", () => {
     const a = new MockAdapter();
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
     await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY);
+    const id = stroke(s, a, "cloudConvective", POLY);
     a.dragGauge(id, "layers.0.topFL", 73); // -> 75 (5-FL step)
     expect(layersOf(s)[0]!["topFL"]).toBe(75);
     a.dragGauge(id, "layers.0.baseFL", 120); // base can't pass the top -> clamps to 75
@@ -1268,10 +1268,10 @@ describe("sigwxArea — multi-layer data & cartouche", () => {
     const a = new MockAdapter();
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
     await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY);
+    const id = stroke(s, a, "cloudConvective", POLY);
     expect(layersOf(s)[0]!["amount"]).toBe("OCNL"); // a CB amount
-    a.editWidget(id, "SC", "layers.0.type");
-    expect(layersOf(s)[0]!["type"]).toBe("SC");
+    a.editWidget(id, "CU", "layers.0.type"); // CB -> CU (the other convective type, non-CB amounts)
+    expect(layersOf(s)[0]!["type"]).toBe("CU");
     expect(layersOf(s)[0]!["amount"]).toBe("FEW"); // OCNL invalid for non-CB -> first cloud amount
   });
 
@@ -1279,7 +1279,7 @@ describe("sigwxArea — multi-layer data & cartouche", () => {
     const a = new MockAdapter();
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
     await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY);
+    const id = stroke(s, a, "cloudConvective", POLY);
     a.actionWidget(id, "addLayer"); // 2 layers
     s.select(null); // deselect -> the canvas cartouche renders (panel no longer replaces it)
     const box = (a.overlays.get("text-boxes")?.features ?? []).find((f) => f.properties?.["featureId"] === id);
@@ -1292,7 +1292,7 @@ describe("sigwxArea — multi-layer data & cartouche", () => {
     const a = new MockAdapter();
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
     await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY); // ONE layer by default (CB / OCNL)
+    const id = stroke(s, a, "cloudConvective", POLY); // ONE layer by default (CB / OCNL)
     s.select(null); // deselect -> the canvas cartouche renders
     const box = (a.overlays.get("text-boxes")?.features ?? []).find((f) => f.properties?.["featureId"] === id);
     expect(box).toBeDefined();
@@ -1305,20 +1305,129 @@ describe("sigwxArea — multi-layer data & cartouche", () => {
     expect(lines.some((l) => /OCNL.*CB/.test(l))).toBe(false); // NOT the compact "OCNL CB .../..." line
   });
 
-  it("EUROC restricts a non-CB layer's cloud amounts to BKN/OVC (optionsBy reset)", async () => {
+  it("EUROC restricts a non-CB (CU) layer's cloud amounts to BKN/OVC (optionsBy reset)", async () => {
     const a = new MockAdapter();
     const profile = (await import("../src/profiles/temsi-euroc.json")).default as unknown as SigwxProfile;
     const s = new SigwxDraw({ adapter: a, profile });
     await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY);
-    a.editWidget(id, "SC", "layers.0.type"); // a non-CB layer
+    const id = stroke(s, a, "cloudConvective", POLY);
+    a.editWidget(id, "CU", "layers.0.type"); // a non-CB convective layer
     const amount = collectPickers(a.widget(id)!).find((p) => p.name === "layers.0.amount")!;
     expect(amount.options?.map((o) => o.value)).toEqual(["BKN", "OVC"]);
     expect(layersOf(s)[0]!["amount"]).toBe("BKN"); // OCNL reset to the first valid amount
   });
 });
 
-describe("sigwxArea — multi-layer GAUGES editor (one gauge per layer, panel = active layer)", () => {
+describe("cloudNonConvective — non-convective cloud + composite icing/turb placeholders", () => {
+  const loadFrance = async () => (await import("../src/profiles/temsi-france.json")).default as unknown as SigwxProfile;
+
+  it("offers ONLY non-convective cloud types (no CB/CU)", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "cloudNonConvective", POLY);
+    const type = collectPickers(a.widget(id)!).find((p) => p.name === "layers.0.type")!;
+    const values = type.options?.map((o) => o.value) ?? [];
+    expect(values).toContain("AS");
+    expect(values).not.toContain("CB");
+    expect(values).not.toContain("CU");
+  });
+
+  it("both composite buttons are wired (icing → top, turbulence → bottom)", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "cloudNonConvective", POLY);
+    const buttons = a.widget(id)!.buttons ?? [];
+    expect(buttons.find((b) => b.place === "top")?.event).toBe("composite:icing");
+    expect(buttons.find((b) => b.place === "bottom")?.event).toBe("composite:turb");
+  });
+
+  it("clicking turbulence creates a zone-level turb sub-object (MOD default) glued BELOW, with a ✕ on its top edge", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "cloudNonConvective", POLY);
+    a.actionWidget(id, "composite:turb");
+    const turb = lastMeta(s)["turb"] as Record<string, unknown>;
+    expect(turb).toBeDefined();
+    expect(turb["symbol"]).toBe("MOD"); // moderate by default
+    const card = a.widget(`${id}#turb`)!;
+    expect(card.anchorTo).toEqual({ id, side: "bottom" }); // glued BELOW the zone, to its measured edge
+    expect(card.bg).toBe("#ffffff");  // sidecar look: framed + opaque even though turbulence is bare
+    expect(card.border).toBeDefined();
+    expect(card.padding).toBe("large"); // same padding as the other (framed) cards
+    expect(card.radius).toBe("small");  // same rounded corners as the other cards
+    expect((card.buttons ?? []).some((b) => b.event === "removeComposite:turb" && b.place === "top")).toBe(true);
+    expect(a.widget(`${id}#turb#gauge`)).toBeDefined(); // its own FL gauge (focused)
+  });
+
+  it("clicking icing creates a zone-level icing sub-object (MOD default) and focuses its glued card", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "cloudNonConvective", POLY);
+    expect(lastMeta(s)["icing"]).toBeUndefined();      // no composite until asked
+    expect(a.widget(`${id}#gauge`)).toBeDefined();     // zone FL gauge present while zone editable
+    expect(a.widget(`${id}#gauge`)!.anchorTo).toEqual({ id, side: "right", gap: 2 }); // glued to the panel's measured edge
+    a.actionWidget(id, "composite:icing");
+    const icing = lastMeta(s)["icing"] as Record<string, unknown>;
+    expect(icing).toBeDefined();
+    expect(icing["symbol"]).toBe("ICE_MOD");           // moderate by default
+    // the glued composite card is editable (severity picker on the icing sub-object)
+    const card = a.widget(`${id}#icing`);
+    expect(card).toBeDefined();
+    expect(collectPickers(card!).find((p) => p.name === "symbol")).toBeDefined();
+    // the zone card is now selected-but-not-editable → its FL gauge is gone
+    expect(a.widget(`${id}#gauge`)).toBeUndefined();
+  });
+
+  it("editing the focused icing writes severity + FL into metadata.icing (not the zone)", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "cloudNonConvective", POLY);
+    a.actionWidget(id, "composite:icing");
+    a.editWidget(`${id}#icing`, "ICE_SEV", "symbol");
+    a.dragGauge(`${id}#icing`, "topFL", 123); // → 125 (5-FL step)
+    const icing = lastMeta(s)["icing"] as Record<string, unknown>;
+    expect(icing["symbol"]).toBe("ICE_SEV");
+    expect(icing["topFL"]).toBe(125);
+    expect(lastMeta(s)["symbol"]).toBeUndefined(); // the ZONE itself gained no severity field
+  });
+
+  it("once icing exists BOTH cards render (zone stays a clickable panel) — only one FL gauge at a time", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "cloudNonConvective", POLY);
+    a.actionWidget(id, "composite:icing"); // icing focused
+    expect(a.widget(id)).toBeDefined();              // the zone card is still a panel (so it's clickable)
+    expect(a.widget(`${id}#icing`)).toBeDefined();   // the icing card too
+    expect(a.widget(`${id}#gauge`)).toBeUndefined();        // zone gauge hidden (icing focused)
+    expect(a.widget(`${id}#icing#gauge`)).toBeDefined();    // only the icing gauge shows
+    expect(a.widget(`${id}#icing#gauge`)!.anchorTo).toEqual({ id: `${id}#icing`, side: "right", gap: 2 }); // glued to the icing card, not the zone
+    // the delete ✕ takes the add button's spot: on the icing card's frontier edge (bottom)…
+    expect((a.widget(`${id}#icing`)!.buttons ?? []).some((b) => b.event === "removeComposite:icing" && b.place === "bottom")).toBe(true);
+    // …and the zone card's icing ADD button is gone (replaced by that ✕)
+    expect((a.widget(id)!.buttons ?? []).some((b) => b.event === "composite:icing")).toBe(false);
+  });
+
+  it("the icing card's ✕ removes the composite and returns focus to the zone (its gauge is back)", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "cloudNonConvective", POLY);
+    a.actionWidget(id, "composite:icing");
+    expect(lastMeta(s)["icing"]).toBeDefined();
+    a.actionWidget(id, "removeComposite:icing");
+    expect(lastMeta(s)["icing"]).toBeUndefined();       // composite gone
+    expect(a.widget(`${id}#icing`)).toBeUndefined();    // its card gone
+    expect(a.widget(`${id}#gauge`)).toBeDefined();      // focus back on the zone ⇒ zone gauge returns
+  });
+});
+
+describe("cloudConvective — multi-layer GAUGES editor (one gauge per layer, panel = active layer)", () => {
   const loadFrance = async () => (await import("../src/profiles/temsi-france.json")).default as unknown as SigwxProfile;
   const layersOf = (s: SigwxDraw): Record<string, unknown>[] => lastMeta(s)["layers"] as Record<string, unknown>[];
   const hasStack = (a: MockAdapter, id: string): boolean =>
@@ -1328,7 +1437,7 @@ describe("sigwxArea — multi-layer GAUGES editor (one gauge per layer, panel = 
     const a = new MockAdapter();
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
     await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY); // 1 layer
+    const id = stroke(s, a, "cloudConvective", POLY); // 1 layer
     expect(hasStack(a, id)).toBe(false);
     expect(collectGauges(a.widget(id)!)).toHaveLength(0); // gauges live in the satellite, not the panel
     a.actionWidget(id, "addLayer"); // 2 layers — the stack editor would switch to a `stack` here
@@ -1345,7 +1454,7 @@ describe("sigwxArea — multi-layer GAUGES editor (one gauge per layer, panel = 
     const a = new MockAdapter();
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
     await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY);
+    const id = stroke(s, a, "cloudConvective", POLY);
     a.actionWidget(id, "addLayer");
     a.actionWidget(id, "addLayer"); // 3 layers
     const sat = a.widget(`${id}#gauge`)!;
@@ -1377,7 +1486,7 @@ describe("sigwxArea — multi-layer GAUGES editor (one gauge per layer, panel = 
       const a = new MockAdapter();
       const s = new SigwxDraw({ adapter: a, profile });
       await s.ready();
-      const id = stroke(s, a, "sigwxArea", POLY);
+      const id = stroke(s, a, "cloudConvective", POLY);
       return collectGauges(a.widget(`${id}#gauge`)!)[0]!.length;
     };
     const franceLen = await lengthFor(await loadFrance()); // ground→FL150 (narrow extent)
@@ -1390,7 +1499,7 @@ describe("sigwxArea — multi-layer GAUGES editor (one gauge per layer, panel = 
     const a = new MockAdapter();
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
     await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY);
+    const id = stroke(s, a, "cloudConvective", POLY);
     a.actionWidget(id, "addLayer"); // 2 layers
     a.dragGauge(id, "layers.1.topFL", 90); // touch layer 1's band → it becomes active
     expect(collectPickers(a.widget(id)!).map((p) => p.name).sort()).toEqual(["layers.1.amount", "layers.1.type"]);
@@ -1404,7 +1513,7 @@ describe("sigwxArea — multi-layer GAUGES editor (one gauge per layer, panel = 
     const a = new MockAdapter();
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
     await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY);
+    const id = stroke(s, a, "cloudConvective", POLY);
     a.actionWidget(id, "addLayer"); // 2 layers
     const panel = () => a.widget(id)! as unknown as { border?: string; bg?: string };
     const gaugeColor = (i: number) => collectGauges(a.widget(`${id}#gauge`)!)[0]!.ranges![i]!.color;
@@ -1423,7 +1532,7 @@ describe("sigwxArea — multi-layer GAUGES editor (one gauge per layer, panel = 
     const a = new MockAdapter();
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
     await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY);
+    const id = stroke(s, a, "cloudConvective", POLY);
     const canAdd = () => (collectGauges(a.widget(`${id}#gauge`)!)[0] as { canAdd?: boolean }).canAdd;
     expect(canAdd()).toBe(true);
     for (let i = 0; i < 3; i++) a.actionWidget(`${id}#gauge`, "addLayerAt:70"); // → 4 layers (max)
@@ -1437,7 +1546,7 @@ describe("sigwxArea — multi-layer GAUGES editor (one gauge per layer, panel = 
     const a = new MockAdapter();
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() }); // range 0–150, max:4
     await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY);
+    const id = stroke(s, a, "cloudConvective", POLY);
     const band = (l: Record<string, unknown>): [number, number] => [l["baseFL"] as number, l["topFL"] as number];
     // one layer ⇒ a 1/max-tall slice (150/4 = 37.5 → 40) CENTRED on the axis (mid 75 ⇒ [55,95]).
     expect(layersOf(s).map(band)).toEqual([[55, 95]]);
@@ -1452,7 +1561,7 @@ describe("sigwxArea — multi-layer GAUGES editor (one gauge per layer, panel = 
     const a = new MockAdapter();
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
     await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY); // drawn ⇒ selected ⇒ call-out offset frozen
+    const id = stroke(s, a, "cloudConvective", POLY); // drawn ⇒ selected ⇒ call-out offset frozen
     // The gauge + panel both ride the placed call-out (`anchor`). A growing cartouche used to widen
     // the box and slide its centre sideways on every add; the freeze keeps the anchor fixed.
     const gaugeAt = (): unknown => JSON.stringify(a.widget(`${id}#gauge`)!.anchor);
@@ -1471,7 +1580,7 @@ describe("sigwxArea — multi-layer GAUGES editor (one gauge per layer, panel = 
     const a = new MockAdapter();
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() }); // range 0–150, max:4
     await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY); // 1 layer CENTRED: [55,95]
+    const id = stroke(s, a, "cloudConvective", POLY); // 1 layer CENTRED: [55,95]
     const band = (l: Record<string, unknown>): [number, number] => [l["baseFL"] as number, l["topFL"] as number];
     a.actionWidget(`${id}#gauge`, "addLayerAt:130"); // a band up high → [110,150]
     a.actionWidget(`${id}#gauge`, "addLayerAt:20"); //  one down low  → [0,40] (a gap stays at [40,55] & [95,110])
@@ -1482,7 +1591,7 @@ describe("sigwxArea — multi-layer GAUGES editor (one gauge per layer, panel = 
     const a = new MockAdapter();
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() }); // range 0–150, max:4, min:1
     await s.ready();
-    const id = stroke(s, a, "sigwxArea", POLY); // [55,95]
+    const id = stroke(s, a, "cloudConvective", POLY); // [55,95]
     a.actionWidget(`${id}#gauge`, "addLayer"); // [95,135] (generic add, stacks on top)
     a.actionWidget(`${id}#gauge`, "addLayerAt:35"); // [15,55] (hover-add centred low)
     const band = (l: Record<string, unknown>): [number, number] => [l["baseFL"] as number, l["topFL"] as number];

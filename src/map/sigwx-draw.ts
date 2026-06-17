@@ -310,6 +310,10 @@ export class SigwxDraw {
   private order: string[] = [];
   private selectedId: string | null = null;
   private selectedSub: number | null = null;
+  /** The zone-level composite (the non-convective cloud's `"icing"`/`"turb"`) currently in FOCUS:
+   *  its glued card is the editable one and the zone card goes selected-but-not-editable (its gauge
+   *  hides). `null` = the zone itself is editable. Reset on any (re)selection. */
+  private focusedComposite: string | null = null;
   /** Selected AREA(s) of a multi-area feature (CB MultiPolygon): clicking ONE area selects
    *  the feature (info box included) but narrows the outline/handles — and the drag and
    *  Delete actions — to those areas. SHIFT-click toggles an area in/out of the set.
@@ -428,6 +432,26 @@ export class SigwxDraw {
         if (!f) return;
         const key = e.name ?? "name";
         const def = this.registry.get(f.properties.phenomenon);
+        // COMPOSITE-scoped control (the non-convective cloud's icing/turb): the glued card's id is
+        // `${fid}#<key>` (its gauge `${fid}#<key>#gauge`). Route the edit into the `metadata[key]`
+        // sub-object, FL-clamped against the chart bounds + paired base ≤ top (5-FL steps).
+        const compKey = e.id.split("#")[1];
+        const compSpec = compKey ? def.composites?.find((c) => c.key === compKey) : undefined;
+        if (compSpec) {
+          const sub = f.properties.metadata[compSpec.key] as Metadata | undefined;
+          if (!sub) return;
+          const refField = this.registry.get(compSpec.ref).schema.find((s) => s.key === key);
+          let v: unknown = e.value;
+          if (refField?.type === "fl") {
+            const { lo, hi } = this.flGaugeRange(f.properties.phenomenon, key);
+            let n = Math.max(lo, Math.min(hi, Math.round(Number(e.value) / 5) * 5));
+            if (/top/i.test(key) && typeof sub["baseFL"] === "number") n = Math.max(n, sub["baseFL"] as number);
+            else if (/base/i.test(key) && typeof sub["topFL"] === "number") n = Math.min(n, sub["topFL"] as number);
+            v = n;
+          } else if (refField?.type === "number") v = Number(e.value);
+          this.updateMetadata(fid, { [compSpec.key]: { ...sub, [key]: v } });
+          return;
+        }
         // LIST-scoped control (`points.2.speed` — a jet break point's dial/gauge): coerce,
         // clamp and pair like the old canvas controls, then update the list item.
         const lm = /^(\w+)\.(\d+)\.(\w+)$/.exec(key);
@@ -556,6 +580,13 @@ export class SigwxDraw {
           // `:<id>` suffix the adapter appends when a range carries an id. See GAUGE-AXIS-BUTTON-SPEC.
           const i = Number.parseInt(e.event.slice("removeRange:".length), 10);
           if (Number.isFinite(i)) this.removeLayerFrom(fid, i);
+        } else if (e.event.startsWith("composite:") && f) {
+          // Zone-level composite (the non-convective cloud's icing/turb): create the sub-object
+          // (if absent) and FOCUS its glued card — the zone keeps its card but loses its FL gauge.
+          this.focusComposite(fid, e.event.slice("composite:".length));
+        } else if (e.event.startsWith("removeComposite:") && f) {
+          // The composite card's ✕: drop the sub-object and return focus to the zone.
+          this.removeComposite(fid, e.event.slice("removeComposite:".length));
         }
       });
       if (opts.toolbar) this.buildToolbar(opts.toolbar === true ? {} : opts.toolbar);
@@ -744,6 +775,7 @@ export class SigwxDraw {
     }
     this.selectedId = id != null && this.doc.has(id) ? id : null;
     this.selectedSub = null;
+    this.focusedComposite = null; // (re)selecting the zone returns focus to the zone card
     this.selectedAreas = []; // whole-feature selection; an AREA click then narrows it
     // Gauge reference: captured ONCE at selection so the card pinning is drag-stable.
     const f = this.selectedId ? this.doc.get(this.selectedId) : undefined;
@@ -797,6 +829,64 @@ export class SigwxDraw {
     }
     this.renderAll();
     this.emitSelect();
+  }
+
+  /** Default metadata for a composite, read from its referenced phenomenon's schema (so the
+   *  icing/turb sub-object starts MOD at the stock default FLs — no data duplication). */
+  private compositeDefaults(refType: string): Metadata {
+    const def = this.registry.get(refType);
+    const m: Metadata = {};
+    for (const s of def.schema) {
+      if (s.type !== "list" && "default" in s && s.default !== undefined) m[s.key] = s.default;
+      else if (s.type === "enum") m[s.key] = s.options[0]?.value ?? "";
+    }
+    return m;
+  }
+
+  /** Create (if absent) and FOCUS a zone-level composite (the non-convective cloud's icing/turb):
+   *  its glued card becomes the editable one; the zone card goes selected-but-not-editable. */
+  private focusComposite(fid: string, key: string): void {
+    const f = this.doc.get(fid);
+    if (!f) return;
+    const spec = this.registry.get(f.properties.phenomenon).composites?.find((c) => c.key === key);
+    if (!spec) return;
+    let changed = false;
+    if (!f.properties.metadata[key]) {
+      f.properties.metadata = { ...f.properties.metadata, [key]: this.compositeDefaults(spec.ref) };
+      changed = true;
+    }
+    this.focusedComposite = key;
+    const r = this.layerFlRef(f.properties.metadata[key] as Metadata);
+    if (r != null) this.flRef = r;
+    this.renderAll();
+    this.emitSelect();
+    if (changed) this.emitChange();
+  }
+
+  /** Return FOCUS to the zone card (leaving a composite): re-pin the FL gauge on the active layer. */
+  private focusZone(fid: string): void {
+    this.focusedComposite = null;
+    const f = this.doc.get(fid);
+    const def = f ? this.registry.get(f.properties.phenomenon) : undefined;
+    const m = f?.properties.metadata;
+    if (def?.repeat && m) {
+      const lf = listFieldOf(def);
+      const layer = lf ? (m[lf.key] as Metadata[] | undefined)?.[this.selectedSub ?? 0] : undefined;
+      this.flRef = layer ? this.layerFlRef(layer) : null;
+    }
+    this.renderAll();
+    this.emitSelect();
+  }
+
+  /** Remove a zone-level composite (its card's ✕) and return focus to the zone. */
+  private removeComposite(fid: string, key: string): void {
+    const f = this.doc.get(fid);
+    if (!f || f.properties.metadata[key] == null) return;
+    const m = { ...f.properties.metadata };
+    delete m[key];
+    f.properties.metadata = m;
+    this.emitChange();
+    this.focusZone(fid);
   }
 
   updateMetadata(id: string, patch: Partial<Metadata>): void {
@@ -1794,23 +1884,83 @@ export class SigwxDraw {
       if (!def.widget) continue;
       const at = this.placedAt.get(id);
       const req = at ? this.lastAnnReqs.find((r) => r.featureId === id) : undefined;
+      const isSel = id === this.selectedId;
+      // Existing zone-level composites (the non-convective cloud's icing/turb sub-objects).
+      const comps = isSel ? (def.composites ?? []).filter((c) => f.properties.metadata[c.key]) : [];
+      const zoneFocused = this.focusedComposite == null;
+      // ZONE card: stays a (clickable) panel whenever selected — even when a composite holds the
+      // focus — so a tap on it brings the focus back. Only the FOCUSED element shows its FL gauge
+      // (never two gauges); when a composite exists, the zone card is top-anchored so an icing card
+      // (bottom-anchored) glues exactly above it (no overlap), edge-to-edge.
       const w = def.widget({
         id,
         geometry: f.geometry,
         metadata: f.properties.metadata,
-        editable: id === this.selectedId,
+        editable: isSel,
         style: this.styleOf(f.properties.phenomenon),
         ...(at && req ? { callout: { at, content: req.content } } : {}),
         sprite: (sid: string) => this.spriteCatalog[sid],
         flightLevel: this.flResolved(f.properties.phenomenon),
-        ...(id === this.selectedId && this.selectedSub != null ? { sub: this.selectedSub } : {}),
-        ...(id === this.selectedId && this.flRef != null ? { flRef: this.flRef } : {}),
+        ...(isSel && zoneFocused && this.selectedSub != null ? { sub: this.selectedSub } : {}),
+        ...(isSel && zoneFocused && this.flRef != null ? { flRef: this.flRef } : {}),
         chrome: this.style.control,
         limit: (key: string) => this.numLimit(def, key),
       });
-      // A builder may return null (no widget for this state) or SEVERAL cards (jet).
-      if (Array.isArray(w)) out.push(...w);
-      else if (w) out.push(w);
+      // A builder may return null (no widget for this state) or SEVERAL cards (jet / zone+gauge).
+      let zoneCards = Array.isArray(w) ? w : w ? [w] : [];
+      if (comps.length && zoneCards[0]) {
+        // The zone card stays at its normal anchor; composites attach to its MEASURED edges via
+        // `anchorTo` (icing above / turb below) — a clean 3-card stack, no overlap (see below).
+        // Drop the ADD button of any composite that ALREADY exists — its delete ✕ takes that exact
+        // spot, but on the composite card (which draws on top, so the button stays clickable).
+        const existing = new Set(comps.map((c) => `composite:${c.key}`));
+        if (zoneCards[0].buttons) zoneCards[0].buttons = zoneCards[0].buttons.filter((b) => !existing.has(b.event));
+        if (!zoneFocused) zoneCards = zoneCards.slice(0, 1); // not focused ⇒ panel only (no gauge)
+      }
+      out.push(...zoneCards);
+      // COMPOSITE cards (the non-convective cloud's icing/turb): one per existing composite, glued
+      // to the zone card (icing above / turb below) by REUSING the referenced phenomenon's widget
+      // builder; editable, with a delete ✕ (top-right). The FL gauge renders only on the focused one.
+      for (const spec of comps) {
+        const refDef = this.registry.get(spec.ref);
+        if (!refDef.widget || !at || !req) continue;
+        const focused = this.focusedComposite === spec.key;
+        const cw = refDef.widget({
+          id: `${id}#${spec.key}`,
+          geometry: f.geometry,
+          metadata: f.properties.metadata[spec.key] as Metadata,
+          editable: true,
+          style: this.styleOf(spec.ref),
+          callout: { at, content: "" },
+          sprite: (sid: string) => this.spriteCatalog[sid],
+          flightLevel: this.flResolved(f.properties.phenomenon),
+          ...(focused && this.flRef != null ? { flRef: this.flRef } : {}),
+          chrome: this.style.control,
+          limit: (key: string) => this.numLimit(refDef, key),
+        });
+        let cards = Array.isArray(cw) ? cw : cw ? [cw] : [];
+        if (cards[0]) {
+          // SIDECAR look: a glued composite card is ALWAYS a framed box — same bg / border / radius /
+          // padding as a framed panel (icing gets these from its `framed` card; turbulence, which is
+          // `framed:false`, would otherwise miss them → mismatched padding/corners). Match `large`
+          // padding (the panel default, `card.pad ?? "large"`) so all cards line up.
+          cards[0].bg = cards[0].bg ?? "#ffffff";
+          cards[0].border = cards[0].border ?? "#1f2328";
+          cards[0].radius = cards[0].radius ?? "small";
+          cards[0].padding = cards[0].padding ?? "large";
+          // Glue to the zone card's MEASURED edge (icing above / turb below) via anchorTo — a clean
+          // stack, no overlap. The cross axis (horizontal) keeps the card centred on the call-out.
+          cards[0].anchorTo = { id, side: spec.place };
+          // The delete ✕ sits on the edge facing the zone (where the add button was), on top.
+          const frontier = spec.place === "top" ? "bottom" : "top";
+          cards[0].buttons = [
+            ...(cards[0].buttons ?? []),
+            { event: `removeComposite:${spec.key}`, place: frontier, svg: COMPOSITE_DELETE_SVG, bordered: true, title: "Supprimer" },
+          ];
+        }
+        if (!focused) cards = cards.slice(0, 1); // not focused ⇒ panel only (no gauge)
+        out.push(...cards);
+      }
     }
     return out;
   }
@@ -2522,6 +2672,25 @@ export class SigwxDraw {
       this.drawMore(widgetFeatureId(String(ev.hit.props["id"])));
       return;
     }
+    // A tap on a card whose feature is ALREADY selected switches the FOCUS between the zone card and
+    // a composite card (the non-convective cloud's icing/turb) — so you move from one to the other.
+    if (ev.hit?.overlay === "widget") {
+      const wid = String(ev.hit.props["id"] ?? "");
+      const wfid = widgetFeatureId(wid);
+      const wf = wfid === this.selectedId ? this.doc.get(wfid) : undefined;
+      if (wf) {
+        const part = wid.split("#")[1];
+        const isComposite = part != null && (this.registry.get(wf.properties.phenomenon).composites ?? []).some((c) => c.key === part);
+        if (isComposite) {
+          if (this.focusedComposite !== part) this.focusComposite(wfid, part!);
+          return;
+        }
+        if (this.focusedComposite != null) {
+          this.focusZone(wfid);
+          return;
+        }
+      }
+    }
     // A widget card hit carries its feature id as `id`; every other overlay uses `featureId`.
     const fid = ev.hit?.overlay === "widget" ? widgetFeatureId(String(ev.hit.props["id"] ?? "")) : ev.hit?.props["featureId"];
     if (ev.hit && typeof fid === "string" && ev.hit.overlay !== "handles") {
@@ -2868,6 +3037,10 @@ export class SigwxDraw {
 
 /** A widget id back to its FEATURE id (multi-card builders suffix `featureId#part`). */
 const widgetFeatureId = (id: string): string => id.split("#")[0]!;
+
+/** The ✕ glyph for a composite card's delete button (top-right corner). `currentColor`. */
+const COMPOSITE_DELETE_SVG =
+  "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.4' stroke-linecap='round'><path d='M7 7 L17 17 M17 7 L7 17'/></svg>";
 
 const raf =
   typeof requestAnimationFrame !== "undefined"

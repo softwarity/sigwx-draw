@@ -2,6 +2,53 @@
 
 ## NEXT RELEASE
 
+- **Non-convective cloud → composite ICING (first cut)**: clicking the icing button on a
+  `cloudNonConvective` card creates a ZONE-LEVEL icing sub-object (`metadata.icing =
+  { symbol, baseFL, topFL }`, moderate by default) and shows its OWN card glued above the zone card,
+  edited like the stock icing (MOD/SEV picker + its own FL gauge). One icing + one turb per zone
+  (zone-level, per WAFS §4.4), each with its own FL — NOT per cloud layer. Behaviours:
+  - **Two cards coexist**: the zone card and the icing card both render, the icing card glued
+    edge-to-edge to the zone card's MEASURED top edge via the adapter's new `MarkerWidget.anchorTo`
+    (`{ id, side, gap }`). A **tap on either card switches the focus** to it; only the FOCUSED card
+    carries its FL gauge (never two gauges at once).
+  - **Delete ✕** sits exactly where the add button was (the two cards' shared frontier edge), but is
+    drawn on the composite card so it stays on top / clickable; the zone's add button is removed once
+    the composite exists. It drops the composite and returns focus to the zone.
+  - Declarative: a new `composites: [{ key, ref, place }]` on the descriptor REUSES the referenced
+    stock phenomenon (`ref: "icing"`) for the sub-object's fields/picker/gauge/defaults — no data
+    duplication. Controller mechanics: `composite:<key>` / `removeComposite:<key>` card actions,
+    `focusedComposite` state with `focusComposite`/`focusZone`, the glued card rendered via the ref's
+    own widget builder, and `#<key>`-suffixed edits routed into `metadata[key]` (FL-clamped, base ≤ top).
+  - **Turbulence too** (the bottom button, `ref: "turbulence"`, `place: "bottom"`): same generic
+    mechanism — clicking it creates `metadata.turb` (MOD default) glued BELOW the zone (`anchorTo`
+    `side:"bottom"`), with its own severity picker + FL gauge and a ✕ on its top (frontier) edge. Both
+    composites declare in `composites[]`; everything (focus toggle, edit routing, delete) is
+    composite-agnostic.
+  - **icing AND turb at once now stack cleanly** (icing / zone / turb, no overlap) thanks to
+    `anchorTo` measuring the zone card — replacing the earlier `origin`-offset hack.
+  - **FL gauge migrated to `anchorTo`** (`side:"right"`): every area/composite gauge now sits flush at
+    its panel's REAL right edge (exact gap, re-snapped on resize) instead of a fixed approximate
+    offset — and a composite's gauge correctly hugs the composite card, not the zone. The jet's
+    break-point dial/gauge keep the legacy positioning (not a simple side-of-card satellite).
+
+- **The single "significant weather area" cloud button (`sigwxArea`) is split in two** in both TEMSI
+  profiles (france + euroc), per ICAO/WAFC doctrine (a CB *implies* turbulence + icing via the chart
+  legend — never composited; only a NON-convective cloud area composites turb/icing in its call-out):
+  - **`cloudConvective`** — Cumulus / Cumulonimbus (CB keeps ISOL/OCNL/FRQ/EMBD, CU the octa amounts);
+    toolbar icon `cb`.
+  - **`cloudNonConvective`** — CI/CC/CS/AC/AS/NS/SC/ST, octa amounts; toolbar icon `sigwxArea` (the
+    generic scallop). This is the area that will host the composite icing/turbulence.
+  Both stay scalloped multi-layer areas; everything else (gauge band, multi-layer stack, summary) is
+  unchanged. ⚠️ the old `sigwxArea` type id is gone — its tests now target `cloudConvective`.
+- **The non-convective cloud card shows two placeholder buttons** — **icing (top)** / **turbulence
+  (bottom)**, drawn with the moderate-severity *pure* symbols (`icingMod` = fork, `turbulenceMod` =
+  single peak; new `svgs/buttons/*.svg`). They are **inert for now** (`noop`); composing the real
+  icing/turb sub-blocks (severity + own FL band in the call-out) is the next step.
+- **Mechanics (lib-only, no adapter change)**: `CardButtonSpec.place` now accepts `"top"`/`"bottom"`
+  (the adapter already supports them; the interpreter was bridling them); a new `noop` engine action
+  (a card button whose event the controller ignores — "show the button, wire it later"); the
+  multi-layer panel builder (`compileLayerPanel`) now emits card-edge buttons (it silently dropped
+  them before, so a `repeat` area could never carry a top/bottom button).
 - **The multi-layer cloud-area (`sigwxArea`) editing box & gauge spacing match the other cards now**:
   - its box gets the same `"large"` padding (it defaulted to `"small"` — the multi-layer panel's
     default — while single areas default to `"large"`, so it looked tighter); pinned explicitly to
