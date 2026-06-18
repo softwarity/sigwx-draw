@@ -2,6 +2,22 @@
 
 ## NEXT RELEASE
 
+- **TEMSI fronts split into Surface / Above surface**: the "Fronts" submenu now keeps the line
+  phenomena (convergence, ITCZ on EUROC, squall) at top level, then nests **two sub-submenus**:
+  - **Surface ▸** — the 4 classic fronts (cold / warm / occluded / stationary), solid line.
+  - **Above surface ▸** — 4 new `front*Aloft` variants drawing the SAME WMO pips on a **dashed**
+    base line (the WMO "above surface" / upper-front convention). Same draw/card/style as their
+    surface twin; they reuse the surface button icon (`icon: "atlas:front*"`), so the only new art is
+    the two GROUP buttons: `frontSurface.svg` (solid curve over a wavy sea line) and
+    `frontAloft.svg` (dashed curve).
+
+  Mechanics: `front-symbols` gained a `"dashed": true` decoration flag (a JSON flag; the
+  screen-constant `dash: [px*11, px*7]` math stays in the decorator). Applied to both `temsi-france`
+  and `temsi-euroc`. The Surface/Above group buttons are PURE dropdowns (`ToolGroupSpec.toggle:false`,
+  new optional field): fixed icon, open-only, never draw — vs the default split-button `toggle:true`.
+  In-menu order is declaration order (`squall, [ITCZ], convergence, Surface ▸, Above ▸`, child[0]
+  adjacent to the trigger). NB: a pending draw-adapter fix is needed so the flyout flow follows the
+  open direction (a bottom bar currently renders the flyout reversed) — spec handed to François.
 - **Non-convective cloud → composite ICING + TURBULENCE**: clicking the icing button on a
   `cloudNonConvective` card creates a ZONE-LEVEL icing sub-object (`metadata.icing =
   { symbol, baseFL, topFL }`, moderate by default) and shows its OWN card glued above the zone card,

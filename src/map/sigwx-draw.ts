@@ -2981,7 +2981,7 @@ export class SigwxDraw {
           id: t.group.toLowerCase().replace(/\s+/g, "-"),
           title: t.group,
           ...(icon ? { svg: dress(icon) } : {}),
-          toggle: true,
+          toggle: t.toggle ?? true,
           children,
         };
       };

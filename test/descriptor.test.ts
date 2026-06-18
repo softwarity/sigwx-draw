@@ -123,8 +123,16 @@ describe("profile JSONs are THE source of the descriptors; glyphs are referenced
         // their icon by name (the default `atlas:<type>`, declared in `glyphs`).
         if (typeof o.icon === "string") expect(o.icon).not.toMatch(/^<svg/);
         if (o.type.startsWith("front")) {
-          expect(o.icon).toBeUndefined(); // defaults to atlas:<type>
-          expect(profile.glyphs[o.type]).toMatch(/\.svg$/);
+          if (o.type.endsWith("Aloft")) {
+            // "Above surface" variant: reuses the surface front's button via an explicit
+            // `atlas:<baseType>` icon reference (same look, dashed line on the map) — no own glyph.
+            expect(o.icon).toMatch(/^atlas:front/);
+            const baseGlyph = (o.icon as string).replace(/^atlas:/, "");
+            expect(profile.glyphs[baseGlyph]).toMatch(/\.svg$/);
+          } else {
+            expect(o.icon).toBeUndefined(); // defaults to atlas:<type>
+            expect(profile.glyphs[o.type]).toMatch(/\.svg$/);
+          }
         }
       }
       // glyphs hold ONLY bank references (paths) now — no inline <svg> anywhere (single source:

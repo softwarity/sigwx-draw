@@ -383,7 +383,8 @@ export const PROFILE_JSON_SCHEMA = {
             properties: {
               group: { type: "string", minLength: 1 },
               icon: { type: "string" },
-              items: { type: "array", items: { type: "string" }, minItems: 1 },
+              toggle: { type: "boolean" },
+              items: { type: "array", items: { type: ["string", "object"] }, minItems: 1 },
             },
           },
         ],

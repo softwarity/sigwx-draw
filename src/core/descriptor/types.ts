@@ -387,6 +387,10 @@ export type ObjectSpec =
 export interface ToolGroupSpec {
   group: string;
   icon?: GlyphRef;
+  /** A submenu opener defaults to a "split button" that mirrors the last-picked child and
+   *  re-draws it on parent-click (`toggle` omitted ⇒ true). Set `false` for a PURE dropdown:
+   *  fixed icon (never mirrors a child), opens the menu only, never draws. */
+  toggle?: boolean;
   items: ToolSpec[];
 }
 export type ToolSpec = string | ToolGroupSpec;

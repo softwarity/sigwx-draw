@@ -1186,6 +1186,122 @@
     },
     {
       "schemaVersion": 1,
+      "type": "frontColdAloft",
+      "label": "Cold front (above surface)",
+      "icon": "atlas:frontCold",
+      "gesture": {
+        "primitive": "polyline",
+        "draw": "lasso",
+        "smooth": true,
+        "minVertices": 2
+      },
+      "render": {
+        "decorations": [
+          {
+            "use": "front-symbols",
+            "frontType": "cold",
+            "dashed": true
+          }
+        ]
+      },
+      "style": {
+        "color": "#2c5fb3",
+        "edge": {
+          "color": "#2c5fb3",
+          "width": 2.5
+        }
+      },
+      "summary": "Cold front (above surface)"
+    },
+    {
+      "schemaVersion": 1,
+      "type": "frontWarmAloft",
+      "label": "Warm front (above surface)",
+      "icon": "atlas:frontWarm",
+      "gesture": {
+        "primitive": "polyline",
+        "draw": "lasso",
+        "smooth": true,
+        "minVertices": 2
+      },
+      "render": {
+        "decorations": [
+          {
+            "use": "front-symbols",
+            "frontType": "warm",
+            "dashed": true
+          }
+        ]
+      },
+      "style": {
+        "color": "#d1242f",
+        "edge": {
+          "color": "#d1242f",
+          "width": 2.5
+        }
+      },
+      "summary": "Warm front (above surface)"
+    },
+    {
+      "schemaVersion": 1,
+      "type": "frontOccludedAloft",
+      "label": "Occluded front (above surface)",
+      "icon": "atlas:frontOccluded",
+      "gesture": {
+        "primitive": "polyline",
+        "draw": "lasso",
+        "smooth": true,
+        "minVertices": 2
+      },
+      "render": {
+        "decorations": [
+          {
+            "use": "front-symbols",
+            "frontType": "occluded",
+            "dashed": true
+          }
+        ]
+      },
+      "style": {
+        "color": "#8250df",
+        "edge": {
+          "color": "#8250df",
+          "width": 2.5
+        }
+      },
+      "summary": "Occluded front (above surface)"
+    },
+    {
+      "schemaVersion": 1,
+      "type": "frontStationaryAloft",
+      "label": "Stationary front (above surface)",
+      "icon": "atlas:frontStationary",
+      "gesture": {
+        "primitive": "polyline",
+        "draw": "lasso",
+        "smooth": true,
+        "minVertices": 2
+      },
+      "render": {
+        "decorations": [
+          {
+            "use": "front-symbols",
+            "frontType": "stationary",
+            "dashed": true
+          }
+        ]
+      },
+      "style": {
+        "color": "#d1242f",
+        "edge": {
+          "color": "#d1242f",
+          "width": 2.5
+        }
+      },
+      "summary": "Stationary front (above surface)"
+    },
+    {
+      "schemaVersion": 1,
       "type": "frontConvergence",
       "label": "Convergence line",
       "gesture": {
@@ -1615,13 +1731,31 @@
     {
       "group": "Fronts",
       "items": [
-        "frontCold",
-        "frontWarm",
-        "frontOccluded",
-        "frontStationary",
-        "frontConvergence",
+        "squallLine",
         "frontItcz",
-        "squallLine"
+        "frontConvergence",
+        {
+          "group": "Surface",
+          "icon": "atlas:frontSurface",
+          "toggle": false,
+          "items": [
+            "frontCold",
+            "frontWarm",
+            "frontOccluded",
+            "frontStationary"
+          ]
+        },
+        {
+          "group": "Above surface",
+          "icon": "atlas:frontAloft",
+          "toggle": false,
+          "items": [
+            "frontColdAloft",
+            "frontWarmAloft",
+            "frontOccludedAloft",
+            "frontStationaryAloft"
+          ]
+        }
       ]
     },
     {
@@ -1682,6 +1816,8 @@
     "frontStationary": "buttons/frontStationary.svg",
     "frontConvergence": "buttons/frontConvergence.svg",
     "frontItcz": "buttons/frontItcz.svg",
+    "frontSurface": "buttons/frontSurface.svg",
+    "frontAloft": "buttons/frontAloft.svg",
     "squallLine": "buttons/squallLine.svg"
   }
 }

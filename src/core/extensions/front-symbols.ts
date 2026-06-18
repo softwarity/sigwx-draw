@@ -7,6 +7,8 @@
  *   • `occluded`   — triangles AND semicircles alternating (purple);
  *   • `stationary` — triangles on the warm side, semicircles on the cold side, alternating
  *                    (blue triangles + red semicircles).
+ * `"dashed": true` keeps the SAME pips but breaks the base line — the WMO "above surface"
+ * (upper / aloft) front variant: identical symbols, discontinuous line.
  * TEMSI line phenomena (same machinery — a line carrying a periodic WMO symbol):
  *   • `convergence` — solid line + open chevrons pointing along it (convergence line);
  *   • `itcz`        — double parallel line + periodic crossing ticks (ITCZ);
@@ -184,7 +186,16 @@ export function frontSymbols(input: DecorationInput, params: Record<string, unkn
   const ink = FRONT_INK[type] ?? FRONT_INK.cold;
   const out: RenderFeature[] = [];
   // The base line carries the warm-side ink (occluded purple, stationary defaults to red).
-  out.push(lineFeature(dense, { layer: "edge", stroke: ink.warm, strokeWidth: style.edge?.width ?? 2.5 }));
+  // `dashed` ⇒ "above surface" (aloft) front: same pips, broken line (screen-constant dash).
+  const dashed = params["dashed"] === true;
+  out.push(
+    lineFeature(dense, {
+      layer: "edge",
+      stroke: ink.warm,
+      strokeWidth: style.edge?.width ?? 2.5,
+      ...(dashed ? { dash: [px * 11, px * 7] } : {}),
+    }),
+  );
 
   const spacing = px * 34; // distance between pips
   const size = px * 8; // pip height / radius
