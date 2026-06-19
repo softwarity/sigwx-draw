@@ -105,7 +105,7 @@ function lineSymbols(
   // point to one side — feet ON the line, apex off it ⇒ "—Λ—Λ—". The line meets each tooth
   // on its slanted SIDES (the Λ has no horizontal base), never bisecting it.
   if (type === "squall") {
-    out.push(lineFeature(dense, { layer: "edge", stroke: ink, strokeWidth: width, dash: [px * 13, px * 10] }));
+    out.push(lineFeature(dense, { layer: "edge", stroke: ink, strokeWidth: width, dash: [10, 6] })); // FIXED screen-constant dash (see aloft note) — never px*N, else solid on a real map
     const spacing = px * 38;
     const half = px * 7; // half the foot span
     const up = px * 5; // apex pokes this far ABOVE the line
@@ -185,19 +185,27 @@ export function frontSymbols(input: DecorationInput, params: Record<string, unkn
 
   const ink = FRONT_INK[type] ?? FRONT_INK.cold;
   const out: RenderFeature[] = [];
+  const w = style.edge?.width ?? 2.5;
+  const PIP_GAP = 34; // distance between pips, in SCREEN px (pip spacing below = px*PIP_GAP)
   // The base line carries the warm-side ink (occluded purple, stationary defaults to red).
-  // `dashed` ⇒ "above surface" (aloft) front: same pips, broken line (screen-constant dash).
+  // `dashed` ⇒ "above surface" (aloft) front: same pips, broken line. The dash MUST be a FIXED
+  // pattern (line-width units, screen-constant) — NOT scaled by `px=resolution`, which on a real map
+  // balloons the array so the single "on" run swallows the whole line ⇒ it looks solid (the "dashes
+  // vanish on commit" bug). MapLibre `line-dasharray` is in WIDTH units, so divide by `w`; we MATCH the
+  // dash PERIOD to the pip spacing (PIP_GAP screen px) so every gap lands BETWEEN decorations, not
+  // under one (else the dash beats against the pips and a gap creeps under each symbol = "see nothing").
   const dashed = params["dashed"] === true;
+  const period = PIP_GAP / w; // width-units → one full dash per pip interval
   out.push(
     lineFeature(dense, {
       layer: "edge",
       stroke: ink.warm,
-      strokeWidth: style.edge?.width ?? 2.5,
-      ...(dashed ? { dash: [px * 11, px * 7] } : {}),
+      strokeWidth: w,
+      ...(dashed ? { dash: [period * 0.6, period * 0.4] } : {}),
     }),
   );
 
-  const spacing = px * 34; // distance between pips
+  const spacing = px * PIP_GAP; // distance between pips
   const size = px * 8; // pip height / radius
   const half = px * 6; // triangle half-base
 
