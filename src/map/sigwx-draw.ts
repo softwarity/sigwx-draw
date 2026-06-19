@@ -262,6 +262,12 @@ const fc = (features: Feature[]): FeatureCollection => ({ type: "FeatureCollecti
 /** "Clear all" toolbar icon (a ✕) — `ToolbarItem` is svg-only since draw-adapter 0.2.x. */
 const CLEAR_ICON =
   '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+/** "Add movement arrow" badge — a 45° arrow pointing up-right (↗). Editing chrome (like the
+ *  `−` clear / engine `plus`), not phenomenon data: painted on a selected front that has no
+ *  arrow yet; a tap activates the movement arrow at its minimum speed. No width/height ⇒ the
+ *  glyph scales to the widget's `size` box; the shaft + arrowhead are symmetric about (12,12). */
+const MOTION_ADD_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="8 7 17 7 17 16"/></svg>';
 
 /** Editing-chrome overlays hidden during a snapshot, so the PNG shows the clean chart
  *  (no selection highlight / edit + control handles). The chart decoration stays. */
@@ -1849,6 +1855,29 @@ export class SigwxDraw {
         });
       }
     }
+    // "Add movement arrow" badge: a front that supports a movement arrow but has none yet (speed 0)
+    // gets a ↗ tap target at the arrow root instead of the arrow chrome. Tapping it activates the
+    // arrow (onDown → min speed). Once active the badge is gone (the handles + slider take over);
+    // dragging the base handle off the line removes it again.
+    if (this.selectedId) {
+      const sf = this.doc.get(this.selectedId);
+      const sdef = sf ? this.registry.get(sf.properties.phenomenon) : undefined;
+      if (sf && sdef?.motionArrow && sf.geometry.type === "LineString" && (Number(sf.properties.metadata["motionSpeed"]) || 0) <= 0) {
+        const { planar, k } = this.renderPath(sf.geometry, interactionOf(sdef));
+        const motionT = typeof sf.properties.metadata["motionT"] === "number" ? (sf.properties.metadata["motionT"] as number) : 0.5;
+        const root = toLonLat(pointAtFraction(planar, motionT).p, k);
+        widgets.push({
+          id: `${this.selectedId}#addMotion`,
+          anchor: { lon: root[0]!, lat: root[1]! },
+          origin: "center",
+          bg: "#ffffff",
+          border: "#1f2328",
+          radius: "round",
+          padding: "small",
+          child: { dir: "v", items: [{ kind: "glyph", svg: MOTION_ADD_ICON, size: 11, color: "#1f2328" }] },
+        });
+      }
+    }
     const replaced = new Set(widgets.map((w) => w.id));
     // READ-ONLY UNIFICATION: every remaining (unselected) call-out box becomes a static SPRITE rather
     // than a canvas text-box — ONE read-only render path that bypasses the engine label layer. id ==
@@ -2326,32 +2355,32 @@ export class SigwxDraw {
       });
     }
 
-    // Front MOVEMENT arrow handles. The arrow roots at fraction `motionT` along the line.
-    if (def.motionArrow && f.geometry.type === "LineString") {
+    // Front MOVEMENT arrow handles — only once the arrow EXISTS (speed > 0); with no arrow yet the
+    // selection shows the "add arrow" badge instead (see collectWidgets). Root at fraction `motionT`.
+    if (def.motionArrow && f.geometry.type === "LineString" && (Number(f.properties.metadata["motionSpeed"]) || 0) > 0) {
       const { planar, k } = this.renderPath(f.geometry, it);
       const motionT = typeof f.properties.metadata["motionT"] === "number" ? (f.properties.metadata["motionT"] as number) : 0.5;
       const root = pointAtFraction(planar, motionT).p;
-      // BASE handle, ON the line at the root: drag along the front to place the arrow (→ motionT).
-      // Always shown while selected (even at speed 0) — it carries the vertical speed slider's 0 and
-      // lets the arrow be positioned before the speed is raised.
+      // BASE handle, ON the line at the root: drag along the front to place the arrow (→ motionT);
+      // drag it FAR off the line to remove the arrow (armed `danger`, like a jet break point).
+      const draggingRoot = this.dragTarget?.kind === "frontMotionRoot" && this.dragTarget.featureId === this.selectedId;
+      const rootLL = draggingRoot && this.dragFree ? this.dragFree : toLonLat(root, k);
       buckets["handles"]!.push({
         type: "Feature",
-        properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: "motionRoot" },
-        geometry: { type: "Point", coordinates: toLonLat(root, k) },
+        properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: "motionRoot", danger: draggingRoot && this.willDelete },
+        geometry: { type: "Point", coordinates: rootLL },
       });
-      // TIP handle on the arrowhead — only when the arrow is visible (speed > 0). Same root +
-      // `MOTION_ARROW_PX` length as the decorator, so it lands on the tip; drag re-aims motionDir.
-      if ((Number(f.properties.metadata["motionSpeed"]) || 0) > 0) {
-        const dirDeg = typeof f.properties.metadata["motionDir"] === "number" ? (f.properties.metadata["motionDir"] as number) : 0;
-        const rad = (dirDeg * Math.PI) / 180; // compass bearing (0° = north, clockwise)
-        const len = resolution > 0 ? resolution * MOTION_ARROW_PX : 0;
-        const tip = toLonLat([root[0] + Math.sin(rad) * len, root[1] + Math.cos(rad) * len], k);
-        buckets["handles"]!.push({
-          type: "Feature",
-          properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: "motion" },
-          geometry: { type: "Point", coordinates: tip },
-        });
-      }
+      // TIP handle on the arrowhead. Same root + `MOTION_ARROW_PX` length as the decorator, so it
+      // lands on the tip; drag re-aims motionDir (compass bearing, 0° = north, clockwise).
+      const dirDeg = typeof f.properties.metadata["motionDir"] === "number" ? (f.properties.metadata["motionDir"] as number) : 0;
+      const rad = (dirDeg * Math.PI) / 180;
+      const len = resolution > 0 ? resolution * MOTION_ARROW_PX : 0;
+      const tip = toLonLat([root[0] + Math.sin(rad) * len, root[1] + Math.cos(rad) * len], k);
+      buckets["handles"]!.push({
+        type: "Feature",
+        properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: "motion" },
+        geometry: { type: "Point", coordinates: tip },
+      });
     }
 
   }
@@ -2610,6 +2639,16 @@ export class SigwxDraw {
         this.adapter.setPanEnabled(false);
         return;
       }
+      // The "add movement arrow" badge (↗): a tap activates the front's arrow at its minimum speed
+      // (the slider's floor), aimed NE to match the icon. The handles + slider then take over.
+      if (wid.endsWith("#addMotion")) {
+        if (fid !== this.selectedId) this.select(fid);
+        const sf = this.doc.get(fid);
+        const min = sf ? this.numLimit(this.registry.get(sf.properties.phenomenon), "motionSpeed").min : 10;
+        this.updateMetadata(fid, { motionSpeed: min, motionDir: 45 });
+        this.didDrag = false;
+        return;
+      }
       const f = this.doc.get(fid);
       if (f) {
         const def = this.registry.get(f.properties.phenomenon);
@@ -2697,11 +2736,23 @@ export class SigwxDraw {
       return;
     }
     if (t.kind === "frontMotionRoot") {
-      // Slide the arrow's ROOT along the front: project the cursor onto the curve → motionT.
+      // Slide the arrow's ROOT along the front (project the cursor onto the curve → motionT), OR
+      // pull it FAR off the line to arm removal (like a jet break point dragged off the axis).
       if (f.geometry.type !== "LineString") return;
       const { planar, k } = this.renderPath(f.geometry, interactionOf(this.registry.get(f.properties.phenomenon)));
       const tt = projectToFraction(planar, toPlanar([ev.lngLat.lon, ev.lngLat.lat], k));
-      f.properties.metadata["motionT"] = Math.min(0.98, Math.max(0.02, tt));
+      const onCurve = toLonLat(pointAtFraction(planar, tt).p, k);
+      const a = this.adapter.project(ev.lngLat);
+      const b = this.adapter.project({ lon: onCurve[0]!, lat: onCurve[1]! });
+      const distPx = a && b ? Math.hypot(a[0] - b[0], a[1] - b[1]) : 0;
+      if (distPx > 36) {
+        this.dragFree = [ev.lngLat.lon, ev.lngLat.lat]; // floats at the cursor, armed for removal
+        this.willDelete = true;
+      } else {
+        this.dragFree = null;
+        this.willDelete = false;
+        f.properties.metadata["motionT"] = Math.min(0.98, Math.max(0.02, tt));
+      }
       this.didDrag = true;
       this.scheduleRender();
       return;
@@ -2901,6 +2952,14 @@ export class SigwxDraw {
         this.removeListItem(t.featureId, lf.key, t.index);
         return;
       }
+    }
+    // The movement-arrow base handle dragged far off the front and released → remove the arrow
+    // (back to speed 0 ⇒ the "add arrow" badge returns). motionT/Dir are kept for a re-add.
+    if (t.kind === "frontMotionRoot" && this.willDelete) {
+      this.dragFree = null;
+      this.willDelete = false;
+      this.updateMetadata(t.featureId, { motionSpeed: 0 });
+      return;
     }
     this.dragFree = null;
     this.willDelete = false;

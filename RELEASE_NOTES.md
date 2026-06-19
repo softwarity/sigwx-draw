@@ -8,21 +8,23 @@
   Applies to all 8 surface + aloft fronts (cold / warm / occluded / stationary). `front-symbols`-only.
 
 - **Fronts carry a movement arrow** (direction + speed of progression), placeable AND orientable
-  anywhere along the front. Selecting a front exposes three controls:
-  - a **base handle** on the line — drag it to slide the arrow's root along the front;
-  - a **vertical speed slider** (0–50 kt) rising beside the base, its 0 pinned to the base handle —
+  anywhere along the front. Selecting a front with no arrow shows a small **↗ "add" badge** on the
+  line; tapping it creates the arrow at the minimum speed (10 kt). The active arrow then offers three
+  controls:
+  - a **base handle** on the line — drag along the front to slide the arrow's root; drag it FAR off
+    the line to **remove** the arrow (the badge returns) — same gesture as deleting a jet break point;
+  - a **vertical speed slider** (10–50 kt) rising beside the base, its 0 pinned to the base handle —
     a track + thumb, visually clear of the round handles;
   - a **tip handle** on the arrowhead — drag it to aim the direction of travel (360°).
 
   The arrow is a fixed-length black glyph (neutral WMO ink, not the front colour; override via
-  `style.arrow.color`). It stays HIDDEN at 0 kt (the default, so existing fronts are unchanged) and
-  renders on the final chart, selected or not. Its label shows the live **DIRECTION** while the front
-  is selected (`"090°"`, aviation 3-digit — aiming feedback) and the **SPEED** otherwise (`"30kt"`).
-  Direction is a COMPASS bearing (`motionDir`, 0° = due north, clockwise). Stored as
-  `metadata.motionSpeed` / `motionDir` / `motionT` (root fraction); wired on all 8 surface + aloft
-  fronts in both TEMSI profiles. New `def.motionArrow` + a `DecorationInput.editing` flag; a
-  feature-level vertical numeric `gauge` slider that rides the root; the `front-symbols` decorator
-  gained a `"motion": true` param.
+  `style.arrow.color`) and renders on the final chart, selected or not. Its label shows the live
+  **DIRECTION** while the front is selected (`"090°"`, aviation 3-digit — aiming feedback) and the
+  **SPEED** otherwise (`"30kt"`). Direction is a COMPASS bearing (`motionDir`, 0° = due north,
+  clockwise). Stored as `metadata.motionSpeed` (0 = none) / `motionDir` / `motionT` (root fraction);
+  wired on all 8 surface + aloft fronts in both TEMSI profiles. New `def.motionArrow` + a
+  `DecorationInput.editing` flag; a feature-level vertical numeric `gauge` slider that rides the root;
+  the `front-symbols` decorator gained a `"motion": true` param.
 
 ---
 

@@ -842,7 +842,7 @@
         "minVertices": 2
       },
       "fields": [
-        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 0, "max": 50, "step": 5, "default": 0 },
+        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 10, "max": 50, "step": 5, "default": 0 },
         { "key": "motionDir", "kind": "number", "label": "Movement direction", "unit": "°", "min": 0, "max": 360, "step": 1, "default": 0 }
       ],
       "render": {
@@ -884,7 +884,7 @@
         "minVertices": 2
       },
       "fields": [
-        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 0, "max": 50, "step": 5, "default": 0 },
+        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 10, "max": 50, "step": 5, "default": 0 },
         { "key": "motionDir", "kind": "number", "label": "Movement direction", "unit": "°", "min": 0, "max": 360, "step": 1, "default": 0 }
       ],
       "render": {
@@ -926,7 +926,7 @@
         "minVertices": 2
       },
       "fields": [
-        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 0, "max": 50, "step": 5, "default": 0 },
+        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 10, "max": 50, "step": 5, "default": 0 },
         { "key": "motionDir", "kind": "number", "label": "Movement direction", "unit": "°", "min": 0, "max": 360, "step": 1, "default": 0 }
       ],
       "render": {
@@ -968,7 +968,7 @@
         "minVertices": 2
       },
       "fields": [
-        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 0, "max": 50, "step": 5, "default": 0 },
+        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 10, "max": 50, "step": 5, "default": 0 },
         { "key": "motionDir", "kind": "number", "label": "Movement direction", "unit": "°", "min": 0, "max": 360, "step": 1, "default": 0 }
       ],
       "render": {
@@ -1011,7 +1011,7 @@
         "minVertices": 2
       },
       "fields": [
-        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 0, "max": 50, "step": 5, "default": 0 },
+        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 10, "max": 50, "step": 5, "default": 0 },
         { "key": "motionDir", "kind": "number", "label": "Movement direction", "unit": "°", "min": 0, "max": 360, "step": 1, "default": 0 }
       ],
       "render": {
@@ -1055,7 +1055,7 @@
         "minVertices": 2
       },
       "fields": [
-        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 0, "max": 50, "step": 5, "default": 0 },
+        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 10, "max": 50, "step": 5, "default": 0 },
         { "key": "motionDir", "kind": "number", "label": "Movement direction", "unit": "°", "min": 0, "max": 360, "step": 1, "default": 0 }
       ],
       "render": {
@@ -1099,7 +1099,7 @@
         "minVertices": 2
       },
       "fields": [
-        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 0, "max": 50, "step": 5, "default": 0 },
+        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 10, "max": 50, "step": 5, "default": 0 },
         { "key": "motionDir", "kind": "number", "label": "Movement direction", "unit": "°", "min": 0, "max": 360, "step": 1, "default": 0 }
       ],
       "render": {
@@ -1143,7 +1143,7 @@
         "minVertices": 2
       },
       "fields": [
-        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 0, "max": 50, "step": 5, "default": 0 },
+        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 10, "max": 50, "step": 5, "default": 0 },
         { "key": "motionDir", "kind": "number", "label": "Movement direction", "unit": "°", "min": 0, "max": 360, "step": 1, "default": 0 }
       ],
       "render": {

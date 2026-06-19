@@ -626,14 +626,18 @@ function compileSatellites(d: PhenomenonDescriptor): ((input: WidgetInput) => Ma
           // a track + thumb you push up/down, visually unmistakable next to the round 360° direction
           // handle on the map (a rotary dial read too much like that handle). Bottom-pinned (`yPin = 1`)
           // so its 0 sits AT the arrow-root base handle. Routes through the generic number path.
+          // Only shown once the arrow EXISTS (value > 0) — at 0 the controller paints an "add arrow"
+          // badge instead (tap → set the field's min); deletion is dragging the base handle off-line.
           const key = it.gauge.cursors[0]!;
           const nf = (d.fields ?? []).find((ff): ff is NumberFieldDescriptor => ff.kind === "number" && ff.key === key)!;
-          const min = nf.min ?? 0;
-          const max = nf.max ?? 100;
-          const value = num(metadata[key], min);
-          const unit = nf.unit ?? "";
-          items.push({ kind: "gauge", min, max, step: nf.step ?? 1, length: 96, cursors: [{ name: key, value, label: `${Math.round(value)}${unit}` }], ...chromeProps(chrome, true) } as WidgetNode);
-          yPin = 1; // 0 (gauge bottom) aligns with the root base handle
+          const value = num(metadata[key], 0);
+          if (value > 0) {
+            const min = nf.min ?? 0;
+            const max = nf.max ?? 100;
+            const unit = nf.unit ?? "";
+            items.push({ kind: "gauge", min, max, step: nf.step ?? 1, length: 96, cursors: [{ name: key, value, label: `${Math.round(value)}${unit}` }], ...chromeProps(chrome, true) } as WidgetNode);
+            yPin = 1; // 0 (gauge bottom) aligns with the root base handle
+          }
         } else if (it.gauge && !scope) {
           // Feature-level FL gauge. A base/top pair (CB, icing, turbulence) → a DRAGGABLE 1-band
           // `ranges` gauge (grab the middle, base+top move together), inked in the phenomenon's

@@ -412,15 +412,19 @@ describe("fronts (TEMSI family B — the front-symbols decorator)", () => {
     const cursors = gauge!["cursors"] as { name: string; label: string }[];
     expect(cursors[0]!.name).toBe("motionSpeed");
     expect(cursors[0]!.label).toContain("30");
+    expect(gauge!["min"]).toBe(10); // slider floor = the active minimum (0 = off, via the badge)
     // Not editable ⇒ no satellite card at all.
     expect(def.widget?.({ id: "f1", geometry: line, metadata: {}, editable: false, style: def.style })).toBeNull();
+    // No arrow yet (speed 0) ⇒ no slider either; the controller paints the "add arrow" badge instead.
+    expect(def.widget?.({ id: "f1", geometry: line, metadata: { motionSpeed: 0 }, editable: true, style: def.style })).toBeNull();
   });
   it("the speed slider rides the arrow root (motionT), not the fixed midpoint", async () => {
     const { FRONT_COLD_DESCRIPTOR } = await import("../src/core/descriptors/index.js");
     const { defFromDescriptor } = await import("../src/core/index.js");
     const def = defFromDescriptor(FRONT_COLD_DESCRIPTOR);
     const anchorAt = (motionT?: number): [number, number] => {
-      const out = def.widget?.({ id: "f1", geometry: line, metadata: motionT == null ? {} : { motionT }, editable: true, style: def.style });
+      const meta = motionT == null ? { motionSpeed: 30 } : { motionSpeed: 30, motionT };
+      const out = def.widget?.({ id: "f1", geometry: line, metadata: meta, editable: true, style: def.style });
       const cards = (Array.isArray(out) ? out : out ? [out] : []) as { anchor: { lon: number; lat: number } }[];
       return [cards[0]!.anchor.lon, cards[0]!.anchor.lat];
     };
