@@ -2,6 +2,14 @@
 
 ## NEXT RELEASE
 
+- **Every read-only annotation now renders as a sprite** — one unified read-only path. Beyond the area
+  call-outs (already sprites), the spot/line FL labels (tropopause, isotherms) and the marker/cards
+  (volcano / TC / radioactive / pressure-centre / tropopause-spot / WMO points) become static sprites
+  when NOT selected; only the SELECTED one stays a live DOM card (input / picker / delete). Interaction
+  is unchanged (a sprite's hit selects it / drags to move the point). Spot/line labels stay pinned to
+  their own anchor (never moved by anti-collision, unlike a cartouche). The tropopause high/low pentagon
+  sprites with its point (requires the adapter's `boxShape` sprite rasterization).
+
 ---
 
 ## 2.0.0

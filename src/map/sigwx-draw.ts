@@ -1876,6 +1876,23 @@ export class SigwxDraw {
       }
     }
 
+    // Spot / line LABELS (tropopause spot+contour, isotherms) are DIRECT text-boxes, not placed
+    // call-outs: each is PINNED to its own anchor — the box IS the object, so it NEVER moves with the
+    // anti-collision (unlike a cartouche). Still render it as a static SPRITE when unselected, so the
+    // read-only path is unified — anchored on its own point (NO `placeAnnotations`), so it stays put.
+    // Skip the selected one (it stays an editable canvas box) and rotated labels (jet speed — no tilt).
+    const keptBoxes: Feature[] = [];
+    for (const box of buckets["text-boxes"]!) {
+      const props = box.properties ?? {};
+      const fid = props["featureId"];
+      if (typeof fid === "string" && fid !== this.selectedId && !replaced.has(fid) && box.geometry.type === "Point" && props["rotation"] === undefined) {
+        const sprite = this.calloutSprite(box as RenderFeature, placed.symbols);
+        if (sprite) { widgets.push(sprite); replaced.add(fid); continue; }
+      }
+      keptBoxes.push(box);
+    }
+    buckets["text-boxes"] = keptBoxes;
+
     // `decorate` bakes the resolved style into the `handles` props (the generic
     // adapter is dumb); every other overlay is passed through unchanged.
     for (const id of OVERLAY_IDS) this.adapter.setOverlay(id, decorate(id, fc(buckets[id]!), this.style));

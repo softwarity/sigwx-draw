@@ -1012,8 +1012,15 @@ function compileMarkerWidget(d: PhenomenonDescriptor): (input: WidgetInput) => M
     // Frame outline driven by an enum field (the tropopause spot: rect / pentagon-up / -down).
     const shapeBy = card.boxShapeBy;
     const boxShape = shapeBy ? (shapeBy.map[str(metadata[shapeBy.field])] as BoxShape | undefined) : undefined;
+    // Read-only unification: a NON-selected marker/card (volcano / TC / radioactive / pressure centre /
+    // tropopause-spot / WMO point) renders as a static SPRITE, like every other unselected annotation —
+    // only the SELECTED one stays a live DOM card (input / picker / delete). Its hit surfaces as
+    // `text-boxes`+featureId on a Point feature, which the controller already routes to select +
+    // drag-to-move-the-point, so interaction is unchanged. The adapter sprite rasterizer now replicates
+    // a non-rect `boxShape` (the tropopause high/low PENTAGON), so no exception is needed — it sprites too.
     return {
       id,
+      ...(editable ? {} : { static: true as const }),
       anchor: { lon, lat },
       origin: card.origin ?? "center",
       // A delete ✕ when selected — the name <input> swallows Delete/Backspace, so the
