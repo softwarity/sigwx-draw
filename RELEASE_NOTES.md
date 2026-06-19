@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.0.0
+
 - **Fix: aloft (above-surface) front dashes** now render reliably. They used a `resolution`-scaled
   dash that went solid on a real map; it is now a fixed screen-constant pattern with its period matched
   to the WMO pip spacing, so gaps fall between symbols. Same fix on the squall line. `front-symbols`-only.
