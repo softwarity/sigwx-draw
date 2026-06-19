@@ -49,12 +49,22 @@ function walk(dir) {
   }
   return out;
 }
+/** Normalize a glyph SVG for inlining: collapse whitespace AND ensure the `xmlns` namespace.
+ *  Inline SVG renders fine WITHOUT `xmlns` (the HTML parser is lenient), but a read-only marker
+ *  SPRITE is rasterized by loading the SVG as a `data:image/svg+xml` image — parsed as STRICT XML,
+ *  which FAILS without `xmlns` (→ blank volcano / TC / radioactive / pressure-centre sprites once
+ *  unselected). Adding it is harmless for the inline path. */
+const normalizeSvg = (s) => {
+  const t = s.trim().replace(/\s*\n\s*/g, " ");
+  return /<svg[^>]*\bxmlns=/.test(t) ? t : t.replace(/<svg\b/, '<svg xmlns="http://www.w3.org/2000/svg"');
+};
+
 const bank = {}; // name -> { svg, ref }  (ref = path under svgs/, e.g. "buttons/cb.svg")
 for (const p of walk(SVGS)) {
   const name = basename(p, ".svg");
   const ref = relative(SVGS, p).split(sep).join("/");
   if (bank[name]) console.warn(`⚠ name collision: "${name}" (two .svg files)`);
-  bank[name] = { svg: readFileSync(p, "utf8").trim().replace(/\s*\n\s*/g, " "), ref };
+  bank[name] = { svg: normalizeSvg(readFileSync(p, "utf8")), ref };
 }
 
 // Engine chrome (`atlas:plus`/`atlas:minus`) lives in the core atlas — never from the bank.
@@ -94,11 +104,11 @@ for (const f of readdirSync(SRC_PROFILES)) {
   const glyphs = {};
   for (const [name, ref] of Object.entries(refs)) {
     if (typeof ref === "string" && ref.trim().startsWith("<svg")) {
-      glyphs[name] = ref.trim(); // already an inline custom glyph — keep as-is
+      glyphs[name] = normalizeSvg(ref); // inline custom glyph — keep, but ensure xmlns
     } else {
       const file = join(SVGS, ref);
       if (existsSync(file)) {
-        glyphs[name] = readFileSync(file, "utf8").trim().replace(/\s*\n\s*/g, " ");
+        glyphs[name] = normalizeSvg(readFileSync(file, "utf8"));
         referenced.add(typeof ref === "string" ? ref : "");
       } else missing.push(`${id} → "${name}": svgs/${ref} not found`);
     }
@@ -114,10 +124,10 @@ for (const f of readdirSync(SRC_PROFILES)) {
 const wafs = JSON.parse(readFileSync(join(SRC_PROFILES, "wafs.json"), "utf8"));
 const stockGlyphs = {};
 for (const [name, ref] of Object.entries(wafs.glyphs ?? {})) {
-  if (typeof ref === "string" && ref.trim().startsWith("<svg")) stockGlyphs[name] = ref.trim();
+  if (typeof ref === "string" && ref.trim().startsWith("<svg")) stockGlyphs[name] = normalizeSvg(ref);
   else {
     const file = join(SVGS, ref);
-    if (existsSync(file)) stockGlyphs[name] = readFileSync(file, "utf8").trim().replace(/\s*\n\s*/g, " ");
+    if (existsSync(file)) stockGlyphs[name] = normalizeSvg(readFileSync(file, "utf8"));
     else missing.push(`wafs (stock) → "${name}": svgs/${ref} not found`);
   }
 }

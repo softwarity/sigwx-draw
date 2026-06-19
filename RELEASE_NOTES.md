@@ -2,6 +2,13 @@
 
 ## NEXT RELEASE
 
+- **Fix: point-marker glyphs no longer vanish when unselected** (volcano / tropical cyclone /
+  radioactive / pressure centre — every profile). When unselected, a marker renders as a read-only
+  sprite, rasterized by loading its glyph SVG as a `data:image/svg+xml` image — which is parsed as
+  strict XML and **fails without an `xmlns` namespace** that the source `svgs/**` lacked (inline DOM
+  rendering tolerates its absence, so selected cards still showed the glyph). The atlas build
+  (`build-atlas.mjs`) now injects `xmlns` into every inlined glyph (stock + dist profiles).
+
 - **On-map flight levels are bare 3-digit numbers** (no `FL` prefix), per the ICAO/TEMSI chart norm
   (the `FL` prefix is a text convention — METAR/SIGMET — not graphical charts). Applies to the
   CB / convective & non-convective cloud / turbulence (CAT) / icing call-outs and the tropopause
