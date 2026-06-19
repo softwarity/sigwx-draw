@@ -20,12 +20,14 @@
  */
 import {
   add,
+  arrowheadFeature,
   catmullRom,
   coordsOf,
   frameK,
   lineFeature,
   perpLeft,
   pointAtFraction,
+  pointFeature,
   polygonFeature,
   polylineLength,
   scale,
@@ -36,9 +38,14 @@ import {
 import type { Pt } from "../decorate/index.js";
 import type { DecorationInput, RenderFeature } from "../phenomenon.js";
 import type { PhenomenonStyle } from "../style.js";
+import { num } from "../phenomena/util.js";
 
 type FrontType = "cold" | "warm" | "occluded" | "stationary";
 type LineType = "convergence" | "itcz" | "squall";
+
+/** Movement-arrow length in SCREEN px (`px = resolution`). The controller's direction handle
+ *  (`sigwx-draw` renderSelection) reuses THIS constant so the grab handle lands on the arrowhead. */
+export const MOTION_ARROW_PX = 58;
 
 /** WMO front colours (the ink drives the line + the pips). */
 const FRONT_INK: Record<FrontType, { warm: string; cold: string }> = {
@@ -165,7 +172,7 @@ function lineSymbols(
 }
 
 export function frontSymbols(input: DecorationInput, params: Record<string, unknown>): RenderFeature[] {
-  const { geometry, style, resolution } = input;
+  const { geometry, metadata, style, resolution, editing } = input;
   const type = (typeof params["frontType"] === "string" ? params["frontType"] : "cold") as FrontType | LineType;
   const coords = coordsOf(geometry);
   if (coords.length < 2) return [];
@@ -209,23 +216,56 @@ export function frontSymbols(input: DecorationInput, params: Record<string, unkn
   const size = px * 8; // pip height / radius
   const half = px * 6; // triangle half-base
 
-  // Warm side = left of travel by default (a host can flip via metadata later). Stationary
-  // alternates the side; occluded alternates the shape.
+  // Warm side = LEFT of travel (so the side follows the draw direction) — but ONLY in the
+  // northern hemisphere. In the southern hemisphere the WMO convention flips, so we mirror the
+  // pip side by a hemisphere factor (mean latitude sign), exactly as the jet feathers do
+  // (`featherSide`). NH `hemi = +1` keeps the legacy behaviour; SH `hemi = −1` puts the pips on
+  // the opposite side for the same stroke. Stationary alternates the side; occluded the shape.
+  const meanLat = coords.reduce((s, c) => s + (c as Pt)[1], 0) / coords.length;
+  const hemi = meanLat >= 0 ? 1 : -1;
   let i = 0;
   for (let d = spacing; d < total - spacing * 0.3; d += spacing) {
     const st = pointAtFraction(planar, d / total);
     const tan = st.dir as Pt;
     if (type === "cold") {
-      out.push(triangle(st.p as Pt, tan, +1, half, size, k, ink.warm));
+      out.push(triangle(st.p as Pt, tan, hemi, half, size, k, ink.warm));
     } else if (type === "warm") {
-      out.push(semicircle(st.p as Pt, tan, +1, size, k, ink.warm));
+      out.push(semicircle(st.p as Pt, tan, hemi, size, k, ink.warm));
     } else if (type === "occluded") {
-      out.push(i % 2 === 0 ? triangle(st.p as Pt, tan, +1, half, size, k, ink.warm) : semicircle(st.p as Pt, tan, +1, size, k, ink.warm));
+      out.push(i % 2 === 0 ? triangle(st.p as Pt, tan, hemi, half, size, k, ink.warm) : semicircle(st.p as Pt, tan, hemi, size, k, ink.warm));
     } else {
       // stationary: blue triangle on the cold side, red semicircle on the warm side, alternating
-      out.push(i % 2 === 0 ? triangle(st.p as Pt, tan, -1, half, size, k, ink.cold) : semicircle(st.p as Pt, tan, +1, size, k, ink.warm));
+      out.push(i % 2 === 0 ? triangle(st.p as Pt, tan, -hemi, half, size, k, ink.cold) : semicircle(st.p as Pt, tan, hemi, size, k, ink.warm));
     }
     i++;
+  }
+
+  // Optional MOVEMENT ARROW (surface + aloft fronts, `"motion": true`): a fixed-length arrow rooted
+  // at fraction `motionT` along the front (default mid), aimed by `motionDir` — a COMPASS bearing
+  // (0° = due north, clockwise). Hidden at speed 0. The controller paints a base handle on the root
+  // (slide along the line → motionT), a 360° handle on the tip (→ motionDir) + a vertical speed
+  // slider; it reuses the SAME root + `MOTION_ARROW_PX` length so the tip handle lands on the
+  // arrowhead. Label: the live DIRECTION ("045°") while EDITING (aiming feedback), the SPEED
+  // ("30kt") on the final chart.
+  if (params["motion"] === true) {
+    const speed = num(metadata["motionSpeed"], 0);
+    if (speed > 0) {
+      // Compass bearing → planar unit (planar x = east, y = north): [sin, cos], NOT [cos, sin].
+      const dir = (num(metadata["motionDir"], 0) + 360) % 360;
+      const rad = (dir * Math.PI) / 180;
+      const u: Pt = [Math.sin(rad), Math.cos(rad)];
+      const root = pointAtFraction(planar, num(metadata["motionT"], 0.5)).p as Pt;
+      const tip = add(root, scale(u, px * MOTION_ARROW_PX));
+      // BLACK by default (the WMO movement arrow is neutral ink, not the front colour); a profile
+      // may override via `style.arrow.color`.
+      const motionInk = style.arrow?.color ?? "#1f2328";
+      out.push(lineFeature([toLonLat(root, k), toLonLat(tip, k)], { layer: "decoration", stroke: motionInk, strokeWidth: w }));
+      out.push(arrowheadFeature(tip, u, k, px * 12, { layer: "decoration", stroke: motionInk, strokeWidth: 1, fillColor: motionInk }));
+      // Set WELL beyond the arrowhead (clear of the tip), nudged off the shaft.
+      const text = editing ? `${String(Math.round(dir) % 360).padStart(3, "0")}°` : `${Math.round(speed)}kt`;
+      const labelAt = add(add(tip, scale(u, px * 16)), scale(perpLeft(u), px * 8));
+      out.push(pointFeature(toLonLat(labelAt, k), { layer: "text-boxes", text, textColor: motionInk, textSize: 13, textHalo: "#ffffff" }));
+    }
   }
   return out;
 }

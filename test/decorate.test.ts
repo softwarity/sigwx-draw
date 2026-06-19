@@ -365,4 +365,66 @@ describe("fronts (TEMSI family B — the front-symbols decorator)", () => {
       expect(fs.length).toBeGreaterThan(1);
     }
   });
+  it("front pips flip to the opposite side in the southern hemisphere", async () => {
+    const { FRONT_COLD_DESCRIPTOR } = await import("../src/core/descriptors/index.js");
+    const { defFromDescriptor } = await import("../src/core/index.js");
+    const def = defFromDescriptor(FRONT_COLD_DESCRIPTOR);
+    // A cold front drawn west→east: pips on the LEFT of travel (north of the line) in the NH.
+    // The apex of a triangle pip is the vertex whose latitude is farthest from the line's.
+    const apexLat = (lat: number): number => {
+      const g: Geometry = { type: "LineString", coordinates: [[0, lat], [10, lat]] };
+      const fs = def.decorate({ geometry: g, metadata: {}, style: def.style });
+      const pip = byLayer(fs, "decoration").find((f) => f.geometry.type === "Polygon")!;
+      const ring = (pip.geometry as { coordinates: Pt[][] }).coordinates[0]!;
+      return ring.reduce((best, c) => (Math.abs(c[1] - lat) > Math.abs(best - lat) ? c[1] : best), lat);
+    };
+    expect(apexLat(20)).toBeGreaterThan(20); // NH: pips north of an eastbound stroke
+    expect(apexLat(-20)).toBeLessThan(-20); // SH: same stroke ⇒ pips flip to the south side
+  });
+  it("a front draws a movement arrow + speed label only when motionSpeed > 0", async () => {
+    const { FRONT_COLD_DESCRIPTOR } = await import("../src/core/descriptors/index.js");
+    const { defFromDescriptor } = await import("../src/core/index.js");
+    const def = defFromDescriptor(FRONT_COLD_DESCRIPTOR);
+    const still = def.decorate({ geometry: line, metadata: { motionSpeed: 0 }, style: def.style });
+    expect(byLayer(still, "text-boxes").length).toBe(0); // hidden at speed 0
+    const moving = def.decorate({ geometry: line, metadata: { motionSpeed: 30, motionDir: 90 }, style: def.style });
+    const labels = byLayer(moving, "text-boxes");
+    expect(labels.length).toBe(1);
+    expect(String(labels[0]!.properties["text"])).toContain("30kt"); // final chart ⇒ the SPEED
+    // The arrow adds a decoration polygon (the arrowhead) beyond the pips.
+    expect(byLayer(moving, "decoration").length).toBeGreaterThan(byLayer(still, "decoration").length);
+    // While EDITING the label reads the DIRECTION in compass degrees (3-digit, 0° = north).
+    const editing = def.decorate({ geometry: line, metadata: { motionSpeed: 30, motionDir: 90 }, style: def.style, editing: true });
+    expect(String(byLayer(editing, "text-boxes")[0]!.properties["text"])).toBe("090°");
+  });
+  it("a selected front raises a vertical speed slider bound to motionSpeed", async () => {
+    const { FRONT_COLD_DESCRIPTOR } = await import("../src/core/descriptors/index.js");
+    const { defFromDescriptor } = await import("../src/core/index.js");
+    const def = defFromDescriptor(FRONT_COLD_DESCRIPTOR);
+    expect(def.motionArrow).toBe(true);
+    const out = def.widget?.({ id: "f1", geometry: line, metadata: { motionSpeed: 30, motionDir: 90 }, editable: true, style: def.style });
+    const cards = (Array.isArray(out) ? out : out ? [out] : []) as { child?: { items?: Record<string, unknown>[] } }[];
+    const items = cards.flatMap((c) => c.child?.items ?? []);
+    const gauge = items.find((n) => n["kind"] === "gauge");
+    expect(gauge).toBeTruthy();
+    expect(gauge!["orientation"]).toBeUndefined(); // vertical (the gauge default), a slider — not a rotary dial
+    expect(gauge!["max"]).toBe(50);
+    const cursors = gauge!["cursors"] as { name: string; label: string }[];
+    expect(cursors[0]!.name).toBe("motionSpeed");
+    expect(cursors[0]!.label).toContain("30");
+    // Not editable ⇒ no satellite card at all.
+    expect(def.widget?.({ id: "f1", geometry: line, metadata: {}, editable: false, style: def.style })).toBeNull();
+  });
+  it("the speed slider rides the arrow root (motionT), not the fixed midpoint", async () => {
+    const { FRONT_COLD_DESCRIPTOR } = await import("../src/core/descriptors/index.js");
+    const { defFromDescriptor } = await import("../src/core/index.js");
+    const def = defFromDescriptor(FRONT_COLD_DESCRIPTOR);
+    const anchorAt = (motionT?: number): [number, number] => {
+      const out = def.widget?.({ id: "f1", geometry: line, metadata: motionT == null ? {} : { motionT }, editable: true, style: def.style });
+      const cards = (Array.isArray(out) ? out : out ? [out] : []) as { anchor: { lon: number; lat: number } }[];
+      return [cards[0]!.anchor.lon, cards[0]!.anchor.lat];
+    };
+    // Moving the root to t=0.2 shifts the slider's anchor toward the line start vs the default mid.
+    expect(anchorAt(0.2)[0]).toBeLessThan(anchorAt()[0]);
+  });
 });

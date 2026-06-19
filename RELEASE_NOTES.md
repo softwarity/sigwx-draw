@@ -2,6 +2,28 @@
 
 ## NEXT RELEASE
 
+- **Fronts are hemisphere-aware**. The pip side still follows the draw direction (west→east ⇒ pips
+  above, east→west ⇒ below) in the northern hemisphere, but it now MIRRORS in the southern hemisphere
+  — the WMO convention — driven by the front's mean latitude (the same rule the jet feathers use).
+  Applies to all 8 surface + aloft fronts (cold / warm / occluded / stationary). `front-symbols`-only.
+
+- **Fronts carry a movement arrow** (direction + speed of progression), placeable AND orientable
+  anywhere along the front. Selecting a front exposes three controls:
+  - a **base handle** on the line — drag it to slide the arrow's root along the front;
+  - a **vertical speed slider** (0–50 kt) rising beside the base, its 0 pinned to the base handle —
+    a track + thumb, visually clear of the round handles;
+  - a **tip handle** on the arrowhead — drag it to aim the direction of travel (360°).
+
+  The arrow is a fixed-length black glyph (neutral WMO ink, not the front colour; override via
+  `style.arrow.color`). It stays HIDDEN at 0 kt (the default, so existing fronts are unchanged) and
+  renders on the final chart, selected or not. Its label shows the live **DIRECTION** while the front
+  is selected (`"090°"`, aviation 3-digit — aiming feedback) and the **SPEED** otherwise (`"30kt"`).
+  Direction is a COMPASS bearing (`motionDir`, 0° = due north, clockwise). Stored as
+  `metadata.motionSpeed` / `motionDir` / `motionT` (root fraction); wired on all 8 surface + aloft
+  fronts in both TEMSI profiles. New `def.motionArrow` + a `DecorationInput.editing` flag; a
+  feature-level vertical numeric `gauge` slider that rides the root; the `front-symbols` decorator
+  gained a `"motion": true` param.
+
 ---
 
 ## 2.0.1

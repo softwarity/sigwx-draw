@@ -16,6 +16,7 @@ import type { Feature, FeatureCollection, Geometry, Position } from "geojson";
 import * as polyclip from "polyclip-ts";
 
 import { ringCentroid, fl as flLabel } from "../core/phenomena/util.js";
+import { MOTION_ARROW_PX } from "../core/extensions/front-symbols.js";
 
 import {
   DEFAULT_CB_COVERAGE,
@@ -329,6 +330,8 @@ export class SigwxDraw {
     | { kind: "labelslide"; featureId: string }
     | { kind: "callout"; featureId: string; labelId: string; grab: [number, number] }
     | { kind: "anchor"; featureId: string; area: number }
+    | { kind: "frontMotion"; featureId: string }
+    | { kind: "frontMotionRoot"; featureId: string }
     | { kind: "translate"; featureId: string; lastPx: [number, number] }
     | null = null;
   private didDrag = false;
@@ -1710,7 +1713,7 @@ export class SigwxDraw {
       const f = this.doc.get(id);
       if (!f) continue;
       const def = this.registry.get(f.properties.phenomenon);
-      const features: RenderFeature[] = def.decorate({ geometry: f.geometry, metadata: f.properties.metadata, style: this.styleOf(f.properties.phenomenon), resolution, flightLevel: this.flResolved(f.properties.phenomenon), leaderThunderbolt: this.phenomena[f.properties.phenomenon]?.leaderThunderbolt });
+      const features: RenderFeature[] = def.decorate({ geometry: f.geometry, metadata: f.properties.metadata, style: this.styleOf(f.properties.phenomenon), resolution, flightLevel: this.flResolved(f.properties.phenomenon), leaderThunderbolt: this.phenomena[f.properties.phenomenon]?.leaderThunderbolt, editing: id === this.selectedId });
       // Declutter: an UNSELECTED feature whose on-screen extent is INSIGNIFICANT vs the
       // current view drops its CHROME — call-out/leader/arrow, glyphs, FL labels, and the
       // jet's barbs/arrowhead (all screen-sized, they'd dwarf the shape). The shape itself
@@ -2323,6 +2326,34 @@ export class SigwxDraw {
       });
     }
 
+    // Front MOVEMENT arrow handles. The arrow roots at fraction `motionT` along the line.
+    if (def.motionArrow && f.geometry.type === "LineString") {
+      const { planar, k } = this.renderPath(f.geometry, it);
+      const motionT = typeof f.properties.metadata["motionT"] === "number" ? (f.properties.metadata["motionT"] as number) : 0.5;
+      const root = pointAtFraction(planar, motionT).p;
+      // BASE handle, ON the line at the root: drag along the front to place the arrow (→ motionT).
+      // Always shown while selected (even at speed 0) — it carries the vertical speed slider's 0 and
+      // lets the arrow be positioned before the speed is raised.
+      buckets["handles"]!.push({
+        type: "Feature",
+        properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: "motionRoot" },
+        geometry: { type: "Point", coordinates: toLonLat(root, k) },
+      });
+      // TIP handle on the arrowhead — only when the arrow is visible (speed > 0). Same root +
+      // `MOTION_ARROW_PX` length as the decorator, so it lands on the tip; drag re-aims motionDir.
+      if ((Number(f.properties.metadata["motionSpeed"]) || 0) > 0) {
+        const dirDeg = typeof f.properties.metadata["motionDir"] === "number" ? (f.properties.metadata["motionDir"] as number) : 0;
+        const rad = (dirDeg * Math.PI) / 180; // compass bearing (0° = north, clockwise)
+        const len = resolution > 0 ? resolution * MOTION_ARROW_PX : 0;
+        const tip = toLonLat([root[0] + Math.sin(rad) * len, root[1] + Math.cos(rad) * len], k);
+        buckets["handles"]!.push({
+          type: "Feature",
+          properties: { layer: "handles", hClass: "control", featureId: this.selectedId, role: "motion" },
+          geometry: { type: "Point", coordinates: tip },
+        });
+      }
+    }
+
   }
 
   /** The dense planar path (smoothed if needed) used for slider placement. */
@@ -2502,6 +2533,10 @@ export class SigwxDraw {
         this.dragTarget = { kind: "anchor", featureId, area: Number(hit.props["area"] ?? 0) };
       } else if (hClass === "control" && role === "label") {
         this.dragTarget = { kind: "labelslide", featureId };
+      } else if (hClass === "control" && role === "motion") {
+        this.dragTarget = { kind: "frontMotion", featureId };
+      } else if (hClass === "control" && role === "motionRoot") {
+        this.dragTarget = { kind: "frontMotionRoot", featureId };
       }
       // Only seize the pointer if a drag was actually armed — a control handle hit with
       // no selected sub-item arms nothing, and must NOT leave pan disabled (onUp returns
@@ -2657,6 +2692,30 @@ export class SigwxDraw {
       const { planar, k } = this.renderPath(f.geometry, interactionOf(this.registry.get(f.properties.phenomenon)));
       const tt = projectToFraction(planar, toPlanar([ev.lngLat.lon, ev.lngLat.lat], k));
       f.properties.metadata["labelT"] = Math.min(0.98, Math.max(0.02, tt));
+      this.didDrag = true;
+      this.scheduleRender();
+      return;
+    }
+    if (t.kind === "frontMotionRoot") {
+      // Slide the arrow's ROOT along the front: project the cursor onto the curve → motionT.
+      if (f.geometry.type !== "LineString") return;
+      const { planar, k } = this.renderPath(f.geometry, interactionOf(this.registry.get(f.properties.phenomenon)));
+      const tt = projectToFraction(planar, toPlanar([ev.lngLat.lon, ev.lngLat.lat], k));
+      f.properties.metadata["motionT"] = Math.min(0.98, Math.max(0.02, tt));
+      this.didDrag = true;
+      this.scheduleRender();
+      return;
+    }
+    if (t.kind === "frontMotion") {
+      // Re-aim the front's movement arrow: COMPASS bearing from the ROOT (`motionT`) to the cursor
+      // (0° = due north, clockwise) — atan2(east, north) in the planar frame (x = east, y = north).
+      if (f.geometry.type !== "LineString") return;
+      const { planar, k } = this.renderPath(f.geometry, interactionOf(this.registry.get(f.properties.phenomenon)));
+      const motionT = typeof f.properties.metadata["motionT"] === "number" ? (f.properties.metadata["motionT"] as number) : 0.5;
+      const root = pointAtFraction(planar, motionT).p;
+      const cur = toPlanar([ev.lngLat.lon, ev.lngLat.lat], k);
+      const deg = (Math.atan2(cur[0] - root[0], cur[1] - root[1]) * 180) / Math.PI;
+      f.properties.metadata["motionDir"] = (Math.round(deg) + 360) % 360;
       this.didDrag = true;
       this.scheduleRender();
       return;

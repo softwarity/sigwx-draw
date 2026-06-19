@@ -102,6 +102,10 @@ export interface DecorationInput {
   flightLevel?: { min?: number; max?: number; beyond?: [FlMode, FlMode] } | undefined;
   /** CB-only: `false` → a plain straight leader; `true`/undefined → the lightning-bolt leader. */
   leaderThunderbolt?: boolean | undefined;
+  /** True when this feature is the SELECTED one (being edited) — lets a decorator show editing
+   *  feedback instead of the final glyph (the front movement arrow labels its DIRECTION in degrees
+   *  while selected, its SPEED otherwise). */
+  editing?: boolean | undefined;
 }
 
 /**
@@ -288,6 +292,12 @@ export interface PhenomenonDef {
   /** LINE phenomena: the placed label can be slid ALONG the line (a drag handle shows while
    *  selected). Position rides `metadata.labelT` (fraction 0–1). Set from `render.line.label.movable`. */
   movableLabel?: boolean;
+  /** LINE phenomena (the fronts): a movement arrow rooted at the line midpoint, aimed by
+   *  `metadata.motionDir` (planar bearing, degrees) and sized by `metadata.motionSpeed` (kt — hidden
+   *  at 0). While selected the controller paints a 360° drag handle on the arrow tip (role "motion")
+   *  that writes `motionDir`; the speed rides a feature-level dial. Set from a `front-symbols`
+   *  decoration flagged `"motion": true`. */
+  motionArrow?: boolean;
   /** Multi-layer cloud-area editor (the TEMSI cloud-layer area): the named LIST field is edited as
    *  the active layer's flat card + a side multi-range FL gauge (one band per layer). The controller
    *  reads `listField`/`min`/`max` to route add/remove/select and keep the list altitude-sorted.

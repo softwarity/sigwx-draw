@@ -841,14 +841,29 @@
         "smooth": true,
         "minVertices": 2
       },
+      "fields": [
+        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 0, "max": 50, "step": 5, "default": 0 },
+        { "key": "motionDir", "kind": "number", "label": "Movement direction", "unit": "°", "min": 0, "max": 360, "step": 1, "default": 0 }
+      ],
       "render": {
         "decorations": [
           {
             "use": "front-symbols",
-            "frontType": "cold"
+            "frontType": "cold",
+            "motion": true
           }
         ]
       },
+      "satellites": [
+        {
+          "part": "motion",
+          "anchor": "geometry-mid",
+          "side": "right",
+          "items": [
+            { "gauge": { "cursors": ["motionSpeed"] } }
+          ]
+        }
+      ],
       "style": {
         "color": "#2c5fb3",
         "edge": {
@@ -868,14 +883,29 @@
         "smooth": true,
         "minVertices": 2
       },
+      "fields": [
+        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 0, "max": 50, "step": 5, "default": 0 },
+        { "key": "motionDir", "kind": "number", "label": "Movement direction", "unit": "°", "min": 0, "max": 360, "step": 1, "default": 0 }
+      ],
       "render": {
         "decorations": [
           {
             "use": "front-symbols",
-            "frontType": "warm"
+            "frontType": "warm",
+            "motion": true
           }
         ]
       },
+      "satellites": [
+        {
+          "part": "motion",
+          "anchor": "geometry-mid",
+          "side": "right",
+          "items": [
+            { "gauge": { "cursors": ["motionSpeed"] } }
+          ]
+        }
+      ],
       "style": {
         "color": "#d1242f",
         "edge": {
@@ -895,14 +925,29 @@
         "smooth": true,
         "minVertices": 2
       },
+      "fields": [
+        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 0, "max": 50, "step": 5, "default": 0 },
+        { "key": "motionDir", "kind": "number", "label": "Movement direction", "unit": "°", "min": 0, "max": 360, "step": 1, "default": 0 }
+      ],
       "render": {
         "decorations": [
           {
             "use": "front-symbols",
-            "frontType": "occluded"
+            "frontType": "occluded",
+            "motion": true
           }
         ]
       },
+      "satellites": [
+        {
+          "part": "motion",
+          "anchor": "geometry-mid",
+          "side": "right",
+          "items": [
+            { "gauge": { "cursors": ["motionSpeed"] } }
+          ]
+        }
+      ],
       "style": {
         "color": "#8250df",
         "edge": {
@@ -922,14 +967,29 @@
         "smooth": true,
         "minVertices": 2
       },
+      "fields": [
+        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 0, "max": 50, "step": 5, "default": 0 },
+        { "key": "motionDir", "kind": "number", "label": "Movement direction", "unit": "°", "min": 0, "max": 360, "step": 1, "default": 0 }
+      ],
       "render": {
         "decorations": [
           {
             "use": "front-symbols",
-            "frontType": "stationary"
+            "frontType": "stationary",
+            "motion": true
           }
         ]
       },
+      "satellites": [
+        {
+          "part": "motion",
+          "anchor": "geometry-mid",
+          "side": "right",
+          "items": [
+            { "gauge": { "cursors": ["motionSpeed"] } }
+          ]
+        }
+      ],
       "style": {
         "color": "#d1242f",
         "edge": {
@@ -950,15 +1010,30 @@
         "smooth": true,
         "minVertices": 2
       },
+      "fields": [
+        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 0, "max": 50, "step": 5, "default": 0 },
+        { "key": "motionDir", "kind": "number", "label": "Movement direction", "unit": "°", "min": 0, "max": 360, "step": 1, "default": 0 }
+      ],
       "render": {
         "decorations": [
           {
             "use": "front-symbols",
             "frontType": "cold",
-            "dashed": true
+            "dashed": true,
+            "motion": true
           }
         ]
       },
+      "satellites": [
+        {
+          "part": "motion",
+          "anchor": "geometry-mid",
+          "side": "right",
+          "items": [
+            { "gauge": { "cursors": ["motionSpeed"] } }
+          ]
+        }
+      ],
       "style": {
         "color": "#2c5fb3",
         "edge": {
@@ -979,15 +1054,30 @@
         "smooth": true,
         "minVertices": 2
       },
+      "fields": [
+        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 0, "max": 50, "step": 5, "default": 0 },
+        { "key": "motionDir", "kind": "number", "label": "Movement direction", "unit": "°", "min": 0, "max": 360, "step": 1, "default": 0 }
+      ],
       "render": {
         "decorations": [
           {
             "use": "front-symbols",
             "frontType": "warm",
-            "dashed": true
+            "dashed": true,
+            "motion": true
           }
         ]
       },
+      "satellites": [
+        {
+          "part": "motion",
+          "anchor": "geometry-mid",
+          "side": "right",
+          "items": [
+            { "gauge": { "cursors": ["motionSpeed"] } }
+          ]
+        }
+      ],
       "style": {
         "color": "#d1242f",
         "edge": {
@@ -1008,15 +1098,30 @@
         "smooth": true,
         "minVertices": 2
       },
+      "fields": [
+        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 0, "max": 50, "step": 5, "default": 0 },
+        { "key": "motionDir", "kind": "number", "label": "Movement direction", "unit": "°", "min": 0, "max": 360, "step": 1, "default": 0 }
+      ],
       "render": {
         "decorations": [
           {
             "use": "front-symbols",
             "frontType": "occluded",
-            "dashed": true
+            "dashed": true,
+            "motion": true
           }
         ]
       },
+      "satellites": [
+        {
+          "part": "motion",
+          "anchor": "geometry-mid",
+          "side": "right",
+          "items": [
+            { "gauge": { "cursors": ["motionSpeed"] } }
+          ]
+        }
+      ],
       "style": {
         "color": "#8250df",
         "edge": {
@@ -1037,15 +1142,30 @@
         "smooth": true,
         "minVertices": 2
       },
+      "fields": [
+        { "key": "motionSpeed", "kind": "number", "label": "Movement speed", "unit": "kt", "min": 0, "max": 50, "step": 5, "default": 0 },
+        { "key": "motionDir", "kind": "number", "label": "Movement direction", "unit": "°", "min": 0, "max": 360, "step": 1, "default": 0 }
+      ],
       "render": {
         "decorations": [
           {
             "use": "front-symbols",
             "frontType": "stationary",
-            "dashed": true
+            "dashed": true,
+            "motion": true
           }
         ]
       },
+      "satellites": [
+        {
+          "part": "motion",
+          "anchor": "geometry-mid",
+          "side": "right",
+          "items": [
+            { "gauge": { "cursors": ["motionSpeed"] } }
+          ]
+        }
+      ],
       "style": {
         "color": "#d1242f",
         "edge": {

@@ -57,6 +57,7 @@ import type {
   InkSpec,
   LabelSpec,
   ListFieldDescriptor,
+  NumberFieldDescriptor,
   PhenomenonDescriptor,
   RenderByGeometry,
   RenderSpec,
@@ -566,9 +567,18 @@ function compileSatellites(d: PhenomenonDescriptor): ((input: WidgetInput) => Ma
     for (const sat of sats) {
       let at: Pt | null = null;
       if (sat.anchor === "geometry-mid") {
-        // Follow a movable line label (so the FL gauge tracks it); else the arc middle.
-        const fr = geometry.type === "LineString" && typeof metadata["labelT"] === "number" ? lineLabelFrame(geometry, metadata, smooth) : null;
-        at = fr ? toLonLat(fr.p, fr.k) : geometryMid(geometry, smooth);
+        // Track a movable point ALONG the line: the front's movement-arrow ROOT (`motionT`) or a
+        // movable line label (`labelT`); else the arc middle. So the speed slider rides the root.
+        const frac = typeof metadata["motionT"] === "number" ? (metadata["motionT"] as number)
+          : typeof metadata["labelT"] === "number" ? (metadata["labelT"] as number) : null;
+        if (geometry.type === "LineString" && frac !== null) {
+          const coords = geometry.coordinates as Pt[];
+          const kk = frameK(coords);
+          const planar = (smooth ? catmullRom(coords, 16) : coords).map((c) => toPlanar(c, kk));
+          at = toLonLat(pointAtFraction(planar, frac).p as Pt, kk);
+        } else {
+          at = geometryMid(geometry, smooth);
+        }
       } else if (sat.anchor === "callout" && input.callout) at = input.callout.at;
       else if (sat.anchor === "break-point") at = breakAt;
       if (!at) continue;
@@ -611,6 +621,19 @@ function compileSatellites(d: PhenomenonDescriptor): ((input: WidgetInput) => Ma
           gauge.canAdd = arr.length < repeatMax;
           items.push(gauge);
           pin(gauge.min, gauge.max, (gauge.min + gauge.max) / 2);
+        } else if (it.gauge && !scope && (d.fields ?? []).some((ff) => ff.kind === "number" && ff.key === it.gauge!.cursors[0])) {
+          // Feature-level NUMBER slider (a front's movement speed): a compact VERTICAL mini-gauge —
+          // a track + thumb you push up/down, visually unmistakable next to the round 360° direction
+          // handle on the map (a rotary dial read too much like that handle). Bottom-pinned (`yPin = 1`)
+          // so its 0 sits AT the arrow-root base handle. Routes through the generic number path.
+          const key = it.gauge.cursors[0]!;
+          const nf = (d.fields ?? []).find((ff): ff is NumberFieldDescriptor => ff.kind === "number" && ff.key === key)!;
+          const min = nf.min ?? 0;
+          const max = nf.max ?? 100;
+          const value = num(metadata[key], min);
+          const unit = nf.unit ?? "";
+          items.push({ kind: "gauge", min, max, step: nf.step ?? 1, length: 96, cursors: [{ name: key, value, label: `${Math.round(value)}${unit}` }], ...chromeProps(chrome, true) } as WidgetNode);
+          yPin = 1; // 0 (gauge bottom) aligns with the root base handle
         } else if (it.gauge && !scope) {
           // Feature-level FL gauge. A base/top pair (CB, icing, turbulence) → a DRAGGABLE 1-band
           // `ranges` gauge (grab the middle, base+top move together), inked in the phenomenon's
@@ -1097,6 +1120,9 @@ export function defFromDescriptor(d: PhenomenonDescriptor): PhenomenonDef {
   // A LINE label flagged `movable` slides along the line (controller adds a drag handle).
   const rr = d.render as (RenderSpec & RenderByGeometry) | undefined;
   const movableLabel = !!(rr?.line?.label?.movable ?? (rr?.label && (rr as RenderSpec).label?.movable));
+  // A decorated line whose decorator carries `"motion": true` (the fronts) grows a movement
+  // arrow: the controller paints a 360° direction handle on its tip (drag → `metadata.motionDir`).
+  const motionArrow = (rr?.decorations ?? []).some((dec) => (dec as Record<string, unknown>)["motion"] === true);
   // A by-geometry render (line/point) WITH a card = a line-or-spot phenomenon whose SPOT is an
   // always-shown card (e.g. the tropopause `kind` carousel: rect / pentagon-up / -down), while
   // the CONTOUR keeps its decorated label. An area card (RenderSpec) still replaces its call-out.
@@ -1131,5 +1157,5 @@ export function defFromDescriptor(d: PhenomenonDescriptor): PhenomenonDef {
   const anchorButton = anchorBtnSpec
     ? { event: getAction(anchorBtnSpec.action), svg: resolveGlyph(anchorBtnSpec.svg ?? "atlas:plus"), ...(anchorBtnSpec.title !== undefined ? { title: anchorBtnSpec.title } : {}) }
     : undefined;
-  return { ...base, decorate, ...(widget ? { widget } : {}), ...(movableLabel ? { movableLabel } : {}), ...(repeat ? { repeat } : {}), ...(anchorButton ? { anchorButton } : {}), ...(d.composites ? { composites: d.composites } : {}) };
+  return { ...base, decorate, ...(widget ? { widget } : {}), ...(movableLabel ? { movableLabel } : {}), ...(motionArrow ? { motionArrow: true } : {}), ...(repeat ? { repeat } : {}), ...(anchorButton ? { anchorButton } : {}), ...(d.composites ? { composites: d.composites } : {}) };
 }
