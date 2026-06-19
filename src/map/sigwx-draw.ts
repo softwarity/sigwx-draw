@@ -15,7 +15,7 @@ import type { Feature, FeatureCollection, Geometry, Position } from "geojson";
 
 import * as polyclip from "polyclip-ts";
 
-import { ringCentroid } from "../core/phenomena/util.js";
+import { ringCentroid, fl as flLabel } from "../core/phenomena/util.js";
 
 import {
   DEFAULT_CB_COVERAGE,
@@ -74,9 +74,9 @@ import type {
   MarkerStyle,
   TurbulenceStyle,
 } from "../core/index.js";
-import type { KeyEvent, MapAdapter, MarkerWidget, PointerEvent, SnapshotOptions, SymbolSprites, ToolbarItem, ToolbarOptions } from "./adapter.js";
+import type { KeyEvent, MapAdapter, MarkerWidget, PointerEvent, SnapshotOptions, SymbolSprites, ToolbarItem, ToolbarOptions, WidgetNode } from "./adapter.js";
 import { ANNOTATION_BUCKET, OVERLAY_IDS } from "./layers.js";
-import { placeAnnotations } from "./placement.js";
+import { placeAnnotations, estimateBox, nudgeClear, type Rect } from "./placement.js";
 import type { AnnReq, Pin } from "./placement.js";
 import { DEFAULT_STYLE, mergeStyle } from "./style.js";
 import type { SigwxStyle, SigwxStyleInput } from "./style.js";
@@ -1773,7 +1773,10 @@ export class SigwxDraw {
     }
 
     this.lastAnnReqs = annReqs;
-    const placed = placeAnnotations(annReqs, this.adapter, this.pins);
+    // The call-out being ACTIVELY dragged owns the cursor: it's placed first so the OTHERS (even
+    // pinned) yield/flee it — anti-collision independent of creation/drag order.
+    const activeFid = this.dragTarget?.kind === "callout" ? this.dragTarget.featureId : undefined;
+    const placed = placeAnnotations(annReqs, this.adapter, this.pins, this.markerObstacleRects(), activeFid);
     buckets["leaders"]!.push(...placed.leaders);
     // placed.symbols are pushed AFTER the widgets are known — a replaced call-out's glyph
     // lives in its card (the severity carousel), not on the canvas.
@@ -1844,6 +1847,15 @@ export class SigwxDraw {
       }
     }
     const replaced = new Set(widgets.map((w) => w.id));
+    // READ-ONLY UNIFICATION: every remaining (unselected) call-out box becomes a static SPRITE rather
+    // than a canvas text-box — ONE read-only render path that bypasses the engine label layer. id ==
+    // featureId ⇒ the canvas box + its symbol are suppressed just below; the leader stays.
+    for (const box of placed.boxes) {
+      const fid = box.properties.featureId;
+      if (typeof fid !== "string" || box.geometry.type !== "Point" || replaced.has(fid)) continue;
+      const sprite = this.calloutSprite(box, placed.symbols);
+      if (sprite) { widgets.push(sprite); replaced.add(fid); }
+    }
     buckets["symbols"]!.push(...placed.symbols.filter((s) => !replaced.has(String(s.properties.featureId ?? ""))));
     for (const box of placed.boxes) {
       const id = box.properties.featureId;
@@ -1915,6 +1927,10 @@ export class SigwxDraw {
         // spot, but on the composite card (which draws on top, so the button stays clickable).
         const existing = new Set(comps.map((c) => `composite:${c.key}`));
         if (zoneCards[0].buttons) zoneCards[0].buttons = zoneCards[0].buttons.filter((b) => !existing.has(b.event));
+        // SELECTION EMPHASIS: in a composite stack the FOCUSED card wears a bold (2px `large`) border
+        // and the others a hairline (0.5px `small`), so it’s obvious which card a tap edits. The zone
+        // is focused when no composite holds focus.
+        zoneCards[0].borderWidth = zoneFocused ? "large" : "small";
         if (!zoneFocused) zoneCards = zoneCards.slice(0, 1); // not focused ⇒ panel only (no gauge)
       }
       out.push(...zoneCards);
@@ -1948,6 +1964,8 @@ export class SigwxDraw {
           cards[0].border = cards[0].border ?? "#1f2328";
           cards[0].radius = cards[0].radius ?? "small";
           cards[0].padding = cards[0].padding ?? "large";
+          // SELECTION EMPHASIS (see zone card): bold border on the FOCUSED composite, hairline else.
+          cards[0].borderWidth = focused ? "large" : "small";
           // Glue to the zone card's MEASURED edge (icing above / turb below) via anchorTo — a clean
           // stack, no overlap. The cross axis (horizontal) keeps the card centred on the call-out.
           cards[0].anchorTo = { id, side: spec.place };
@@ -1955,14 +1973,160 @@ export class SigwxDraw {
           const frontier = spec.place === "top" ? "bottom" : "top";
           cards[0].buttons = [
             ...(cards[0].buttons ?? []),
-            { event: `removeComposite:${spec.key}`, place: frontier, svg: COMPOSITE_DELETE_SVG, bordered: true, title: "Supprimer" },
+            { event: `removeComposite:${spec.key}`, place: frontier, svg: COMPOSITE_DELETE_SVG, bordered: true, title: "Delete" },
           ];
         }
         if (!focused) cards = cards.slice(0, 1); // not focused ⇒ panel only (no gauge)
         out.push(...cards);
       }
+      // UNSELECTED cloud with composites: a compact read-only summary cartouche, replacing the canvas
+      // call-out (keeps the leader). Single-layer ⇒ inverted-L; multi-layer ⇒ a row-per-cloud grid
+      // (AMOUNT TYPE | FL) with the composites listed below, FLs aligned. Declutter-gated.
+      if (!isSel && at && (this.calloutShown.get(id) ?? true)) {
+        const existing = (def.composites ?? []).filter((c) => f.properties.metadata[c.key]);
+        if (existing.length && req) {
+          const summary = this.compositeSummaryCard(id, f, existing, at, req);
+          if (summary) out.push(summary);
+        }
+      }
     }
     return out;
+  }
+
+  /** Convert a placed (unselected) call-out BOX + its severity glyph into a READ-ONLY static SPRITE —
+   *  the unified read-only render (no canvas text-box, so it bypasses the engine label layer). The
+   *  sprite replaces the canvas box (id == featureId ⇒ suppressed) and keeps the leader. Boxed
+   *  call-outs (CB/icing/cloud carry `textBackground`) get a framed white box; an UNBOXED one
+   *  (turbulence) gets a soft white backing (halo-like) so its text stays legible on the map. */
+  private calloutSprite(box: RenderFeature, symbols: RenderFeature[]): MarkerWidget | null {
+    if (box.geometry.type !== "Point") return null;
+    const p = box.properties;
+    const fid = p.featureId;
+    if (typeof fid !== "string") return null;
+    const labelId = String(p.labelId ?? "l");
+    const lines = String(p.text ?? "").split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+    const sym = symbols.find((s) => s.properties.featureId === fid && s.properties.labelId === labelId);
+    const items: WidgetNode[] = [];
+    if (sym) {
+      const svg = this.spriteCatalog[String(sym.properties.symbol ?? "")];
+      // Glyph size follows the symbol's OWN scale (turbulence 1.1, icing 0.82…) ⇒ data-driven, not a
+      // flat size: a phenomenon with a bigger symbol (CAT) reads bigger, icing stays normal.
+      if (svg) items.push({ kind: "glyph", svg, size: Math.round((Number(sym.properties.size) || 1) * 26), color: String(sym.properties.symbolColor ?? p.textColor ?? "#111") });
+    }
+    const size = Number(p.textSize ?? 13);
+    const color = String(p.textColor ?? "#111");
+    for (const v of lines) items.push({ kind: "text", value: v, size, color });
+    if (!items.length) return null;
+    const [lon, lat] = box.geometry.coordinates as [number, number];
+    // BOXED call-outs (CB/icing/cloud carry `textBackground`) get an opaque framed box. An UNBOXED one
+    // (turbulence) stays BARE — NO bg, NO border — exactly like its canvas call-out (just text + glyph).
+    const boxed = p.textBackground !== undefined;
+    return {
+      id: fid,
+      labelId,
+      static: true,
+      anchor: { lon, lat },
+      origin: "center",
+      ...(boxed ? { bg: String(p.textBackground), border: String(p.textBorder ?? "#1f2328"), radius: "small" as const } : {}),
+      padding: "small",
+      child: { dir: "v", align: "center", gap: 2, items },
+    };
+  }
+
+  /** Unselected composite summary (single-layer non-convective cloud): ONE read-only card that
+   *  REPLACES the zone's canvas call-out box — left column = the zone summary (amount/type/top/base
+   *  FL, the box content), right column = one row per composite (severity glyph + top/base FL). A
+   *  single block, no follow-lag. `null` when no composite to show. */
+  private compositeSummaryCard(
+    zoneId: string,
+    f: SigwxFeature,
+    comps: { key: string; ref: string; place: "top" | "bottom" }[],
+    at: [number, number],
+    req: AnnReq,
+  ): MarkerWidget | null {
+    const resolution = this.resolution();
+    // Collect each EXISTING composite once: its severity glyph (+ ink) and base/top FL.
+    type CompInfo = { svg: string | undefined; color: string; top: string; base: string; baseFL: unknown; topFL: unknown };
+    const compInfo: CompInfo[] = [];
+    for (const c of comps) {
+      const meta = f.properties.metadata[c.key] as Metadata | undefined;
+      if (!meta) continue;
+      const refDef = this.registry.get(c.ref);
+      // Reuse the composite's OWN call-out decoration for the formatted FL (the `flx` filter) and the
+      // severity ink — no formatting duplicated. An `inside` glyph pads with blanks, so keep non-empty.
+      const ann = refDef
+        .decorate({ geometry: f.geometry, metadata: meta, style: this.styleOf(c.ref), resolution, flightLevel: this.flResolved(c.ref) })
+        .find((ft) => ft.properties.layer === ANNOTATION_BUCKET);
+      const lines = String(ann?.properties.content ?? "").split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+      compInfo.push({
+        svg: this.spriteCatalog[String(meta["symbol"] ?? "")],
+        color: (ann?.properties.symbolColor as string | undefined) ?? "#1f2328",
+        top: lines[0] ?? "", base: lines[1] ?? "",
+        baseFL: meta["baseFL"], topFL: meta["topFL"],
+      });
+    }
+    if (!compInfo.length) return null;
+
+    // Common chrome + placement. The card REPLACES the canvas call-out box (id == feature id ⇒ the
+    // placement pass drops the box, keeps its leader) and renders READ-ONLY as a rasterized SPRITE
+    // (native zoom/collision; its hit surfaces as `text-boxes`+featureId ⇒ drag/click reuse the
+    // call-out path, no select-on-DOWN). Pin the LEFT edge where the box's left edge was.
+    const FRAME = "#1f2328";
+    const a = this.adapter.project({ lon: at[0], lat: at[1] });
+    if (!a) return null;
+    const { w } = estimateBox(req.content, req.textSize);
+    const left = this.adapter.unproject([a[0] - w / 2, a[1]]);
+    if (!left) return null;
+    const chrome = { id: zoneId, static: true as const, labelId: req.labelId ?? "l", anchor: left, origin: "left" as const };
+    const txt = (value: string): WidgetNode => ({ kind: "text", value, size: 13, color: "#1f2328" });
+    // `flLabel` zero-pads to 3 digits (FL000, FL050…) — same format as the `flx` filter.
+    const flRange = (b: unknown, t: unknown): string => `${flLabel(b)}/${flLabel(t)}`;
+
+    const layers = (f.properties.metadata["layers"] as Metadata[] | undefined) ?? [];
+    if (layers.length >= 2) {
+      // MULTI-LAYER ⇒ a 2-column grid. LEFT = "AMOUNT TYPE" per cloud, then the severity glyphs
+      // (centred in that column). RIGHT = the matching "FLbase/FLtop", clouds then composites — so
+      // each composite FL lines up UNDER the cloud FLs. One row per cloud / per composite.
+      const leftItems: WidgetNode[] = [];
+      const rightItems: WidgetNode[] = [];
+      for (const l of layers) {
+        leftItems.push(txt(`${String(l["amount"])} ${String(l["type"])}`));
+        rightItems.push(txt(flRange(l["baseFL"], l["topFL"])));
+      }
+      for (const c of compInfo) {
+        leftItems.push(c.svg ? { kind: "glyph", svg: c.svg, size: 18, color: c.color } : txt(""));
+        rightItems.push(txt(flRange(c.baseFL, c.topFL)));
+      }
+      return {
+        ...chrome,
+        bg: "#ffffff", border: FRAME, borderWidth: "medium", radius: "small", padding: "small",
+        child: { dir: "h", align: "start", gap: 10, items: [
+          { dir: "v", align: "center", gap: 4, items: leftItems },
+          { dir: "v", align: "start", gap: 4, items: rightItems },
+        ] },
+      };
+    }
+
+    // SINGLE-LAYER ⇒ the inverted-L: a full-framed cloud box (left) + a TOP/RIGHT/BOTTOM-framed
+    // composites box (right, sharing the cloud's right edge). One composite ⇒ the right box is
+    // shorter ⇒ bottom-right empty ⇒ inverted L; two ⇒ a clean two-column rectangle.
+    const zoneLines = req.content.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+    const chips: WidgetNode[] = compInfo.map((c) => ({
+      dir: "h", align: "center", gap: 5, items: [
+        ...(c.svg ? [{ kind: "glyph" as const, svg: c.svg, size: 22, color: c.color }] : []),
+        { dir: "v", align: "start", items: [txt(c.top), txt(c.base)] },
+      ],
+    }));
+    return {
+      ...chrome,
+      // No OUTER frame: each inner column carries its own border/bg so the cartouche traces the CONTENT.
+      child: { dir: "h", align: "start", gap: 0, items: [
+        { dir: "v", align: "center", gap: 2, bg: "#ffffff", border: FRAME, borderWidth: "medium", padding: "small",
+          items: zoneLines.map((value) => txt(value)) },
+        { dir: "v", align: "start", gap: 6, bg: "#ffffff", border: { top: FRAME, right: FRAME, bottom: FRAME }, borderWidth: "medium", padding: "small",
+          items: chips },
+      ] },
+    };
   }
 
 
@@ -2228,6 +2392,53 @@ export class SigwxDraw {
     return boxPx && cur ? [cur[0] - boxPx[0], cur[1] - boxPx[1]] : [0, 0];
   }
 
+  /** Fixed obstacle rects (screen px) for the call-out placement: point markers (volcano/TC/
+   *  radioactive) own their dropped spot — cartouches must NEVER cover them, so they're seeded as
+   *  immovable obstacles (auto cartouches route around; a dropped one is nudged clear, see below). */
+  private markerObstacleRects(): Rect[] {
+    const out: Rect[] = [];
+    for (const id of this.order) {
+      const f = this.doc.get(id);
+      if (!f || f.geometry.type !== "Point" || !isPointMarker(this.registry.get(f.properties.phenomenon))) continue;
+      const px = this.adapter.project({ lon: f.geometry.coordinates[0]!, lat: f.geometry.coordinates[1]! });
+      if (!px) continue;
+      const name = String(f.properties.metadata["name"] ?? "");
+      const w = Math.max(64, name.length * 8 + 20);
+      out.push({ x: px[0] - w / 2, y: px[1] - 32, w, h: 64 });
+    }
+    return out;
+  }
+
+  /** A cartouche just DROPPED (drag-release) YIELDS to fixed elements: if its dropped box covers a
+   *  point marker OR another pinned cartouche, bump its pin to the nearest free slot so the fixed one
+   *  stays visible. (Auto-placed cartouches already flee from this — now pinned — one next pass; only
+   *  the fixed ones it must not cover.) */
+  private nudgePinClear(featureId: string, labelId: string): void {
+    const req = this.lastAnnReqs.find((r) => r.featureId === featureId && r.labelId === labelId)
+      ?? this.lastAnnReqs.find((r) => r.featureId === featureId);
+    if (!req) return;
+    const pk = `${req.featureId}:${req.labelId}`;
+    const pin = this.pins.get(pk);
+    const anchorPx = this.adapter.project(req.anchor);
+    if (!pin || !anchorPx) return;
+    const { w, h } = estimateBox(req.content, req.textSize);
+    const boxPx: [number, number] = [anchorPx[0] + pin.dx, anchorPx[1] + pin.dy];
+    const fixed = this.markerObstacleRects();
+    // Every OTHER pinned cartouche is fixed too (placed by hand before this drop) ⇒ don't cover it.
+    for (const [k, p] of this.pins) {
+      if (k === pk) continue;
+      const r = this.lastAnnReqs.find((x) => `${x.featureId}:${x.labelId}` === k);
+      const a = r ? this.adapter.project(r.anchor) : null;
+      if (!r || !a) continue;
+      const bs = estimateBox(r.content, r.textSize);
+      fixed.push({ x: a[0] + p.dx - bs.w / 2, y: a[1] + p.dy - bs.h / 2, w: bs.w, h: bs.h });
+    }
+    const clear = nudgeClear(boxPx, w, h, fixed);
+    if (clear[0] !== boxPx[0] || clear[1] !== boxPx[1]) {
+      this.pins.set(pk, { dx: clear[0] - anchorPx[0], dy: clear[1] - anchorPx[1] });
+    }
+  }
+
   private onDown(ev: PointerEvent): void {
     // Ctrl/⌘ + click on an erasable area digs even if the hover arm never caught (or caught a
     // different feature) — resolve the target from the click itself. Robust to engines that
@@ -2337,11 +2548,11 @@ export class SigwxDraw {
       // gestures: drag repositions the box, a tap cycles the carousel enum (coverage).
       const wid = hit.props["id"] as string;
       const fid = widgetFeatureId(wid);
-      if (fid !== this.selectedId) this.select(fid);
       // The arrow-tip "draw" badge IS the anchor control: a DRAG re-aims the tip (area 0,
       // same as grabbing the orange handle it covers), a plain TAP (onUp) enters append-draw.
       // So the centered badge never blocks the very re-aim it sits on.
       if (wid.endsWith("#draw")) {
+        if (fid !== this.selectedId) this.select(fid);
         this.dragTarget = { kind: "anchor", featureId: fid, area: 0 };
         this.didDrag = false;
         this.adapter.setPanEnabled(false);
@@ -2351,10 +2562,13 @@ export class SigwxDraw {
       if (f) {
         const def = this.registry.get(f.properties.phenomenon);
         if (isPointMarker(def)) {
+          if (fid !== this.selectedId) this.select(fid); // point marker: select on DOWN, then move the point
           this.dragTarget = { kind: "translate", featureId: fid, lastPx: this.adapter.project(ev.lngLat) ?? [0, 0] };
         } else {
-          // The card replaces the call-out: drag still repositions the box, but a body tap
-          // no longer cycles — the coverage line is a real `"carousel"` control now.
+          // An area card that REPLACES the call-out (selected CB, or an UNSELECTED cloud's composite
+          // summary): mirror the canvas call-out box — a DRAG repositions the box, a plain TAP selects
+          // (onClick). Do NOT select on DOWN here: for an unselected card that re-renders the widget
+          // mid-gesture (summary → edit card), the drag is lost and the gesture misfires as a click.
           const req = this.lastAnnReqs.find((r) => r.featureId === fid);
           this.dragTarget = { kind: "callout", featureId: fid, labelId: req?.labelId ?? "l", grab: this.calloutGrab(fid, ev.lngLat) };
         }
@@ -2493,13 +2707,18 @@ export class SigwxDraw {
         }
       }
     } else if (t.kind === "callout") {
-      const req = this.lastAnnReqs.find((r) => r.featureId === t.featureId && r.labelId === t.labelId);
+      // Match the annReq by featureId+labelId, FALLING BACK to featureId only: a sprite call-out's hit
+      // may report a default labelId ("l") that differs from the call-out's ("cb"/"turb"). KEY the pin
+      // by the FOUND req's own id (not `t.labelId`), else `placeAnnotations` (which looks up
+      // `featureId:labelId`) never finds the pin → a dead pin → the drag has no effect.
+      const req = this.lastAnnReqs.find((r) => r.featureId === t.featureId && r.labelId === t.labelId)
+        ?? this.lastAnnReqs.find((r) => r.featureId === t.featureId);
       const anchorPx = req ? this.adapter.project(req.anchor) : null;
       const cursorPx = this.adapter.project(ev.lngLat);
       // Place the box centre at (cursor − grab) so the grabbed spot stays under the cursor
       // (no first-move jump), then express that as the pin offset from the anchor.
-      if (anchorPx && cursorPx) {
-        const pk = `${t.featureId}:${t.labelId}`;
+      if (req && anchorPx && cursorPx) {
+        const pk = `${req.featureId}:${req.labelId}`;
         this.pins.set(pk, { dx: cursorPx[0] - t.grab[0] - anchorPx[0], dy: cursorPx[1] - t.grab[1] - anchorPx[1] });
         if (this.autoPinKey === pk) this.autoPinKey = null; // user took over → keep this pin sticky
       }
@@ -2609,6 +2828,9 @@ export class SigwxDraw {
     }
     this.dragFree = null;
     this.willDelete = false;
+    // A cartouche dropped on top of a FIXED element (marker / another pinned cartouche) yields:
+    // bump its pin clear before the repaint so it never covers the fixed one.
+    if (dragged && t.kind === "callout") this.nudgePinClear(t.featureId, t.labelId);
     // (The old tap-a-glyph/box enum cycle is gone — enums are edited on the SELECTED
     // card's carousel control; a plain tap just selects, via onClick.)
     if (dragged) {

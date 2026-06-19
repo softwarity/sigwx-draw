@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LatLng } from "../src/core/index.js";
 import type { KeyEvent, MapAdapter, MarkerWidget, PointerEvent, SigwxProfile, SymbolSprites, ToolbarItem, WidgetEdit } from "../src/map/index.js";
 import { DEFAULT_STYLE, SigwxDraw } from "../src/map/index.js";
+import { nudgeClear } from "../src/map/placement.js";
 
 /** Headless mock adapter: records overlays, exposes a trivial linear projection. */
 class MockAdapter implements MapAdapter {
@@ -130,8 +131,36 @@ function collectGauges(node: unknown): GaugeNode[] {
   return out;
 }
 
+/** Text lines of a (now-static-sprite) call-out cartouche — its content moved from the canvas
+ *  text-box into the sprite's `child` WidgetBox text leaves. */
+function spriteLines(w: MarkerWidget | undefined): string[] {
+  const out: string[] = [];
+  const walk = (n: unknown): void => {
+    if (!n || typeof n !== "object") return;
+    if ((n as { kind?: string }).kind === "text" && typeof (n as { value?: unknown }).value === "string") out.push((n as { value: string }).value);
+    for (const v of Object.values(n as Record<string, unknown>)) { if (Array.isArray(v)) v.forEach(walk); else if (v && typeof v === "object") walk(v); }
+  };
+  if (w?.child) walk(w.child);
+  return out;
+}
+
 const JET: [number, number][] = [[0, 0], [2, 1], [4, 0], [6, 1]];
 const POLY: [number, number][] = [[0, 0], [4, 0], [4, 4], [0, 4]];
+
+describe("nudgeClear — a dropped cartouche yields to a fixed obstacle", () => {
+  const overlap = (p: [number, number], w: number, h: number, o: { x: number; y: number; w: number; h: number }): number => {
+    const dx = Math.min(p[0] + w / 2, o.x + o.w) - Math.max(p[0] - w / 2, o.x);
+    const dy = Math.min(p[1] + h / 2, o.y + o.h) - Math.max(p[1] - h / 2, o.y);
+    return dx > 0 && dy > 0 ? dx * dy : 0;
+  };
+  it("bumps a box OUT of an overlapping obstacle, and is a no-op when already clear", () => {
+    const obstacle = { x: 0, y: 0, w: 60, h: 60 };
+    const clear = nudgeClear([10, 10], 40, 40, [obstacle]); // dropped box overlaps the obstacle
+    expect(overlap(clear, 40, 40, obstacle)).toBe(0);       // …and is nudged fully clear
+    expect(clear).not.toEqual([10, 10]);                    // it actually moved
+    expect(nudgeClear([300, 300], 40, 40, [obstacle])).toEqual([300, 300]); // far away ⇒ untouched
+  });
+});
 
 describe("handle hygiene — a layer-stack area shows NO on-path slider", () => {
   const sliders = (a: MockAdapter): unknown[] =>
@@ -283,7 +312,7 @@ describe("SigwxDraw controller (draw mode)", () => {
     expect(adapter.widget(id)).toBeDefined(); // SELECTED ⇒ the card replaces the call-out box
     expect(adapter.count("leaders")).toBeGreaterThan(0); // leader to the anchor
     sigwx.select(null);
-    expect(adapter.count("text-boxes")).toBeGreaterThan(0); // unselected ⇒ the canvas call-out
+    expect(adapter.widget(id)?.static).toBe(true); // unselected ⇒ the call-out is a static sprite
   });
 
   it("dragging a jet's body (axis/barbs) translates the whole jet, like an area", () => {
@@ -569,29 +598,24 @@ describe("call-out boxes (draw-adapter 0.2.8 boxes a border-only label too)", ()
     await sigwx.ready();
   });
 
-  const callout = (labelId: string) =>
-    (adapter.overlays.get("text-boxes")?.features ?? []).find((b) => b.properties?.["labelId"] === labelId);
-
-  it("turbulence FL call-out is UNBOXED — no textBackground NOR textBorder on the placed box", () => {
+  it("turbulence call-out sprite is UNBOXED — NO bg, NO border (bare text + glyph, like its canvas call-out)", () => {
     const id = stroke(sigwx, adapter, "turbulence", [[0, 0], [4, 0], [4, 4], [0, 4]]);
-    expect(callout("turb")).toBeUndefined(); // SELECTED ⇒ the widget card replaces the canvas call-out
+    expect(adapter.widget(id)?.static).toBeUndefined(); // SELECTED ⇒ the editable card, not a sprite
     sigwx.select(null);
-    expect(adapter.widget(id)).toBeUndefined(); // unselected ⇒ card gone, canvas call-out back
-    const box = callout("turb");
-    expect(box).toBeDefined();
-    expect(box!.properties?.["textBackground"]).toBeUndefined();
-    expect(box!.properties?.["textBorder"]).toBeUndefined(); // ← a border alone would draw a box in 0.2.8
+    const w = adapter.widget(id);
+    expect(w?.static).toBe(true);      // unselected ⇒ a static sprite cartouche (no canvas text-box)
+    expect(w?.bg).toBeUndefined();     // UNBOXED ⇒ no background
+    expect(w?.border).toBeUndefined(); // …and no border (bare)
   });
 
-  it("CB call-out stays BOXED — textBackground + textBorder both present", () => {
+  it("CB call-out sprite stays BOXED — opaque bg + frame border", () => {
     const id = stroke(sigwx, adapter, "cb", POLY);
-    expect(callout("cb")).toBeUndefined(); // SELECTED ⇒ the widget card replaces the canvas box
+    expect(adapter.widget(id)?.static).toBeUndefined(); // SELECTED ⇒ the editable card, not a sprite
     sigwx.select(null);
-    expect(adapter.widget(id)).toBeUndefined(); // unselected ⇒ card gone, canvas box back
-    const box = callout("cb");
-    expect(box).toBeDefined();
-    expect(box!.properties?.["textBackground"]).toBeDefined();
-    expect(box!.properties?.["textBorder"]).toBeDefined();
+    const w = adapter.widget(id);
+    expect(w?.static).toBe(true);
+    expect(w?.bg).toBeDefined();
+    expect(w?.border).toBeDefined();  // BOXED ⇒ framed
   });
 });
 
@@ -681,8 +705,8 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
     expect(g.color).toBe("#1f2328"); // black glyph (orange was invisible)
     expect(g.size).toBeGreaterThanOrEqual(14); // bigger than the former bordered `+` (~12px)
     sigwx.select(null);
-    expect(adapter.widget(id)).toBeUndefined(); // the control card exists ONLY while selected
-    expect(adapter.widget(`${id}#draw`)).toBeUndefined(); // …and so does the draw badge
+    expect(adapter.widget(id)?.static).toBe(true); // unselected ⇒ the editable card is replaced by a static sprite
+    expect(adapter.widget(`${id}#draw`)).toBeUndefined(); // …and the draw badge exists ONLY while selected
     const vid = sigwx.draw("volcano"); // markers no longer carry edge buttons
     expect(adapter.widget(vid)!.buttons).toBeUndefined();
   });
@@ -846,8 +870,9 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
     expect((adapter.overlays.get("symbols")?.features ?? []).filter((s) => s.properties?.["featureId"] === id)).toHaveLength(0);
     adapter.editWidget(id, "SEV", "symbol"); // cycle on the card
     expect(lastMeta(sigwx)["symbol"]).toBe("SEV");
-    sigwx.select(null); // canvas call-out (and its glyph) come back
-    expect((adapter.overlays.get("symbols")?.features ?? []).filter((s) => s.properties?.["featureId"] === id)).toHaveLength(1);
+    sigwx.select(null); // unselected ⇒ a static sprite cartouche carries the glyph (no canvas symbol)
+    expect(adapter.widget(id)?.static).toBe(true);
+    expect((adapter.overlays.get("symbols")?.features ?? []).filter((s) => s.properties?.["featureId"] === id)).toHaveLength(0);
   });
 
   it("icing card: FRAMED b&w, fork glyph carousel, no leading blank lines", () => {
@@ -1281,11 +1306,9 @@ describe("cloudConvective — multi-layer data & cartouche", () => {
     await s.ready();
     const id = stroke(s, a, "cloudConvective", POLY);
     a.actionWidget(id, "addLayer"); // 2 layers
-    s.select(null); // deselect -> the canvas cartouche renders (panel no longer replaces it)
-    const box = (a.overlays.get("text-boxes")?.features ?? []).find((f) => f.properties?.["featureId"] === id);
-    expect(box).toBeDefined();
-    const text = String(box!.properties!["text"] ?? "");
-    expect(text.split("\n").filter((l) => l.includes("CB")).length).toBe(2); // one CB line per layer
+    s.select(null); // deselect -> the static sprite cartouche renders (panel no longer replaces it)
+    const lines = spriteLines(a.widget(id));
+    expect(lines.filter((l) => l.includes("CB")).length).toBe(2); // one CB line per layer
   });
 
   it("a SINGLE layer's rest cartouche uses the NORMAL centered column (amount / type / top / base), not the compact stacked line", async () => {
@@ -1293,10 +1316,8 @@ describe("cloudConvective — multi-layer data & cartouche", () => {
     const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
     await s.ready();
     const id = stroke(s, a, "cloudConvective", POLY); // ONE layer by default (CB / OCNL)
-    s.select(null); // deselect -> the canvas cartouche renders
-    const box = (a.overlays.get("text-boxes")?.features ?? []).find((f) => f.properties?.["featureId"] === id);
-    expect(box).toBeDefined();
-    const lines = String(box!.properties!["text"] ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+    s.select(null); // deselect -> the static sprite cartouche renders
+    const lines = spriteLines(a.widget(id));
     expect(lines).toHaveLength(4); // a column, not one packed line
     expect(lines[0]).toBe("OCNL"); // amount on its own line
     expect(lines[1]).toBe("CB"); // type on its own line
@@ -1424,6 +1445,27 @@ describe("cloudNonConvective — non-convective cloud + composite icing/turb pla
     expect(lastMeta(s)["icing"]).toBeUndefined();       // composite gone
     expect(a.widget(`${id}#icing`)).toBeUndefined();    // its card gone
     expect(a.widget(`${id}#gauge`)).toBeDefined();      // focus back on the zone ⇒ zone gauge returns
+  });
+
+  it("dragging the UNSELECTED composite summary card repositions the call-out — it does NOT misfire as a select", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a, profile: await loadFrance() });
+    await s.ready();
+    const id = stroke(s, a, "cloudNonConvective", POLY);
+    a.actionWidget(id, "composite:icing"); // a composite ⇒ the unselected view is ONE summary card (id == feature id)
+    s.select(null);
+    expect(s.selectedId).toBeNull();
+    expect(a.widget(id)).toBeDefined(); // the summary card carries the bare feature id (it REPLACES the canvas box)
+    // DRAG the card body (down on the widget, move well past the threshold, up) → repositions, stays unselected.
+    a.ev("down", 2, 2, { overlay: "widget", props: { id } });
+    a.ev("move", 4, 2);
+    a.ev("up", 4, 2);
+    expect(s.selectedId).toBeNull(); // ← the regression: selecting on DOWN used to break the drag into a click
+    // …while a plain TAP (down/up with no move, then the adapter's click) still selects.
+    a.ev("down", 2, 2, { overlay: "widget", props: { id } });
+    a.ev("up", 2, 2);
+    a.clickWidget(id);
+    expect(s.selectedId).toBe(id);
   });
 });
 

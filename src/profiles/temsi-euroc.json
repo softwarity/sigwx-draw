@@ -13,8 +13,8 @@
     {
       "schemaVersion": 1,
       "type": "cloudConvective",
-      "label": "Nuage convectif",
-      "icon": "atlas:cb",
+      "label": "Convective cloud",
+      "icon": "atlas:cloudConvective",
       "gesture": {
         "primitive": "polygon",
         "draw": "lasso",
@@ -27,7 +27,7 @@
         {
           "key": "layers",
           "kind": "list",
-          "label": "Couches nuageuses",
+          "label": "Cloud layers",
           "itemLabel": "{amount} {type}",
           "default": [
             {
@@ -41,7 +41,7 @@
             {
               "key": "type",
               "kind": "enum",
-              "label": "Type de nuage",
+              "label": "Cloud type",
               "default": "CB",
               "options": [
                 { "value": "CU", "label": "Cumulus", "meta": { "baseFL": 25, "topFL": 80 } },
@@ -51,22 +51,22 @@
             {
               "key": "amount",
               "kind": "enum",
-              "label": "Quantité",
+              "label": "Amount",
               "default": "OCNL",
               "options": [
-                { "value": "ISOL", "label": "ISOL — CB isolés" },
-                { "value": "OCNL", "label": "OCNL — CB bien séparés" },
-                { "value": "FRQ", "label": "FRQ — CB peu/pas séparés" },
-                { "value": "EMBD", "label": "EMBD — CB noyés" }
+                { "value": "ISOL", "label": "ISOL — isolated CB" },
+                { "value": "OCNL", "label": "OCNL — well-separated CB" },
+                { "value": "FRQ", "label": "FRQ — frequent, little/no separation" },
+                { "value": "EMBD", "label": "EMBD — embedded CB" }
               ],
               "optionsBy": {
                 "field": "type",
                 "map": {
                   "CB": [
-                    { "value": "ISOL", "label": "ISOL — CB isolés" },
-                    { "value": "OCNL", "label": "OCNL — CB bien séparés" },
-                    { "value": "FRQ", "label": "FRQ — CB peu/pas séparés" },
-                    { "value": "EMBD", "label": "EMBD — CB noyés" }
+                    { "value": "ISOL", "label": "ISOL — isolated CB" },
+                    { "value": "OCNL", "label": "OCNL — well-separated CB" },
+                    { "value": "FRQ", "label": "FRQ — frequent, little/no separation" },
+                    { "value": "EMBD", "label": "EMBD — embedded CB" }
                   ],
                   "*": [
                     { "value": "BKN", "label": "BKN — 5-7/8" },
@@ -142,7 +142,7 @@
             "place": "anchor",
             "action": "draw_and_link",
             "svg": "atlas:draw",
-            "title": "Ajouter une aire"
+            "title": "Add area"
           }
         ]
       },
@@ -190,8 +190,8 @@
     {
       "schemaVersion": 1,
       "type": "cloudNonConvective",
-      "label": "Nuage non-convectif",
-      "icon": "atlas:sigwxArea",
+      "label": "Non-convective cloud",
+      "icon": "atlas:cloudNonConvective",
       "composites": [
         { "key": "icing", "ref": "icing", "place": "top" },
         { "key": "turb", "ref": "turbulence", "place": "bottom" }
@@ -208,7 +208,7 @@
         {
           "key": "layers",
           "kind": "list",
-          "label": "Couches nuageuses",
+          "label": "Cloud layers",
           "itemLabel": "{amount} {type}",
           "default": [
             {
@@ -222,7 +222,7 @@
             {
               "key": "type",
               "kind": "enum",
-              "label": "Type de nuage",
+              "label": "Cloud type",
               "default": "AS",
               "options": [
                 { "value": "CI", "label": "Cirrus", "meta": { "baseFL": 250, "topFL": 350 } },
@@ -238,7 +238,7 @@
             {
               "key": "amount",
               "kind": "enum",
-              "label": "Quantité",
+              "label": "Amount",
               "default": "BKN",
               "options": [
                 { "value": "BKN", "label": "BKN — 5-7/8" },
@@ -312,19 +312,19 @@
             "place": "anchor",
             "action": "draw_and_link",
             "svg": "atlas:draw",
-            "title": "Ajouter une aire"
+            "title": "Add area"
           },
           {
             "place": "top",
             "action": "addIcing",
             "svg": "atlas:icingMod",
-            "title": "Ajouter du givrage"
+            "title": "Add icing"
           },
           {
             "place": "bottom",
             "action": "addTurb",
             "svg": "atlas:turbulenceMod",
-            "title": "Ajouter de la turbulence"
+            "title": "Add turbulence"
           }
         ]
       },
@@ -526,7 +526,7 @@
         {
           "key": "kind",
           "kind": "enum",
-          "label": "Forme",
+          "label": "Form",
           "default": "fl",
           "options": [
             {
@@ -620,7 +620,7 @@
     {
       "schemaVersion": 1,
       "type": "zeroIsotherm",
-      "label": "Isotherme",
+      "label": "Isotherm",
       "gesture": {
         "primitive": "polyline",
         "draw": "lasso-or-spot",
@@ -631,7 +631,7 @@
         {
           "key": "temp",
           "kind": "enum",
-          "label": "Température",
+          "label": "Temperature",
           "default": "0",
           "options": [
             { "value": "0", "label": "0 °C" },
@@ -642,7 +642,7 @@
         {
           "key": "fl",
           "kind": "fl",
-          "label": "Niveau",
+          "label": "Level",
           "default": 100
         }
       ],
@@ -714,7 +714,7 @@
     {
       "schemaVersion": 1,
       "type": "pressureCentre",
-      "label": "Centre de pression",
+      "label": "Pressure centre",
       "gesture": {
         "primitive": "point",
         "draw": "drop"
@@ -739,7 +739,7 @@
         {
           "key": "pressure",
           "kind": "text",
-          "label": "Pression (hPa)",
+          "label": "Pressure (hPa)",
           "default": "1013"
         }
       ],
@@ -1499,7 +1499,7 @@
     {
       "schemaVersion": 1,
       "type": "wmo-visibility",
-      "label": "Visibilité",
+      "label": "Visibility",
       "icon": "atlas:widespread-fog",
       "gesture": {
         "primitive": "point",
@@ -1509,36 +1509,36 @@
         {
           "key": "symbol",
           "kind": "enum",
-          "label": "Symbole",
+          "label": "Symbol",
           "default": "widespread-fog",
           "options": [
             {
               "value": "widespread-fog",
-              "label": "Brouillard étendu"
+              "label": "Widespread fog"
             },
             {
               "value": "widespread-mist",
-              "label": "Brume"
+              "label": "Mist"
             },
             {
               "value": "severe-sand-or-dust-haze",
-              "label": "Brume de sable/poussière dense"
+              "label": "Dense sand/dust haze"
             },
             {
               "value": "widespread-haze",
-              "label": "Brume sèche"
+              "label": "Haze"
             },
             {
               "value": "widespread-blowing-snow",
-              "label": "Chasse-neige élevé"
+              "label": "Blowing snow"
             },
             {
               "value": "widespread-smoke",
-              "label": "Fumée"
+              "label": "Smoke"
             },
             {
               "value": "widespread-sandstorm-or-duststorm",
-              "label": "Tempête de sable/poussière"
+              "label": "Sand/dust storm"
             }
           ]
         },
@@ -1578,7 +1578,7 @@
     {
       "schemaVersion": 1,
       "type": "wmo-others",
-      "label": "Autres",
+      "label": "Other",
       "icon": "atlas:thunderstorms",
       "gesture": {
         "primitive": "point",
@@ -1588,24 +1588,24 @@
         {
           "key": "symbol",
           "kind": "enum",
-          "label": "Symbole",
+          "label": "Symbol",
           "default": "thunderstorms",
           "options": [
             {
               "value": "thunderstorms",
-              "label": "Orage"
+              "label": "Thunderstorm"
             },
             {
               "value": "visible-volcanic-ash-cloud",
-              "label": "Nuage de cendres"
+              "label": "Ash cloud"
             },
             {
               "value": "mountain-obscuration",
-              "label": "Obscurcissement des montagnes"
+              "label": "Mountain obscuration"
             },
             {
               "value": "mountain-waves",
-              "label": "Ondes orographiques"
+              "label": "Mountain waves"
             }
           ]
         },
@@ -1646,7 +1646,7 @@
     {
       "schemaVersion": 1,
       "type": "wmo-precipitation",
-      "label": "Précipitations",
+      "label": "Precipitation",
       "icon": "atlas:rain",
       "gesture": {
         "primitive": "point",
@@ -1656,32 +1656,32 @@
         {
           "key": "symbol",
           "kind": "enum",
-          "label": "Symbole",
+          "label": "Symbol",
           "default": "rain",
           "options": [
             {
               "value": "rain",
-              "label": "Pluie continue"
+              "label": "Continuous rain"
             },
             {
               "value": "hail",
-              "label": "Grêle"
+              "label": "Hail"
             },
             {
               "value": "drizzle",
-              "label": "Bruine"
+              "label": "Drizzle"
             },
             {
               "value": "freezing-precipitation",
-              "label": "Précipitation verglaçante"
+              "label": "Freezing precipitation"
             },
             {
               "value": "shower",
-              "label": "Averse"
+              "label": "Shower"
             },
             {
               "value": "snow",
-              "label": "Neige"
+              "label": "Snow"
             }
           ]
         },
@@ -1776,7 +1776,7 @@
     }
   ],
   "glyphs": {
-    "cb": "buttons/cb.svg",
+    "cloudConvective": "buttons/cloudConvective.svg",
     "draw": "buttons/draw.svg",
     "icing": "buttons/icing.svg",
     "icingMod": "buttons/icingMod.svg",
@@ -1807,7 +1807,7 @@
     "snow": "wmo/precipitation/snow.svg",
     "H": "wmo/cyclone-pressure/pressure-h.svg",
     "L": "wmo/cyclone-pressure/pressure-l.svg",
-    "sigwxArea": "buttons/sigwxArea.svg",
+    "cloudNonConvective": "buttons/cloudNonConvective.svg",
     "zeroIsotherm": "buttons/zeroIsotherm.svg",
     "pressureCentre": "buttons/pressureCentre.svg",
     "frontCold": "buttons/frontCold.svg",

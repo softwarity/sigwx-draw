@@ -168,7 +168,7 @@
       "schemaVersion": 1,
       "type": "cloudConvective",
       "label": "Nuage convectif",
-      "icon": "atlas:cb",
+      "icon": "atlas:cloudConvective",
       "gesture": {
         "primitive": "polygon",
         "draw": "lasso",
@@ -347,7 +347,7 @@
       "schemaVersion": 1,
       "type": "cloudNonConvective",
       "label": "Nuage non-convectif",
-      "icon": "atlas:sigwxArea",
+      "icon": "atlas:cloudNonConvective",
       "composites": [
         { "key": "icing", "ref": "icing", "place": "top" },
         { "key": "turb", "ref": "turbulence", "place": "bottom" }
@@ -1502,7 +1502,7 @@
     }
   ],
   "glyphs": {
-    "cb": "buttons/cb.svg",
+    "cloudConvective": "buttons/cloudConvective.svg",
     "draw": "buttons/draw.svg",
     "icing": "buttons/icing.svg",
     "icingMod": "buttons/icingMod.svg",
@@ -1533,7 +1533,7 @@
     "D": "wmo/cyclone-pressure/pressure-d.svg",
     "zeroIsotherm": "buttons/zeroIsotherm.svg",
     "pressureCentre": "buttons/pressureCentre.svg",
-    "sigwxArea": "buttons/sigwxArea.svg",
+    "cloudNonConvective": "buttons/cloudNonConvective.svg",
     "frontCold": "buttons/frontCold.svg",
     "frontWarm": "buttons/frontWarm.svg",
     "frontOccluded": "buttons/frontOccluded.svg",

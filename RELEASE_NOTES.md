@@ -2,6 +2,21 @@
 
 ## NEXT RELEASE
 
+- **Unselected composite summary (single-layer non-convective cloud)**: when a cloud zone carrying
+  icing / turbulence composites is NOT selected, a compact read-only card now sits flush to the
+  RIGHT of its call-out — one chip per composite (severity glyph + top/base FL), icing above turb —
+  so the levels stay readable without selecting (the left column is the call-out itself, unchanged).
+  Lib-only: a new `compositeSummaryCard` in the controller reuses each composite's OWN call-out
+  decoration (the `flx` FL format + severity ink — no duplication) and the existing `MarkerWidget`
+  card, so it is captured in snapshots. Declutter-gated (hides with the call-out); single-layer only
+  for now (multi-layer is a later step). Selected state unchanged.
+
+- **Composite cards: clearer selection**: in the TEMSI composite-card stack (a non-convective zone
+  + its icing / turbulence levels), the FOCUSED card — the one a tap edits — now wears a bold 2px
+  border (`borderWidth:"large"`) while the others drop to a 0.5px hairline (`"small"`), so it's
+  obvious which card is active. Lib-only (no adapter change); uses the existing `MarkerWidget.
+  borderWidth` preset. 2px is the adapter's max card-border preset.
+
 - **TEMSI fronts split into Surface / Above surface**: the "Fronts" submenu now keeps the line
   phenomena (convergence, ITCZ on EUROC, squall) at top level, then nests **two sub-submenus**:
   - **Surface ▸** — the 4 classic fronts (cold / warm / occluded / stationary), solid line.

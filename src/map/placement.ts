@@ -59,7 +59,7 @@ export interface Placed {
   symbols: RenderFeature[];
 }
 
-interface Rect {
+export interface Rect {
   x: number;
   y: number;
   w: number;
@@ -75,14 +75,40 @@ const GAPS = [16, 34, 58, 92];
 /** Minimum VISIBLE leader length (px) past the box-end padding; shorter → hide it. */
 const LEADER_STUB = 12;
 
-function estimateBox(content: string, size: number): { w: number; h: number } {
+export function estimateBox(content: string, size: number): { w: number; h: number } {
   const lines = content.split("\n");
   const maxChars = Math.max(1, ...lines.map((l) => l.length));
   return { w: maxChars * size * 0.6 + 8, h: lines.length * size * 1.3 + 6 };
 }
 
-function overlaps(a: Rect, b: Rect): boolean {
-  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+/** Area (px²) of the intersection of two rects — 0 when they don't overlap. */
+function overlapArea(a: Rect, b: Rect): number {
+  const dx = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+  const dy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  return dx > 0 && dy > 0 ? dx * dy : 0;
+}
+
+/** Bump a box CENTRE `c` (size `w`×`h`, px) OUT of `obstacles`: if it overlaps any, ring-search
+ *  outward (8 dirs × growing radius) for the nearest FREE centre; if none is free, the
+ *  least-overlapping. No overlap ⇒ `c` returned unchanged. Used to make a just-DROPPED cartouche
+ *  yield so it never covers a fixed element (a point marker, or another pinned cartouche). */
+export function nudgeClear(c: [number, number], w: number, h: number, obstacles: Rect[]): [number, number] {
+  const ov = (p: [number, number]): number => {
+    const r: Rect = { x: p[0] - w / 2, y: p[1] - h / 2, w, h };
+    return obstacles.reduce((s, o) => s + overlapArea(r, o), 0);
+  };
+  if (ov(c) === 0) return c;
+  let best = c;
+  let bestOv = ov(c);
+  for (const rad of [14, 30, 50, 74, 102, 140]) {
+    for (const [ux, uy] of DIRS) {
+      const p: [number, number] = [c[0] + ux * rad, c[1] + uy * rad];
+      const o = ov(p);
+      if (o === 0) return p;
+      if (o < bestOv) { bestOv = o; best = p; }
+    }
+  }
+  return best;
 }
 
 function contains(r: Rect, x: number, y: number): boolean {
@@ -119,14 +145,20 @@ function lightningPath(a: [number, number], b: [number, number], proj: Projector
   return out;
 }
 
-export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<string, Pin>): Placed {
+/** `obstacles` = FIXED rects (screen px) that auto-placed call-outs must AVOID but which are never
+ *  themselves placed/moved — e.g. point markers (volcano/TC/radioactive) that own their spot.
+ *  `activeFid` = the call-out being ACTIVELY dragged: it holds its pin (follows the cursor) and is
+ *  placed FIRST, so every OTHER call-out — even a previously-pinned one — yields/flees it. */
+export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<string, Pin>, obstacles: Rect[] = [], activeFid?: string): Placed {
   const boxes: RenderFeature[] = [];
   const leaders: RenderFeature[] = [];
   const symbols: RenderFeature[] = [];
-  const placedRects: Rect[] = [];
+  const placedRects: Rect[] = [...obstacles]; // seed with the fixed obstacles so boxes route around them
 
-  // Pinned boxes first so they act as obstacles for the auto-placed ones.
-  const ordered = [...reqs].sort((a, b) => Number(pins.has(key(b))) - Number(pins.has(key(a))));
+  // PRIORITY order so lower-priority boxes yield: the actively-dragged call-out first (it owns the
+  // cursor), then the other pinned ones, then the auto-placed. A pin is otherwise just a PREFERENCE.
+  const rank = (req: AnnReq): number => (activeFid != null && req.featureId === activeFid ? 2 : pins.has(key(req)) ? 1 : 0);
+  const ordered = [...reqs].sort((a, b) => rank(b) - rank(a));
 
   for (const req of ordered) {
     const anchorPx = proj.project(req.anchor);
@@ -135,31 +167,40 @@ export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<stri
     // anchors — ONE per area for a multi-area phenomenon (CB MultiPolygon), all from this box.
     const arrows = req.arrowAnchors?.length ? req.arrowAnchors : [req.arrowAnchor ?? req.anchor];
     const { w, h } = estimateBox(req.content, req.textSize);
-    const pin = pins.get(key(req));
+    const k = key(req);
+    const pin = pins.get(k);
+    const isActive = activeFid != null && req.featureId === activeFid;
+    // A pinned box keeps its spot ONLY if free (or if it's the actively-dragged one); else it YIELDS
+    // (searches a new slot like an auto box). This is what lets a dragged card push pinned cards away.
+    const pinFree = pin != null && placedRects.every((r) => overlapArea({ x: anchorPx[0] + pin.dx - w / 2, y: anchorPx[1] + pin.dy - h / 2, w, h }, r) === 0);
 
     let cx = 0;
     let cy = 0;
-    if (pin) {
+    if (pin && (isActive || pinFree)) {
       cx = anchorPx[0] + pin.dx;
       cy = anchorPx[1] + pin.dy;
     } else {
-      // Push the box out by its own half-size along the candidate direction so
-      // it sits BESIDE the anchor (leader visible, no overlap), then escalate the
-      // gap until a slot is free of already-placed boxes.
+      // Push the box out beside the anchor (visible leader), escalating the gap until a slot is FREE
+      // of every already-placed box AND obstacle. If too crowded for any free slot, fall back to the
+      // LEAST-overlapping candidate so boxes spread out instead of stacking on each other / on a marker.
       let best: [number, number] | null = null;
+      let least: [number, number] = [anchorPx[0] + GAPS[0]! + w / 2, anchorPx[1]];
+      let leastOv = Infinity;
       outer: for (const gap of GAPS) {
         for (const [ux, uy] of DIRS) {
           const halfAlong = Math.abs(ux) * (w / 2) + Math.abs(uy) * (h / 2);
           const d = (req.avoidRadius ?? 0) + gap + halfAlong;
           const c: [number, number] = [anchorPx[0] + ux * d, anchorPx[1] + uy * d];
           const rect: Rect = { x: c[0] - w / 2, y: c[1] - h / 2, w, h };
-          if (!placedRects.some((r) => overlaps(rect, r))) {
-            best = c;
-            break outer;
-          }
+          const ov = placedRects.reduce((s, r) => s + overlapArea(rect, r), 0);
+          if (ov === 0) { best = c; break outer; }
+          if (ov < leastOv) { leastOv = ov; least = c; }
         }
       }
-      [cx, cy] = best ?? [anchorPx[0] + GAPS[0]! + w / 2, anchorPx[1]];
+      [cx, cy] = best ?? least;
+      // A pinned card that had to YIELD updates its pin to the new spot so it PERSISTS (no snap-back
+      // when the active card moves away) ⇒ the result is independent of creation/drag order.
+      if (pin && !isActive) pins.set(k, { dx: cx - anchorPx[0], dy: cy - anchorPx[1] });
     }
 
     const rect: Rect = { x: cx - w / 2, y: cy - h / 2, w, h };
