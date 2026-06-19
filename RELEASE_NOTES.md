@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.0.1
+
 - **Every read-only annotation now renders as a sprite** — one unified read-only path. Beyond the area
   call-outs (already sprites), the spot/line FL labels (tropopause, isotherms) and the marker/cards
   (volcano / TC / radioactive / pressure-centre / tropopause-spot / WMO points) become static sprites
