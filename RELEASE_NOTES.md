@@ -2,6 +2,14 @@
 
 ## NEXT RELEASE
 
+- **Fix: aloft (above-surface) front dashes** now render reliably. They used a `resolution`-scaled
+  dash that went solid on a real map; it is now a fixed screen-constant pattern with its period matched
+  to the WMO pip spacing, so gaps fall between symbols. Same fix on the squall line. `front-symbols`-only.
+
+- **Fix: cartouche anti-collision no longer freezes after a drag**. A dragged call-out no longer takes
+  a permanent pin that excluded it from placement — pins are now preferences, the actively-dragged
+  call-out pushes all the others, and only point markers (volcano / TC / radioactive) stay fixed.
+
 - **Unselected composite summary (single-layer non-convective cloud)**: when a cloud zone carrying
   icing / turbulence composites is NOT selected, a compact read-only card now sits flush to the
   RIGHT of its call-out — one chip per composite (severity glyph + top/base FL), icing above turb —
@@ -26,9 +34,8 @@
     the two GROUP buttons: `frontSurface.svg` (solid curve over a wavy sea line) and
     `frontAloft.svg` (dashed curve).
 
-  Mechanics: `front-symbols` gained a `"dashed": true` decoration flag (a JSON flag; the
-  screen-constant `dash: [px*11, px*7]` math stays in the decorator). Applied to both `temsi-france`
-  and `temsi-euroc`. The Surface/Above group buttons are PURE dropdowns (`ToolGroupSpec.toggle:false`,
+  Mechanics: `front-symbols` gained a `"dashed": true` decoration flag (a JSON flag; the dash math
+  stays in the decorator). Applied to both `temsi-france` and `temsi-euroc`. The Surface/Above group buttons are PURE dropdowns (`ToolGroupSpec.toggle:false`,
   new optional field): fixed icon, open-only, never draw — vs the default split-button `toggle:true`.
   In-menu order is declaration order (`squall, [ITCZ], convergence, Surface ▸, Above ▸`, child[0]
   adjacent to the trigger). NB: a pending draw-adapter fix is needed so the flyout flow follows the
