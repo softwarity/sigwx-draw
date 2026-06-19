@@ -230,7 +230,7 @@ describe("cb / turbulence", () => {
     const content = String(ann.properties.content);
     expect(content).toContain("OCNL"); // coverage — in the box itself now
     expect(content).toContain("CB");
-    expect(content).toContain("FL350"); // top in range
+    expect(content).toContain("350"); // top in range — bare number on the chart (no "FL")
     expect(content).toContain("XXX"); // base 100 < FL250 floor → XXX
     expect(ann.properties.textColor).toBe("#1f2328"); // black & white panel (the scallop stays red)
   });
@@ -246,9 +246,9 @@ describe("cb / turbulence", () => {
     const ann = byLayer(fs, "annotations")[0]!;
     expect(ann.properties.symbol).toBe("SEV"); // the symbol code IS the sprite id, riding the call-out
     expect(ann.properties.arrow).toBe(true); // leader arrow points back to the zone
-    expect(String(ann.properties.content)).toContain("FL360"); // top in range → FL360
+    expect(String(ann.properties.content)).toContain("360"); // top in range → bare "360" (no "FL")
     expect(String(ann.properties.content)).toContain("XXX"); // base 200 < FL250 floor → XXX
-    expect(String(ann.properties.content)).not.toContain("FL200");
+    expect(String(ann.properties.content)).not.toContain("200");
   });
 
   it("severe turbulence uses a DARKER ink than moderate (edge/fill/text all follow severity)", () => {
@@ -267,7 +267,7 @@ describe("cb / turbulence", () => {
   it("the `flightLevel` range moves the XXX threshold (off-chart sentinel follows the configured range)", () => {
     const md = { symbol: "MOD", topFL: 650, baseFL: 150 };
     const content = String(byLayer(turbulence.decorate({ geometry: poly, metadata: md, style: turbulence.style, flightLevel: { min: 100, max: 600 } }), "annotations")[0]!.properties.content);
-    expect(content).toContain("FL150"); // base 150 ≥ new floor 100 → real FL (not XXX)
+    expect(content).toContain("150"); // base 150 ≥ new floor 100 → real level (bare, not XXX)
     expect(content).toContain("XXX"); // top 650 > new ceiling 600 → XXX
   });
 
@@ -305,12 +305,12 @@ describe("tropopause (single-FL spot / contour)", () => {
     expect(label.properties.textBackground).toBeUndefined(); // NOT boxed (contour)
   });
 
-  it("spot (Point) → a single BOXED FL, no line", () => {
+  it("spot (Point) → a single BOXED level, bare number (no FL), no line", () => {
     const pt: Geometry = { type: "Point", coordinates: [3, 2] };
     const fs = tropopause.decorate({ geometry: pt, metadata: { fl: 460 }, style: tropopause.style });
     expect(byLayer(fs, "edge")).toHaveLength(0); // no contour for a spot
     const label = byLayer(fs, "text-boxes")[0]!;
-    expect(label.properties.text).toBe("FL460");
+    expect(label.properties.text).toBe("460"); // spot height = bare number on the chart (the contour keeps "FL")
     expect(label.properties.textBackground).toBeDefined(); // boxed (spot height)
     expect(label.geometry).toMatchObject({ type: "Point", coordinates: [3, 2] });
   });

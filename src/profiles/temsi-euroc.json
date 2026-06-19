@@ -108,13 +108,13 @@
           "arrow": true,
           "box": true,
           "content": [
-            "{amount} {type} {baseFL|flx:base}/{topFL|flx:top}"
+            "{amount} {type} {baseFL|flxn:base}/{topFL|flxn:top}"
           ],
           "contentSingle": [
             "{amount}",
             "{type}",
-            "{topFL|flx:top}",
-            "{baseFL|flx:base}"
+            "{topFL|flxn:top}",
+            "{baseFL|flxn:base}"
           ]
         }
       },
@@ -278,13 +278,13 @@
           "arrow": true,
           "box": true,
           "content": [
-            "{amount} {type} {baseFL|flx:base}/{topFL|flx:top}"
+            "{amount} {type} {baseFL|flxn:base}/{topFL|flxn:top}"
           ],
           "contentSingle": [
             "{amount}",
             "{type}",
-            "{topFL|flx:top}",
-            "{baseFL|flx:base}"
+            "{topFL|flxn:top}",
+            "{baseFL|flxn:base}"
           ]
         }
       },
@@ -614,7 +614,7 @@
             }
           }
         ],
-        "lineHeight": 1
+        "lineHeight": 0.8
       }
     },
     {
@@ -846,8 +846,8 @@
             "inside": true
           },
           "content": [
-            "{topFL|flx:top}",
-            "{baseFL|flx:base}"
+            "{topFL|flxn:top}",
+            "{baseFL|flxn:base}"
           ]
         }
       },
@@ -861,10 +861,10 @@
             "size": 24
           },
           {
-            "text": "{topFL|flx:top}"
+            "text": "{topFL|flxn:top}"
           },
           {
-            "text": "{baseFL|flx:base}"
+            "text": "{baseFL|flxn:base}"
           }
         ],
         "buttons": [
@@ -998,8 +998,8 @@
             "byField": "symbol"
           },
           "content": [
-            "{topFL|flx:top}",
-            "{baseFL|flx:base}"
+            "{topFL|flxn:top}",
+            "{baseFL|flxn:base}"
           ]
         }
       },
@@ -1013,10 +1013,10 @@
             "size": 36
           },
           {
-            "text": "{topFL|flx:top}"
+            "text": "{topFL|flxn:top}"
           },
           {
-            "text": "{baseFL|flx:base}"
+            "text": "{baseFL|flxn:base}"
           }
         ],
         "buttons": [

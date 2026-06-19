@@ -1321,8 +1321,8 @@ describe("cloudConvective — multi-layer data & cartouche", () => {
     expect(lines).toHaveLength(4); // a column, not one packed line
     expect(lines[0]).toBe("OCNL"); // amount on its own line
     expect(lines[1]).toBe("CB"); // type on its own line
-    expect(lines[2]).toMatch(/^(FL\d{3}|XXX)$/); // top
-    expect(lines[3]).toMatch(/^(FL\d{3}|XXX)$/); // base
+    expect(lines[2]).toMatch(/^(\d{3}|XXX)$/); // top — bare 3-digit level on the chart (no "FL")
+    expect(lines[3]).toMatch(/^(\d{3}|XXX)$/); // base
     expect(lines.some((l) => /OCNL.*CB/.test(l))).toBe(false); // NOT the compact "OCNL CB .../..." line
   });
 

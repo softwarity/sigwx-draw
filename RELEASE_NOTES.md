@@ -2,6 +2,16 @@
 
 ## NEXT RELEASE
 
+- **On-map flight levels are bare 3-digit numbers** (no `FL` prefix), per the ICAO/TEMSI chart norm
+  (the `FL` prefix is a text convention — METAR/SIGMET — not graphical charts). Applies to the
+  CB / convective & non-convective cloud / turbulence (CAT) / icing call-outs and the tropopause
+  **spot**. **Kept with `FL`**: the **jet stream** and the tropopause **contour** (line) — by request.
+  List/panel **summaries keep `FL`** (they're text). Mechanically: the call-outs swap the `flx`
+  format → `flxn` (bare, off-chart `XXX` preserved); the tropopause point label `{fl|fl}` → `{fl}`.
+
+- **Tighter TEMSI tropopause label**: the gap between the H/L marker and the FL value is reduced
+  (`card.lineHeight` 1 → 0.8), most visible on the read-only sprite (unselected). TEMSI-EUROC only.
+
 - **Fronts are hemisphere-aware**. The pip side still follows the draw direction (west→east ⇒ pips
   above, east→west ⇒ below) in the northern hemisphere, but it now MIRRORS in the southern hemisphere
   — the WMO convention — driven by the front's mean latitude (the same rule the jet feathers use).

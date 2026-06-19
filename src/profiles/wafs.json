@@ -229,8 +229,8 @@
           "content": [
             "{coverage|stack}",
             "CB",
-            "{topFL|flx:top}",
-            "{baseFL|flx:base}"
+            "{topFL|flxn:top}",
+            "{baseFL|flxn:base}"
           ]
         }
       },
@@ -244,10 +244,10 @@
             }
           },
           {
-            "text": "{topFL|flx:top}"
+            "text": "{topFL|flxn:top}"
           },
           {
-            "text": "{baseFL|flx:base}"
+            "text": "{baseFL|flxn:base}"
           }
         ],
         "buttons": [
@@ -373,8 +373,8 @@
             "inside": true
           },
           "content": [
-            "{topFL|flx:top}",
-            "{baseFL|flx:base}"
+            "{topFL|flxn:top}",
+            "{baseFL|flxn:base}"
           ]
         }
       },
@@ -388,10 +388,10 @@
             "size": 24
           },
           {
-            "text": "{topFL|flx:top}"
+            "text": "{topFL|flxn:top}"
           },
           {
-            "text": "{baseFL|flx:base}"
+            "text": "{baseFL|flxn:base}"
           }
         ],
         "buttons": [
@@ -525,8 +525,8 @@
             "byField": "symbol"
           },
           "content": [
-            "{topFL|flx:top}",
-            "{baseFL|flx:base}"
+            "{topFL|flxn:top}",
+            "{baseFL|flxn:base}"
           ]
         }
       },
@@ -540,10 +540,10 @@
             "size": 36
           },
           {
-            "text": "{topFL|flx:top}"
+            "text": "{topFL|flxn:top}"
           },
           {
-            "text": "{baseFL|flx:base}"
+            "text": "{baseFL|flxn:base}"
           }
         ],
         "buttons": [
@@ -642,7 +642,7 @@
           "label": {
             "anchor": "geometry-mid",
             "content": [
-              "{fl|fl}"
+              "{fl}"
             ],
             "box": true
           }
