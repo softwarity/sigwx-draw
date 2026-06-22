@@ -21,7 +21,7 @@ Headless lib for drawing aeronautical SIGWX charts (WAFS SWH now, TEMSI next) on
 
 ```bash
 npm run build                                       # build:stock → tsc strict → build:profiles
-npx vitest run                                      # suite
+npx vitest run                                      # suite (see TESTING.md = 1-screen map of what's tested)
 cd demo && npx tsc -p tsconfig.app.json --noEmit   # Angular demo type-check
 ```
 - **Demo** = Angular app in `demo/` (port **4211**, `cd demo && npm start`), NOT Vite. Stale bundle →
@@ -47,8 +47,9 @@ a phenomenon `.ts`: **STOP**, it's a JSON profile.
 
 - `src/core/` pure (testable mapless): `phenomenon.ts` (PhenomenonDef, FieldSchema, WidgetInput),
   `registry.ts` (registers decorators+glyphs, compiles builtins FROM JSON — registers
-  `jet-barbs`+`front-symbols`), `decorate/` (pure geometry: scallop/ticks/barbs/geo), `descriptor/`
-  (the framework: types/extensions/atlas/template/interpret/schema), `descriptors/` = **3 MECHANICS
+  `jet-barbs`+`front-symbols`), `decorate/` (pure geometry: scallop/ticks/barbs/geo + `rings.ts` =
+  ring/vertex flat outer+hole indexing for the eraser), `fl/layers.ts` (pure multi-layer FL band
+  math), `descriptor/` (the framework: types/extensions/atlas/template/interpret/schema), `descriptors/` = **3 MECHANICS
   files, zero data**: `stock.ts` (reads `wafs.json`+`temsi-euroc.json` via `with {type:"json"}`,
   DERIVES `BUILTIN_DESCRIPTORS`/`STOCK_GLYPHS`), `builders.ts` (`makeCb`/`makeTurbulence`/`makeIcing`
   — clone the JSON base, swap only options; `DEFAULT_*` re-read from JSON), `index.ts` (barrel +
@@ -57,14 +58,17 @@ a phenomenon `.ts`: **STOP**, it's a JSON profile.
   anti-collision, declutter, multi-area, eraser, widgets).
 - `src/profiles/` : one PURE `.json` per profile = **THE source** (not a copy), all self-contained:
   `wafs.json` (8 WAFS), `temsi-france.json` (ground→FL150), `temsi-euroc.json` (ground→FL450).
-  Each inlines its full descriptors + `glyphs` atlas + grouped `tools` + `vertical`. Cloning the file
-  is enough to edit buttons/styles/fields or add a phenomenon; CDN-servable alone. Duplication
-  BETWEEN json profiles (cb rewritten in each) is ASSUMED; TS↔JSON duplication is FORBIDDEN. Subpaths
-  `./profiles/<id>` and `./profiles/<id>.json` → same file. Default loaded dynamically in `ready()`.
-  FL bounds resolution: `flightLevel` → fallback `vertical` → engine default (in `flResolved`).
-  Profile v2 ingestion: `SigwxProfile` carries `objects` (stock / `extends`+patch deep-merge via
-  `mergeDescriptor` / inline), `glyphs` (merged BEFORE compilation), grouped `tools`,
-  `callouts.minZoneFraction`. ⚠️ `sideEffects:false` — extension registration is ALWAYS explicit.
+  Each inlines its full descriptors + `glyphs` atlas + `sprites` atlas + grouped `tools` + `vertical`.
+  Cloning the file is enough to edit buttons/styles/fields or add a phenomenon; CDN-servable alone.
+  Duplication BETWEEN json profiles (cb rewritten in each) is ASSUMED & DELIBERATE — **inheritance =
+  file duplication, there is NO `extends`** (an integrator ships only the one profile it needs);
+  TS↔JSON duplication is FORBIDDEN. Subpaths `./profiles/<id>` and `./profiles/<id>.json` → same file.
+  Default loaded dynamically in `ready()`. FL bounds resolution: `flightLevel` → fallback `vertical` →
+  engine default (in `flResolved`). Profile ingestion: `SigwxProfile` carries `objects` (stock NAME /
+  full inline — `resolveObjectSpec`, no patch/merge), `glyphs` (button/marker atlas, merged BEFORE
+  compilation), `sprites` (the recolourable SYMBOL atlas — code → SVG: turbulence MOD/SEV, icing ICE_*,
+  CB coverage — registered per profile, none baked in the lib), grouped `tools`, `callouts.minZoneFraction`.
+  ⚠️ `sideEffects:false` — extension registration is ALWAYS explicit.
 
 ### Glyph atlas `svgs/`
 - `svgs/**/*.svg` = **THE source** of glyph SVGs (viewable AND JS-readable; ICAO Annex 3 set + project

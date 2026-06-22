@@ -234,7 +234,7 @@ export const DESCRIPTOR_JSON_SCHEMA = {
       required: ["primitive"],
       properties: {
         primitive: { enum: ["point", "polyline", "polygon"] },
-        draw: { enum: ["lasso", "drop", "click-path", "lasso-or-spot"] },
+        draw: { enum: ["lasso", "drop", "click", "click-path", "lasso-or-spot"] },
         smooth: { type: "boolean" },
         directional: { type: "boolean" },
         multiArea: { type: "boolean" },
@@ -290,6 +290,11 @@ export const DESCRIPTOR_JSON_SCHEMA = {
         preview: { type: "string" },
         min: { type: "number" },
         max: { type: "number" },
+        layerColors: {
+          type: "array",
+          items: { type: "string" },
+          description: "Per-layer accent palette (band/handle/panel-frame), cycled by layer index. Omitted ⇒ the lib default.",
+        },
       },
     },
     satellites: {
@@ -325,8 +330,9 @@ export const DESCRIPTOR_JSON_SCHEMA = {
 
 /** JSON Schema (draft 2020-12) for a WHOLE chart profile — the single ingestion
  *  unit (§2b): vertical + thresholds + inline glyphs + objects + grouped tools.
- *  A backend validates the file before serving it; `extends` patches are
- *  free-form by nature (any descriptor subset), so they validate structurally. */
+ *  A backend validates the file before serving it. A profile is SELF-CONTAINED:
+ *  each `objects` entry is a stock type name or a full inline descriptor — there
+ *  is no cross-profile inheritance (a derived chart is a duplicated file). */
 export const PROFILE_JSON_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   $id: "https://softwarity.io/sigwx-draw/profile.schema.json",
@@ -356,17 +362,16 @@ export const PROFILE_JSON_SCHEMA = {
       additionalProperties: { type: "string", pattern: "^<svg" },
       description: "Inline atlas additions (normalized `<svg viewBox=…>` art, currentColor).",
     },
+    sprites: {
+      type: "object",
+      additionalProperties: { type: "string", pattern: "^<svg" },
+      description: "The recolourable SYMBOL atlas: code → inline SVG (turbulence MOD/SEV, icing ICE_*, CB coverage). The code IS the sprite id.",
+    },
     objects: {
       type: "array",
       items: {
         oneOf: [
           { type: "string", description: "A stock descriptor, as-is." },
-          {
-            type: "object",
-            required: ["extends"],
-            properties: { extends: { type: "string" } },
-            description: "A stock reference + deep-merge patch (patch wins; keyed-array patches address fields/options/satellites by id).",
-          },
           { $ref: "phenomenon-descriptor.schema.json", description: "A full inline descriptor." },
         ],
       },

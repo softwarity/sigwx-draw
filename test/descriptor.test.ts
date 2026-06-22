@@ -3,51 +3,27 @@ import { describe, expect, it } from "vitest";
 import {
   CB_DESCRIPTOR,
   defFromDescriptor,
-  mergeDescriptor,
   resolveObjectSpec,
 } from "../src/core/index.js";
 import type { PhenomenonDescriptor } from "../src/core/index.js";
 
 describe("profile objects composition (descriptor spec §2b)", () => {
   it("resolves a stock name to the shipped descriptor, as-is", () => {
-    expect(resolveObjectSpec("cb", mergeDescriptor)).toBe(CB_DESCRIPTOR);
+    expect(resolveObjectSpec("cb")).toBe(CB_DESCRIPTOR);
   });
 
-  it("an `extends` entry deep-merges its patch (patch wins, base untouched)", () => {
-    const patched = resolveObjectSpec(
-      { extends: "cb", style: { edge: { color: "#0a0a0a" } }, summary: "patched" },
-      mergeDescriptor,
-    );
-    expect(patched.style.edge?.color).toBe("#0a0a0a");
-    expect(patched.style.color).toBe("#d1242f"); // untouched sibling key survives the merge
-    expect(patched.summary).toBe("patched");
-    expect(CB_DESCRIPTOR.style.edge?.color).toBe("#d1242f"); // the stock object is never mutated
-    expect(CB_DESCRIPTOR.summary).not.toBe("patched");
-  });
-
-  it("a keyed-array patch addresses fields by their `key` (the §2b fields form)", () => {
-    const patched = resolveObjectSpec(
-      { extends: "cb", fields: { baseFL: { default: 30 }, topFL: { default: 150 } } },
-      mergeDescriptor,
-    );
-    const by = (k: string) => patched.fields?.find((f) => f.key === k);
-    expect(by("baseFL")?.kind === "fl" && by("baseFL")?.default).toBe(30);
-    expect(by("topFL")?.kind === "fl" && by("topFL")?.default).toBe(150);
-    expect(by("coverage")?.kind).toBe("enum"); // unnamed items pass through unchanged
-    expect(CB_DESCRIPTOR.fields?.find((f) => f.key === "baseFL")?.default).toBe(250); // base untouched
-  });
-
-  it("an unknown stock name fails listing the available descriptors", () => {
-    expect(() => resolveObjectSpec("fog", mergeDescriptor)).toThrow(/Unknown stock descriptor "fog".*cb.*jetStream/s);
-  });
-
-  it("a patched descriptor COMPILES like a stock one (the interpreter sees no difference)", () => {
-    const def = defFromDescriptor(
-      resolveObjectSpec({ extends: "cb", label: "CB (LL)", style: { color: "#336699" } }, mergeDescriptor),
-    );
+  it("returns a full inline descriptor untouched (no cross-profile inheritance)", () => {
+    const inline = { ...CB_DESCRIPTOR, label: "CB (LL)", style: { ...CB_DESCRIPTOR.style, color: "#336699" } };
+    const resolved = resolveObjectSpec(inline);
+    expect(resolved).toBe(inline); // same object, no merge/clone
+    const def = defFromDescriptor(resolved);
     expect(def.type).toBe("cb");
     expect(def.label).toBe("CB (LL)");
     expect(def.style.color).toBe("#336699");
+  });
+
+  it("an unknown stock name fails listing the available descriptors", () => {
+    expect(() => resolveObjectSpec("fog")).toThrow(/Unknown stock descriptor "fog".*cb.*jetStream/s);
   });
 });
 
@@ -153,7 +129,7 @@ describe("movable line label (0°C isotherm)", () => {
     const { registerExtensions } = await import("../src/core/index.js");
     registerExtensions({ glyphs: profile.glyphs });
     const spec = profile.objects.find((o) => o.type === "zeroIsotherm")!;
-    const def = defFromDescriptor(resolveObjectSpec(spec, mergeDescriptor));
+    const def = defFromDescriptor(resolveObjectSpec(spec));
     expect(def.movableLabel).toBe(true);
     const line = { type: "LineString" as const, coordinates: [[0, 46], [10, 46]] };
     const labelLon = (labelT?: number): number => {
@@ -171,7 +147,7 @@ describe("movable line label (0°C isotherm)", () => {
 describe("tropopause spot — 3 forms via boxShape (rect / pentagon-up / pentagon-down)", () => {
   it("the spot card's frame shape follows `kind`; the contour keeps its label", async () => {
     const profile = (await import("../src/profiles/temsi-euroc.json")).default as { objects: PhenomenonDescriptor[] };
-    const def = defFromDescriptor(resolveObjectSpec(profile.objects.find((o) => o.type === "tropopause")!, mergeDescriptor));
+    const def = defFromDescriptor(resolveObjectSpec(profile.objects.find((o) => o.type === "tropopause")!));
     const call = def.widget as (i: unknown) => { boxShape?: string | number[][] }[] | { boxShape?: string | number[][] } | null;
     const base = { id: "t", style: def.style, chrome: {}, sprite: () => undefined, flightLevel: { min: 0, max: 600 } };
     const spotShape = (kind: string): string | number[][] | undefined => {

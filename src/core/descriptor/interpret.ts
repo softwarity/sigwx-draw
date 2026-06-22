@@ -174,8 +174,8 @@ function compileDraw(g: GestureSpec): DrawSpec {
     mode: g.draw === "drop" ? "drop" : "draw",
     ...(g.smooth ? { smooth: true } : {}),
     ...(g.directional ? { directional: true } : {}),
-    ...(g.draw === "lasso" || g.draw === "lasso-or-spot" ? { freehand: true } : {}),
-    ...(g.draw === "lasso-or-spot" ? { pointWhenShort: true } : {}),
+    ...(g.draw === "lasso" || g.draw === "lasso-or-spot" || g.draw === "click" ? { freehand: true } : {}),
+    ...(g.draw === "lasso-or-spot" || g.draw === "click" ? { pointWhenShort: true } : {}),
     ...(g.erasable ? { erasable: true } : {}),
   };
   const generator = g.default ? getGenerator(g.default) : undefined;
@@ -510,12 +510,17 @@ const SIDE_X: Record<SatelliteSpec["anchor"], number> = {
   "geometry-mid": -0.85, // just clear of the geometry label box (−0.5 looked astride, −1.1 too far)
   "break-point": -1.6,
 };
-/** Per-layer accent palette for the multi-range FL editor (the multi-layer cloud area): each
- *  cloud layer's band + handles take the next colour so overlapping ranges read apart. A lib
- *  fallback (engine-chrome-style, not phenomenon data); a profile may override later. */
-const LAYER_GAUGE_COLORS = ["#d1242f", "#0969da", "#1a7f37", "#bf8700", "#8250df", "#bf3989"];
-/** The active cloud layer's accent (band/handle colour AND the panel frame — they match). */
-const layerColor = (i: number): string => LAYER_GAUGE_COLORS[i % LAYER_GAUGE_COLORS.length]!;
+/** Default per-layer accent palette for the multi-range FL editor (the multi-layer cloud area):
+ *  each cloud layer's band + handles take the next colour so overlapping ranges read apart. A
+ *  lib fallback (engine-chrome-style, not phenomenon data) — a profile overrides it per object
+ *  via `repeat.layerColors`. */
+const DEFAULT_LAYER_GAUGE_COLORS = ["#d1242f", "#0969da", "#1a7f37", "#bf8700", "#8250df", "#bf3989"];
+/** The active cloud layer's accent picker (band/handle colour AND the panel frame — they match):
+ *  the descriptor's `repeat.layerColors` if set, else the lib default, cycled by layer index. */
+const layerColorOf = (palette?: string[]): ((i: number) => string) => {
+  const p = palette && palette.length ? palette : DEFAULT_LAYER_GAUGE_COLORS;
+  return (i: number): string => p[i % p.length]!;
+};
 /** Mix a `#rrggbb` toward white by `t` (0 = unchanged, 1 = white): the very-light card tint. */
 function lighten(hex: string, t: number): string {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex);
@@ -612,7 +617,7 @@ function compileSatellites(d: PhenomenonDescriptor): ((input: WidgetInput) => Ma
             FALLBACK_FL.min,
             FALLBACK_FL.max,
             [keys[0]!, keys[1]!],
-            layerColor,
+            layerColorOf(d.repeat?.layerColors),
             activeIdx,
             rangeChrome,
           );
@@ -944,7 +949,7 @@ function compileLayerPanel(
     // The editing card takes the ACTIVE layer's accent — frame in that colour (so the card visually
     // belongs to the band being edited) over a very-light tint of it. The frame colour matches the
     // active range's band/handles exactly (same `layerColor`).
-    const accent = layerColor(idx);
+    const accent = layerColorOf(repeat.layerColors)(idx);
     const frame = { bg: lighten(accent, 0.9), border: accent, borderWidth: "medium" as const, radius: "small" as const };
     const flat: MarkerWidget = {
       id,
@@ -977,6 +982,7 @@ function tryGlyph(ref: string): string | undefined {
 
 function compileMarkerWidget(d: PhenomenonDescriptor): (input: WidgetInput) => MarkerWidget {
   const card = d.card as CardSpec;
+  const smooth = d.gesture.smooth === true;
   for (const it of card.items) if (it.glyph) checkGlyph(it.glyph);
   // The "named" state reads the FIRST input item's bound field (when-named framing).
   const nameField = card.items.find((i) => i.input)?.input?.field;
@@ -986,7 +992,12 @@ function compileMarkerWidget(d: PhenomenonDescriptor): (input: WidgetInput) => M
 
   return (input: WidgetInput): MarkerWidget => {
     const { id, geometry, metadata, editable, style, sprite, chrome } = input;
-    const [lon, lat] = geometry.type === "Point" ? (geometry.coordinates as [number, number]) : [0, 0];
+    // Anchor: a Point spot sits on its coords; a LINE card (the isotherm inline label editor, `onLine`)
+    // rides the render label's position along the line (`labelT`, smoothed) so it overlays the box.
+    const lineFr = geometry.type === "Point" ? null : lineLabelFrame(geometry, metadata, smooth);
+    const [lon, lat] = geometry.type === "Point"
+      ? (geometry.coordinates as [number, number])
+      : (lineFr ? toLonLat(lineFr.p, lineFr.k) : (geometryMid(geometry, smooth) ?? [0, 0]));
     const ink = style.color; // glyph + card frame
     const textInk = style.text?.color ?? ink; // name/coord may deviate, else follow the ink
     const name = nameField ? str(metadata[nameField], "") : "";
@@ -1014,7 +1025,8 @@ function compileMarkerWidget(d: PhenomenonDescriptor): (input: WidgetInput) => M
           });
           // `size` also constrains the picker TRIGGER glyph while selected (the adapter maps it to
           // the control font-size, which sizes the glyph) — so selected matches the collapsed marker.
-          items.push({ kind: "text", value, control: "picker", ...(pick.mode ? { mode: pick.mode } : {}), name: pick.field, options, ...(it.size ? { size: it.size } : {}), ...(chrome?.handle?.fill ? { color: chrome.handle.fill } : {}) });
+          // `open` ⇒ `autofocus`: the adapter opens the picker menu as soon as the card appears.
+          items.push({ kind: "text", value, control: "picker", ...(pick.mode ? { mode: pick.mode } : {}), name: pick.field, options, ...(it.size ? { size: it.size } : {}), ...(pick.open ? { autofocus: true } : {}), ...(chrome?.handle?.fill ? { color: chrome.handle.fill } : {}) });
         } else {
           // Collapsed (not selected): the chosen symbol's glyph; or, for a TEXT picker, its
           // (template-evaluated) label — so a shaped FL box (tropopause) stays visible unselected.
@@ -1049,14 +1061,16 @@ function compileMarkerWidget(d: PhenomenonDescriptor): (input: WidgetInput) => M
       id,
       ...(editable ? {} : { static: true as const }),
       anchor: { lon, lat },
-      origin: card.origin ?? "center",
+      // A LINE card overlays the (lifted) decorated label — sit ABOVE the line (anchor on the line,
+      // body up) so it covers the label box. A Point spot keeps the descriptor's origin (center).
+      origin: geometry.type === "Point" ? (card.origin ?? "center") : "bottom",
       // A delete ✕ when selected — the name <input> swallows Delete/Backspace, so the
       // keyboard delete can't reach the controller; the card button fires `onWidgetDelete`.
       deletable: card.deletable === true && editable,
       ...(framed ? { bg: "#ffffff", border: ink, radius: "small", padding: "small" } : {}),
       ...(boxShape ? { boxShape } : {}),
       font: { color: textInk, size: style.text?.size ?? 13, ...(card.lineHeight != null ? { lineHeight: card.lineHeight } : {}) },
-      child: { dir: "v", align: "center", gap: 2, items },
+      child: { dir: card.dir ?? "v", align: "center", gap: 2, items },
     };
   };
 }
@@ -1100,6 +1114,14 @@ export function defFromDescriptor(d: PhenomenonDescriptor): PhenomenonDef {
   const schema = (d.fields ?? []).map(compileField);
   const summary = d.summary;
 
+  // Picker fields flagged `open` are "quick-pick": tapping an option DESELECTS the feature (the WMO
+  // symbol stamp — pick and done). The controller reads this in onWidgetEdit.
+  const closeOnPick = new Set<string>();
+  for (const it of (d.card as CardSpec | undefined)?.items ?? []) {
+    const pk = it.picker ?? it.carousel;
+    if (pk?.open && pk.field) closeOnPick.add(pk.field);
+  }
+
   const base: PhenomenonDef = {
     type: d.type,
     label: d.label,
@@ -1113,6 +1135,7 @@ export function defFromDescriptor(d: PhenomenonDescriptor): PhenomenonDef {
       ? { summary: (m: Metadata) => evalTemplate(summary, m, { metadata: m }) }
       : {}),
     ...(d.flBeyond ? { flBeyond: d.flBeyond } : {}),
+    ...(closeOnPick.size ? { closeOnPick } : {}),
   };
 
   if (isMarker(d)) {
@@ -1132,14 +1155,25 @@ export function defFromDescriptor(d: PhenomenonDescriptor): PhenomenonDef {
   // the CONTOUR keeps its decorated label. An area card (RenderSpec) still replaces its call-out.
   const byGeomRender = !!(d.render && ("line" in d.render || "point" in d.render));
   const markerCard = d.card && byGeomRender ? compileMarkerWidget(d) : undefined;
+  // The card applies to the spot ALWAYS; to the LINE only with `onLine` (the isotherm inline temp
+  // editor). Where the geometry already carries a decorated render label (isotherm spot+contour),
+  // the card is an inline EDITOR that overlays it only WHILE SELECTED (the controller suppresses the
+  // box under it); where it doesn't (the tropopause spot), the card IS the representation (always shown).
+  const cardOnLine = (d.card as CardSpec | undefined)?.onLine === true;
+  const hasPointLabel = !!rr?.point?.label;
+  const hasLineLabel = !!rr?.line?.label;
   const widget = d.card
     ? (markerCard
         ? (input: WidgetInput): MarkerWidget[] | null => {
-            if (input.geometry.type === "Point") {
-              const sats = satellites && input.editable ? satellites(input) : [];
-              return [markerCard(input), ...sats];
+            const isPoint = input.geometry.type === "Point";
+            const isLine = input.geometry.type === "LineString";
+            if (!isPoint && !(isLine && cardOnLine)) {
+              return satellites && input.editable ? (satellites(input).length ? satellites(input) : null) : null;
             }
-            return satellites && input.editable ? (satellites(input).length ? satellites(input) : null) : null;
+            const sats = satellites && input.editable ? satellites(input) : [];
+            const hasLabel = isPoint ? hasPointLabel : hasLineLabel;
+            if (input.editable || !hasLabel) return [markerCard(input), ...sats];
+            return sats.length ? sats : null;
           }
         : d.repeat
           ? compileLayerPanel(d, satellites) // the multi-layer panel (the TEMSI cloud-layer area)

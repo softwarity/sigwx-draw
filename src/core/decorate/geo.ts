@@ -7,7 +7,7 @@
  * both axes, so a "perpendicular" and a "length" mean what they look like. Good
  * enough at chart scale; the frame's reference latitude is the geometry's mean.
  */
-import type { Geometry } from "geojson";
+import type { Geometry, Position } from "geojson";
 
 export const D2R = Math.PI / 180;
 export type Pt = [number, number];
@@ -324,5 +324,65 @@ export function projectToFraction(planar: Pt[], cursor: Pt): number {
     }
     acc += Math.sqrt(l2);
   }
+  return best;
+}
+
+/** Squared distance from point `p` to segment a–b (planar). */
+export function segDist(p: Pt, a: Pt, b: Pt): number {
+  const abx = b[0] - a[0];
+  const aby = b[1] - a[1];
+  const l2 = abx * abx + aby * aby || 1;
+  let t = ((p[0] - a[0]) * abx + (p[1] - a[1]) * aby) / l2;
+  t = Math.max(0, Math.min(1, t));
+  const qx = a[0] + abx * t;
+  const qy = a[1] + aby * t;
+  return (qx - p[0]) ** 2 + (qy - p[1]) ** 2;
+}
+
+/** On-screen significance of an area vs the view: its LARGEST ring's bbox diagonal over the
+ *  view span (both in degrees — a pure ratio, so no pixel API needed). Drives the call-out
+ *  declutter threshold. */
+export function zoneSpanRatio(geom: Geometry, viewSpan: number): number {
+  const ring = coordsOf(geom); // MultiPolygon → the largest ring (the box-anchor area)
+  if (ring.length < 3 || !viewSpan) return 1;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of ring) {
+    if (p[0]! < minX) minX = p[0]!;
+    if (p[0]! > maxX) maxX = p[0]!;
+    if (p[1]! < minY) minY = p[1]!;
+    if (p[1]! > maxY) maxY = p[1]!;
+  }
+  return Math.hypot(maxX - minX, maxY - minY) / viewSpan;
+}
+
+/** Which AREA of a (Multi)Polygon a lon/lat refers to: the ring it falls INSIDE, else the
+ *  one with the nearest boundary — resolves an edge/fill/dblclick hit to an area index. */
+export function nearestArea(geom: Geometry, at: Position): number {
+  const rings = outerRings(geom);
+  let best = 0;
+  let bestD = Infinity;
+  rings.forEach((ring, a) => {
+    if (ring.length < 2) return;
+    if (ring.length >= 3 && pointInRing([at[0]!, at[1]!], ring)) {
+      if (bestD > 0) {
+        bestD = 0;
+        best = a;
+      }
+      return;
+    }
+    const k = frameK(ring);
+    const planar = ring.map((c) => toPlanar(c, k));
+    const cur = toPlanar([at[0]!, at[1]!], k);
+    for (let i = 0; i < planar.length - 1; i++) {
+      const d = segDist(cur, planar[i]!, planar[i + 1]!);
+      if (d < bestD) {
+        bestD = d;
+        best = a;
+      }
+    }
+  });
   return best;
 }

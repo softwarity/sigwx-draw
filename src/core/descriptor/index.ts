@@ -51,7 +51,6 @@ export type {
   ActionExtension,
 } from "./extensions.js";
 export { defFromDescriptor, validateDescriptor } from "./interpret.js";
-export { mergeDescriptor } from "./merge.js";
 export { evalTemplate } from "./template.js";
 export { BUILTIN_GLYPHS } from "./atlas.js";
 export { DESCRIPTOR_JSON_SCHEMA, PROFILE_JSON_SCHEMA } from "./schema.js";

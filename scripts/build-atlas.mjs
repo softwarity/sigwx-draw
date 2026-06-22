@@ -82,6 +82,25 @@ function wiredNames(profile) {
   return names;
 }
 
+/** Resolve a `{ name: ref }` map to `{ name: inline-SVG }`: a raw `<svg…>` stays (normalized),
+ *  else the ref is a PATH under svgs/ (recorded as referenced for the unused report). Missing
+ *  files are reported. Shared by the `glyphs` atlas, the `sprites` atlas and the stock glyphs. */
+function resolveRefs(refs, id) {
+  const out = {};
+  for (const [name, ref] of Object.entries(refs)) {
+    if (typeof ref === "string" && ref.trim().startsWith("<svg")) {
+      out[name] = normalizeSvg(ref); // inline custom art — keep, but ensure xmlns
+    } else {
+      const file = join(SVGS, ref);
+      if (existsSync(file)) {
+        out[name] = normalizeSvg(readFileSync(file, "utf8"));
+        referenced.add(typeof ref === "string" ? ref : "");
+      } else missing.push(`${id} → "${name}": svgs/${ref} not found`);
+    }
+  }
+  return out;
+}
+
 // 2) Per source profile: its `glyphs` section holds REFERENCES (name -> path in svgs/). The
 //    build RESOLVES each reference to the inline SVG and writes it into the dist profile.
 //    `src/` is never modified; the references stay the editable source.
@@ -100,22 +119,15 @@ for (const f of readdirSync(SRC_PROFILES)) {
     if (!(name in refs)) missing.push(`${id} → object wires "atlas:${name}" but it's missing from "glyphs"`);
   }
 
-  // Resolve references → inline SVG.
-  const glyphs = {};
-  for (const [name, ref] of Object.entries(refs)) {
-    if (typeof ref === "string" && ref.trim().startsWith("<svg")) {
-      glyphs[name] = normalizeSvg(ref); // inline custom glyph — keep, but ensure xmlns
-    } else {
-      const file = join(SVGS, ref);
-      if (existsSync(file)) {
-        glyphs[name] = normalizeSvg(readFileSync(file, "utf8"));
-        referenced.add(typeof ref === "string" ? ref : "");
-      } else missing.push(`${id} → "${name}": svgs/${ref} not found`);
-    }
-  }
+  // Resolve references → inline SVG. `glyphs` = button/marker ATLAS (atlas:<name>); `sprites` =
+  // the recolourable SYMBOL atlas (the code IS the sprite id: MOD/SEV/ICE_*/coverage), registered
+  // per-profile so a chart only ships the symbols it actually draws.
+  const glyphs = resolveRefs(refs, id);
+  const sprites = resolveRefs(profile.sprites ?? {}, `${id} sprite`);
   if (WRITE_DIST) {
-    writeIfChanged(join(DIST_PROFILES, f), JSON.stringify({ ...profile, glyphs }, null, 2) + "\n");
-    console.log(`${id.padEnd(14)} → dist (${Object.keys(glyphs).length} refs → inline SVG)`);
+    const out = Object.keys(sprites).length ? { ...profile, glyphs, sprites } : { ...profile, glyphs };
+    writeIfChanged(join(DIST_PROFILES, f), JSON.stringify(out, null, 2) + "\n");
+    console.log(`${id.padEnd(14)} → dist (${Object.keys(glyphs).length} glyphs + ${Object.keys(sprites).length} sprites → inline SVG)`);
   }
 }
 

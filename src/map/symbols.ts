@@ -1,60 +1,16 @@
 /**
- * Default glyph sprite atlas (inline SVG). v1 ships the turbulence intensity
- * glyphs; more (volcano, TC, H/L, icing) plug in here as the registry grows.
- * Hosts can override via `new SigwxDraw({ symbolSprite })`.
+ * SIGWX symbol-sprite defaults.
  *
- * The sprite plumbing (colorize / rasterize / data-URI, `SPRITE_PX`) now lives in
- * `@softwarity/draw-adapter` — this module only owns the SIGWX-specific defaults.
+ * The recolourable SYMBOL atlas (turbulence MOD/SEV, icing ICE_*, CB-coverage glyphs) is NO
+ * LONGER baked here as inline SVG: the art lives in the `svgs/` bank and each profile references
+ * it by code in its `sprites` section (`"MOD": "wmo/turbulence/turb-mod.svg"`), which the build
+ * inlines into the dist profile and `SigwxDraw` registers per profile. A chart therefore ships
+ * ONLY the symbols it draws — none are weighed into the lib. The sprite plumbing
+ * (colorize / rasterize / data-URI, `SPRITE_PX`) lives in `@softwarity/draw-adapter`.
+ *
+ * Only the engine-level default ink remains here (it is not phenomenon data — it is the fallback
+ * tint the adapter uses for a symbol/icon feature that carries no `symbolColor`).
  */
-import type { SymbolSprites } from "./adapter.js";
-
-// Standard turbulence symbols: a horizontal line with one peak (MOD) or two peaks (SEV).
-// The stroke is `currentColor` so the adapters can re-tint a sprite per feature
-// (`symbolColor`) — see the adapter's `colorizeSprite`.
-const TURB_MOD = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-<g fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-<path d="M5 20 H13 L16 12 L19 20 H27"/></g></svg>`;
-
-const TURB_SEV = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-<g fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-<path d="M5 22 H13 L16 14 L19 22 H27"/><path d="M11 15 L16 7 L21 15"/></g></svg>`;
-
-// Icing glyphs: two outer arms angling IN to a central box, with feet below — MOD = 1 box
-// (2 feet), SEV = 2 boxes (3 feet), SAME outer width. Distinct sprite ids (`ICE_MOD`/`ICE_SEV`)
-// so they never collide with turbulence's MOD/SEV. `currentColor` → re-tinted per feature.
-// A square-ish U (as wide as tall) + vertical bars on its lower part — bar length = the U's
-// size, each crossing the U's bottom with 2/3 below + 1/3 inside. MOD = 2 bars, SEV = 3.
-const ICE_MOD = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-<g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-<path d="M9 5 V16 Q9 19 11 19 H21 Q23 19 23 16 V5"/><path d="M13.5 14 V28 M18.5 14 V28"/></g></svg>`;
-
-const ICE_SEV = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-<g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-<path d="M9 5 V16 Q9 19 11 19 H21 Q23 19 23 16 V5"/><path d="M12.5 14 V28 M16 14 V28 M19.5 14 V28"/></g></svg>`;
-
-/** CB call-out glyph: the coverage amount over "CB" (e.g. OCNL / CB) — the text the WAFC
- *  chart actually draws. The coverage CODE is the sprite id, so tapping it cycles the
- *  coverage (carousel). Host coverages register their own via this helper. `currentColor`
- *  re-tints per feature. */
-export function coverageGlyph(code: string): string {
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="36" viewBox="0 0 40 36">` +
-    `<g fill="currentColor" font-family="Arial, Helvetica, sans-serif" font-weight="700" text-anchor="middle">` +
-    `<text x="20" y="16" font-size="14">${code}</text><text x="20" y="32" font-size="14">CB</text>` +
-    `</g></svg>`
-  );
-}
-
-// Sprite ids match the symbol `code`s so the decorate draws `sprite = metadata.symbol`:
-// turbulence intensities (MOD/SEV) and CB coverage amounts (OCNL/FRQ), each tap-to-cycle.
-export const DEFAULT_SPRITES: SymbolSprites = {
-  MOD: TURB_MOD,
-  SEV: TURB_SEV,
-  ICE_MOD,
-  ICE_SEV,
-  OCNL: coverageGlyph("OCNL"),
-  FRQ: coverageGlyph("FRQ"),
-};
 
 /** Fallback ink when a symbol feature carries no `symbolColor`. */
 export const DEFAULT_SYMBOL_COLOR = "#9a6700";

@@ -190,7 +190,14 @@ export function frontSymbols(input: DecorationInput, params: Record<string, unkn
     return lineSymbols(type, dense, planar, total, k, px, style);
   }
 
-  const ink = FRONT_INK[type] ?? FRONT_INK.cold;
+  // Ink: the descriptor's `style.color` (or `style.edge.color`) is the SOURCE — `FRONT_INK` is only
+  // the fallback when the profile omits a colour. The single-hue fronts (cold/warm/occluded) honour
+  // it directly, exactly as `lineSymbols` does. Stationary alternates TWO hues (warm red / cold blue)
+  // that a single `style.color` can't express, so it stays on its `FRONT_INK` convention (a dedicated
+  // per-side override would need its own fields — out of scope here).
+  const fb = FRONT_INK[type] ?? FRONT_INK.cold;
+  const stroke = style.edge?.color ?? style.color;
+  const ink = type === "stationary" ? fb : { warm: stroke ?? fb.warm, cold: stroke ?? fb.cold };
   const out: RenderFeature[] = [];
   const w = style.edge?.width ?? 2.5;
   const PIP_GAP = 34; // distance between pips, in SCREEN px (pip spacing below = px*PIP_GAP)

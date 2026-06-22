@@ -27,8 +27,8 @@
           "label": "Température",
           "default": "0",
           "options": [
-            { "value": "0", "label": "0 °C" },
-            { "value": "−10", "label": "−10 °C" }
+            { "value": "0", "label": "0°" },
+            { "value": "−10", "label": "−10°" }
           ]
         },
         {
@@ -73,12 +73,6 @@
           "side": "right",
           "items": [
             {
-              "picker": {
-                "field": "temp",
-                "label": "{value} °C"
-              }
-            },
-            {
               "gauge": {
                 "cursors": [
                   "fl"
@@ -101,7 +95,16 @@
           "background": "transparent"
         }
       },
-      "summary": "{temp}°C {fl|fl}"
+      "summary": "{temp}°C {fl|fl}",
+      "card": {
+        "framed": true,
+        "onLine": true,
+        "dir": "h",
+        "items": [
+          { "picker": { "field": "temp" } },
+          { "text": ": {fl}" }
+        ]
+      }
     },
     {
       "schemaVersion": 1,
@@ -109,7 +112,7 @@
       "label": "Centre de pression",
       "gesture": {
         "primitive": "point",
-        "draw": "drop"
+        "draw": "click"
       },
       "fields": [
         {
@@ -1233,7 +1236,7 @@
       "label": "Volcanic eruption",
       "gesture": {
         "primitive": "point",
-        "draw": "drop"
+        "draw": "click"
       },
       "fields": [
         {
@@ -1273,7 +1276,7 @@
       "icon": "atlas:tc-nh",
       "gesture": {
         "primitive": "point",
-        "draw": "drop"
+        "draw": "click"
       },
       "fields": [
         {
@@ -1313,7 +1316,7 @@
       "label": "Radioactive spot",
       "gesture": {
         "primitive": "point",
-        "draw": "drop"
+        "draw": "click"
       },
       "fields": [
         {
@@ -1352,7 +1355,7 @@
       "icon": "atlas:widespread-fog",
       "gesture": {
         "primitive": "point",
-        "draw": "drop"
+        "draw": "click"
       },
       "fields": [
         {
@@ -1399,23 +1402,13 @@
         }
       ],
       "card": {
-        "framed": "when-named",
-        "origin": "bottom",
-        "deletable": true,
         "items": [
           {
             "picker": {
-              "field": "symbol"
+              "field": "symbol",
+              "open": true
             },
             "size": 20
-          },
-          {
-            "input": {
-              "field": "name"
-            }
-          },
-          {
-            "coord": true
           }
         ]
       },
@@ -1431,7 +1424,7 @@
       "icon": "atlas:thunderstorms",
       "gesture": {
         "primitive": "point",
-        "draw": "drop"
+        "draw": "click"
       },
       "fields": [
         {
@@ -1466,24 +1459,14 @@
         }
       ],
       "card": {
-        "framed": "when-named",
-        "origin": "bottom",
-        "deletable": true,
         "items": [
           {
             "picker": {
               "field": "symbol",
-              "mode": "flower"
+              "mode": "flower",
+              "open": true
             },
             "size": 20
-          },
-          {
-            "input": {
-              "field": "name"
-            }
-          },
-          {
-            "coord": true
           }
         ]
       },
@@ -1499,7 +1482,7 @@
       "icon": "atlas:rain",
       "gesture": {
         "primitive": "point",
-        "draw": "drop"
+        "draw": "click"
       },
       "fields": [
         {
@@ -1542,23 +1525,13 @@
         }
       ],
       "card": {
-        "framed": "when-named",
-        "origin": "bottom",
-        "deletable": true,
         "items": [
           {
             "picker": {
-              "field": "symbol"
+              "field": "symbol",
+              "open": true
             },
             "size": 20
-          },
-          {
-            "input": {
-              "field": "name"
-            }
-          },
-          {
-            "coord": true
           }
         ]
       },
@@ -1662,5 +1635,11 @@
     "frontSurface": "buttons/frontSurface.svg",
     "frontAloft": "buttons/frontAloft.svg",
     "squallLine": "buttons/squallLine.svg"
+  },
+  "sprites": {
+    "MOD": "wmo/turbulence/turb-mod.svg",
+    "SEV": "wmo/turbulence/turb-sev.svg",
+    "ICE_MOD": "wmo/icing/ice-mod.svg",
+    "ICE_SEV": "wmo/icing/ice-sev.svg"
   }
 }

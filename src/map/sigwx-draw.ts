@@ -23,7 +23,6 @@ import {
   DEFAULT_TURBULENCE_SYMBOLS,
   PhenomenonRegistry,
   defFromDescriptor,
-  mergeDescriptor,
   registerExtensions,
   resolveGlyph,
   resolveObjectSpec,
@@ -42,9 +41,7 @@ import {
   makeCb,
   makeTurbulence,
   mergePhenomenonStyle,
-  outerRings,
   pointAtFraction,
-  pointInRing,
   projectToFraction,
   radialSortRing,
   simplify,
@@ -52,6 +49,25 @@ import {
   toLonLat,
   toPlanar,
   validate,
+  // Pure geometry / ring-topology extracted from this controller (testable map-free in core).
+  nearestArea,
+  zoneSpanRatio,
+  segDist,
+  samePoint,
+  openRing,
+  ringMean,
+  flatRings,
+  ringOfFlat,
+  vertices,
+  outline,
+  setVertex,
+  // Pure multi-layer FL band arithmetic (the partition math; resolution stays in the controller).
+  sliceBand,
+  centeredBand,
+  bandAround,
+  adjacentBand,
+  layerAltitude,
+  layerFlKeys,
 } from "../core/index.js";
 import type {
   CbCoverage,
@@ -82,7 +98,6 @@ import type { AnnReq, Pin } from "./placement.js";
 import { DEFAULT_STYLE, mergeStyle } from "./style.js";
 import type { SigwxStyle, SigwxStyleInput } from "./style.js";
 import { decorate } from "./style-features.js";
-import { DEFAULT_SPRITES } from "./symbols.js";
 
 /** A schema field with its `visibleWhen` evaluated for the current metadata. */
 export type ResolvedField = FieldSchema & { visible: boolean };
@@ -189,16 +204,20 @@ export interface SigwxProfile {
    *  `{ "group": "Markers", "items": ["volcano", …] }`). When the list is FLAT
    *  strings, the point markers are auto-grouped (legacy). `toolbar.tools` wins. */
   tools?: ToolSpec[];
-  /** The chart's OBJECTS — the §2b composition rule, ONE entry each: a stock
-   *  descriptor name (`"cb"`), a stock reference + deep-merge PATCH
-   *  (`{ "extends": "cb", "style": { "color": "…" } }` — patch wins; keyed-array
-   *  patches address fields/options/satellites by id), or a FULL inline
-   *  descriptor (host-defined). Compiled by the interpreter at construction and
-   *  registered over the built-ins. Omitted ⇒ the stock registry as-is. */
+  /** The chart's OBJECTS — ONE entry each: a stock descriptor name (`"cb"`) or a
+   *  FULL inline descriptor (host-defined). There is no cross-profile inheritance —
+   *  a derived chart is a duplicated, self-contained profile. Compiled by the
+   *  interpreter at construction and registered over the built-ins. Omitted ⇒ the
+   *  stock registry as-is. */
   objects?: ObjectSpec[];
   /** Inline glyph-atlas additions (merged over the built-ins BEFORE the objects
    *  compile, so an inline descriptor can reference `atlas:` names shipped here). */
   glyphs?: Record<string, string>;
+  /** The recolourable SYMBOL atlas: `code → inline SVG`, registered with the adapter so a
+   *  decorate that draws `sprite = metadata.symbol` (turbulence MOD/SEV, icing ICE_*, CB
+   *  coverage) finds its art. Shipped PER PROFILE (the source carries `svgs/` REFERENCES, the
+   *  build inlines them) so a chart only loads the symbols it actually draws — none in the lib. */
+  sprites?: Record<string, string>;
   /** Chart-level chrome-declutter threshold (the option `callouts` wins). */
   callouts?: { minZoneFraction?: number };
   /** Per-phenomenon catalogues / bounds / styles for this chart type. `phenomena` wins
@@ -363,6 +382,9 @@ export class SigwxDraw {
    *  manual pin if the user drags the box. Null when no auto-freeze is active. */
   private autoPinKey: string | null = null;
   private lastAnnReqs: AnnReq[] = [];
+  /** Self-anchored chart LABELS (tropopause spot+contour, isotherm, front-motion text) snapshotted
+   *  each render as fixed obstacles — auto-placed cartouches route around them (see `labelObstacleRects`). */
+  private lastLabelAnchors: { anchor: { lon: number; lat: number }; content: string; textSize: number }[] = [];
   /** Merged sprite catalogue (defaults + host overrides + turbulence extensions) — the
    *  widget builders resolve their glyph carousel options from it. */
   private readonly spriteCatalog: SymbolSprites = {};
@@ -410,11 +432,7 @@ export class SigwxDraw {
         opts.profile ??
         ((await import("../profiles/wafs.json", { with: { type: "json" } })).default as unknown as SigwxProfile);
       this.applyProfile(profile, opts);
-      // The generic adapter does NOT auto-register sprites — register the SIGWX
-      // defaults (MOD/SEV turbulence glyphs); the host's overrides win. Keep the merged
-      // catalogue: widget builders resolve their glyph carousel options from it.
-      Object.assign(this.spriteCatalog, DEFAULT_SPRITES, opts.symbolSprite ?? {});
-      await this.adapter.registerSymbols(this.spriteCatalog);
+      await this.registerProfileSprites(profile);
       if (opts.turbulenceTypes?.length) {
         this.turbTypes = [...opts.turbulenceTypes];
         await this.applyTurbulenceCatalog();
@@ -544,6 +562,8 @@ export class SigwxDraw {
               }
             }
           }
+          // Quick-pick (the WMO symbol stamp): picking an `open` picker option DESELECTS — pick & done.
+          if (def.closeOnPick?.has(key)) this.select(null);
         }
       });
       this.adapter.setCoordFormat((ll) => `${Math.abs(ll.lat).toFixed(1)}${ll.lat >= 0 ? "N" : "S"} ${Math.abs(ll.lon).toFixed(1)}${ll.lon >= 0 ? "E" : "W"}`);
@@ -1097,11 +1117,15 @@ export class SigwxDraw {
   // otherwise jump under the cursor), hence resortLayers() is called from select()
   // and the add/remove helpers, never from updateListItem().
 
-  /** A layer's sort key: its top FL, else its base FL, else 0 (un-set layers sink). */
-  private layerAltitude(item: Metadata): number {
-    const top = typeof item["topFL"] === "number" ? (item["topFL"] as number) : undefined;
-    const base = typeof item["baseFL"] === "number" ? (item["baseFL"] as number) : undefined;
-    return top ?? base ?? 0;
+  /** Resolve a layer-stack phenomenon's FL partition params — its resolved range + `repeat.max`
+   *  slice count — for the pure band math (`sliceBand`/`centeredBand`/`bandAround`/`adjacentBand`).
+   *  `null` for a non-stack phenomenon or an unusable range. */
+  private layerRange(type: string): { min: number; max: number; n: number } | null {
+    const rep = this.registry.get(type).repeat;
+    if (!rep) return null;
+    const { min, max } = this.flResolved(type);
+    if (min == null || max == null || max <= min) return null;
+    return { min, max, n: Math.max(1, rep.max) };
   }
 
   /** Re-sort a layer-stack feature's list highest-on-top, keeping the selected layer selected. */
@@ -1113,7 +1137,7 @@ export class SigwxDraw {
     const list = (f.properties.metadata[rep.listField] as Metadata[] | undefined) ?? [];
     if (list.length < 2) return;
     const selected = this.selectedSub != null ? list[this.selectedSub] : undefined;
-    const sorted = [...list].sort((a, b) => this.layerAltitude(b) - this.layerAltitude(a));
+    const sorted = [...list].sort((a, b) => layerAltitude(b) - layerAltitude(a));
     if (sorted.every((it, i) => it === list[i])) return; // already ordered — no churn
     f.properties.metadata = { ...f.properties.metadata, [rep.listField]: sorted };
     if (selected) {
@@ -1140,32 +1164,12 @@ export class SigwxDraw {
     }
   }
 
-  /** The bottom/top FL field keys of a stack layer (the `base`/`top` naming convention shared with
-   *  {@link flGaugeRange}): the list item's two FL fields, base = the one matching /base/, top /top/
-   *  (falling back to schema order). `null` when the item has fewer than two FL fields. */
-  private layerFlKeys(lf: ListField): [string, string] | null {
-    const fls = lf.itemSchema.filter((s) => s.type === "fl");
-    if (fls.length < 2) return null;
-    const base = fls.find((s) => /base/i.test(s.key)) ?? fls[0]!;
-    const top = fls.find((s) => /top/i.test(s.key)) ?? fls[1]!;
-    return base.key === top.key ? null : [base.key, top.key];
-  }
-
   /** The FL band a stack layer at `index` should occupy by default in the GAUGES editor: the
-   *  `index`-th of `repeat.max` equal slices of the resolved FL range (5-FL snapped), so the FIRST
-   *  layer takes the bottom 1/max and leaves the rest of the axis free instead of spanning it all.
-   *  `null` unless the phenomenon has a `repeat` (multi-layer) with a usable FL range. */
+   *  `index`-th of `repeat.max` equal slices of the resolved FL range (5-FL snapped) — see the pure
+   *  {@link sliceBand}. `null` unless the phenomenon has a `repeat` with a usable FL range. */
   private layerSlice(type: string, index: number): { base: number; top: number } | null {
-    const rep = this.registry.get(type).repeat;
-    if (!rep) return null;
-    const { min, max } = this.flResolved(type);
-    if (min == null || max == null || max <= min) return null;
-    const n = Math.max(1, rep.max);
-    const h = Math.round((max - min) / n / 5) * 5;
-    if (h <= 0) return null;
-    const k = Math.max(0, Math.min(n - 1, index));
-    const base = min + k * h;
-    return { base, top: k === n - 1 ? max : Math.min(max, base + h) };
+    const r = this.layerRange(type);
+    return r ? sliceBand(r.min, r.max, r.n, index) : null;
   }
 
   /** The FL band a NEW layer should take when added on the `side` clicked (gauges editor): a 1/max
@@ -1174,39 +1178,25 @@ export class SigwxDraw {
    *  range / no FL fields. (Visibility of each side's `+` is gated on there being room — see the
    *  interpreter — so this only runs when the clicked side actually has space.) */
   private adjacentLayerBand(type: string, list: Metadata[], side: "top" | "bottom"): { base: number; top: number } | null {
+    const r = this.layerRange(type);
+    if (!r) return null;
     const def = this.registry.get(type);
-    const rep = def.repeat;
-    if (!rep) return null;
-    const { min, max } = this.flResolved(type);
-    if (min == null || max == null || max <= min) return null;
-    const lf = def.schema.find((s): s is ListField => s.type === "list" && s.key === rep.listField);
-    const keys = lf && this.layerFlKeys(lf);
+    const lf = def.schema.find((s): s is ListField => s.type === "list" && s.key === def.repeat!.listField);
+    const keys = lf && layerFlKeys(lf.itemSchema);
     if (!keys) return null;
     const [bk, tk] = keys;
-    const n = Math.max(1, rep.max);
-    const h = Math.max(5, Math.round((max - min) / n / 5) * 5);
     const numOf = (v: unknown, d: number): number => (typeof v === "number" && isFinite(v) ? v : d);
-    if (!list.length) return { base: min, top: Math.min(max, min + h) };
-    if (side === "top") {
-      const base = Math.min(max - 5, Math.max(...list.map((l) => numOf(l[tk], max))));
-      return { base, top: Math.min(max, base + h) };
-    }
-    const top = Math.max(min + 5, Math.min(...list.map((l) => numOf(l[bk], min))));
-    return { base: Math.max(min, top - h), top };
+    const tops = list.map((l) => numOf(l[tk], r.max));
+    const bases = list.map((l) => numOf(l[bk], r.min));
+    return adjacentBand(r.min, r.max, r.n, tops, bases, side);
   }
 
   /** A single layer's default FL band CENTRED on the resolved range: one 1/max-tall slice around the
    *  mid-altitude, so BOTH the top and bottom `+` have room from the start. `null` for a non-gauges
    *  repeat / no usable range. */
   private centeredLayerSlice(type: string): { base: number; top: number } | null {
-    const rep = this.registry.get(type).repeat;
-    if (!rep) return null;
-    const { min, max } = this.flResolved(type);
-    if (min == null || max == null || max <= min) return null;
-    const n = Math.max(1, rep.max);
-    const h = Math.max(5, Math.round((max - min) / n / 5) * 5);
-    const base = Math.max(min, Math.min(max - h, Math.round(((min + max) / 2 - h / 2) / 5) * 5));
-    return { base, top: base + h };
+    const r = this.layerRange(type);
+    return r ? centeredBand(r.min, r.max, r.n) : null;
   }
 
   /** Lay a freshly-built stack's default layer(s) into their gauges-editor FL bands: a lone layer
@@ -1219,7 +1209,7 @@ export class SigwxDraw {
     if (!rep) return;
     const lf = def.schema.find((s): s is ListField => s.type === "list" && s.key === rep.listField);
     if (!lf) return;
-    const keys = this.layerFlKeys(lf);
+    const keys = layerFlKeys(lf.itemSchema);
     const list = metadata[lf.key];
     if (!keys || !Array.isArray(list) || !list.length) return;
     const place = (it: Metadata, band: { base: number; top: number } | null): void => {
@@ -1254,12 +1244,12 @@ export class SigwxDraw {
     }
     this.applyLayerTypeDefaults(def.type, lf, item);
     const band = bandFor(def.type, list);
-    const flKeys = this.layerFlKeys(lf);
+    const flKeys = layerFlKeys(lf.itemSchema);
     if (band && flKeys) {
       item[flKeys[0]] = band.base;
       item[flKeys[1]] = band.top;
     }
-    const next = [...list, item].sort((a, b) => this.layerAltitude(b) - this.layerAltitude(a));
+    const next = [...list, item].sort((a, b) => layerAltitude(b) - layerAltitude(a));
     f.properties.metadata = { ...f.properties.metadata, [lf.key]: next };
     this.selectedSub = next.indexOf(item);
     this.afterEdit(id);
@@ -1276,24 +1266,10 @@ export class SigwxDraw {
    *  axis span, `addLayerAt:<fl>`). The band is a default-height slice around `fl` (see
    *  {@link bandAround}); re-sorted + selected; no-op past `repeat.max`. */
   addLayerAt(id: string, fl: number): number {
-    return this.insertLayer(id, (type) => this.bandAround(type, fl));
-  }
-
-  /** A default-height (1/`max`) FL band CENTRED on `fl`, 5-FL snapped and clamped to the resolved
-   *  range (shifted wholly inside if `fl` sits near a bound). `null` for a non-multi-layer phenomenon
-   *  / no usable range. */
-  private bandAround(type: string, fl: number): { base: number; top: number } | null {
-    const rep = this.registry.get(type).repeat;
-    if (!rep) return null;
-    const { min, max } = this.flResolved(type);
-    if (min == null || max == null || max <= min) return null;
-    const n = Math.max(1, rep.max);
-    const h = Math.min(max - min, Math.max(5, Math.round((max - min) / n / 5) * 5));
-    const c = Math.round(Math.max(min, Math.min(max, fl)) / 5) * 5;
-    let base = Math.round((c - h / 2) / 5) * 5;
-    if (base < min) base = min;
-    if (base + h > max) base = max - h;
-    return { base, top: base + h };
+    return this.insertLayer(id, (type) => {
+      const r = this.layerRange(type);
+      return r ? bandAround(r.min, r.max, r.n, fl) : null;
+    });
   }
 
   /** Remove a layer from a stack feature, keeping ≥ `repeat.min`. */
@@ -1604,7 +1580,10 @@ export class SigwxDraw {
     // A stroke too short on screen to read as a line (a click, or a tiny drag) collapses to a
     // spot-height POINT, not a contour (tropopause). Measured on the RAW coords BEFORE simplify
     // so a single-point click is caught. The point lands where the gesture began.
-    if (it.pointWhenShort && this.strokeExtentPx(d.coords) < POINT_MAX_PX) {
+    // A `point`-only freehand (a WMO symbol via `draw:"click"`) ALWAYS commits a point where you click,
+    // any drag length; a `lasso-or-spot` line phenomenon only collapses to a point when the stroke is
+    // too short to read as a line.
+    if (it.primitive === "point" || (it.pointWhenShort && this.strokeExtentPx(d.coords) < POINT_MAX_PX)) {
       const at = d.coords[0];
       if (at) {
         // A spot is laid by a CLICK, which the browser follows with a trailing `click` event —
@@ -1785,7 +1764,10 @@ export class SigwxDraw {
     // The call-out being ACTIVELY dragged owns the cursor: it's placed first so the OTHERS (even
     // pinned) yield/flee it — anti-collision independent of creation/drag order.
     const activeFid = this.dragTarget?.kind === "callout" ? this.dragTarget.featureId : undefined;
-    const placed = placeAnnotations(annReqs, this.adapter, this.pins, this.markerObstacleRects(), activeFid);
+    // Self-anchored labels (tropopause spot+contour, isotherm, front-motion) are fixed no-go zones
+    // for the cartouches too — snapshot them from this render's direct text-boxes BEFORE placing.
+    this.cacheLabelObstacles(buckets["text-boxes"]!);
+    const placed = placeAnnotations(annReqs, this.adapter, this.pins, [...this.markerObstacleRects(), ...this.labelObstacleRects()], activeFid);
     buckets["leaders"]!.push(...placed.leaders);
     // placed.symbols are pushed AFTER the widgets are known — a replaced call-out's glyph
     // lives in its card (the severity carousel), not on the canvas.
@@ -1917,6 +1899,9 @@ export class SigwxDraw {
     for (const box of buckets["text-boxes"]!) {
       const props = box.properties ?? {};
       const fid = props["featureId"];
+      // A widget (e.g. the isotherm's selected inline temp-picker card) already REPLACES this label —
+      // drop the decorated box so it doesn't render under the card.
+      if (typeof fid === "string" && replaced.has(fid)) continue;
       if (typeof fid === "string" && fid !== this.selectedId && !replaced.has(fid) && box.geometry.type === "Point" && props["rotation"] === undefined) {
         const sprite = this.calloutSprite(box as RenderFeature, placed.symbols);
         if (sprite) { widgets.push(sprite); replaced.add(fid); continue; }
@@ -2486,6 +2471,37 @@ export class SigwxDraw {
     return out;
   }
 
+  /** Snapshot this render's self-anchored label boxes (Point, un-rotated, feature-owned: tropopause
+   *  spot+contour, isotherm, front-motion text) as the obstacle set {@link labelObstacleRects}
+   *  reprojects. Rotated labels (jet break-point text) are skipped — they ride their line, not a fixed
+   *  box. Called BEFORE the placement pass, so auto-cartouches route around these labels. */
+  private cacheLabelObstacles(textBoxes: Feature[]): void {
+    this.lastLabelAnchors = [];
+    for (const box of textBoxes) {
+      const p = box.properties ?? {};
+      if (typeof p["featureId"] !== "string" || box.geometry.type !== "Point" || p["rotation"] !== undefined) continue;
+      this.lastLabelAnchors.push({
+        anchor: { lon: box.geometry.coordinates[0]!, lat: box.geometry.coordinates[1]! },
+        content: String(p["text"] ?? p["content"] ?? ""),
+        textSize: Number(p["textSize"]) || 13,
+      });
+    }
+  }
+
+  /** The cached self-anchored labels as fixed obstacle rects (screen px) — like point markers, a
+   *  cartouche must never cover them. The label box IS the object (it never auto-places), so it's a
+   *  no-go zone, not a placed cartouche. Reprojected fresh so it follows pan/zoom. */
+  private labelObstacleRects(): Rect[] {
+    const out: Rect[] = [];
+    for (const l of this.lastLabelAnchors) {
+      const px = this.adapter.project(l.anchor);
+      if (!px) continue;
+      const { w, h } = estimateBox(l.content, l.textSize);
+      out.push({ x: px[0] - w / 2, y: px[1] - h / 2, w, h });
+    }
+    return out;
+  }
+
   /** A cartouche just DROPPED (drag-release) YIELDS to fixed elements: if its dropped box covers a
    *  point marker OR another pinned cartouche, bump its pin to the nearest free slot so the fixed one
    *  stays visible. (Auto-placed cartouches already flee from this — now pinned — one next pass; only
@@ -2500,7 +2516,7 @@ export class SigwxDraw {
     if (!pin || !anchorPx) return;
     const { w, h } = estimateBox(req.content, req.textSize);
     const boxPx: [number, number] = [anchorPx[0] + pin.dx, anchorPx[1] + pin.dy];
-    const fixed = this.markerObstacleRects();
+    const fixed = [...this.markerObstacleRects(), ...this.labelObstacleRects()];
     // Every OTHER pinned cartouche is fixed too (placed by hand before this drop) ⇒ don't cover it.
     for (const [k, p] of this.pins) {
       if (k === pk) continue;
@@ -2582,8 +2598,8 @@ export class SigwxDraw {
       const cf = this.doc.get(featureId);
       if (cf?.geometry.type === "Point") {
         // A SPOT's box IS the spot (it sits centered on the point; the vertex handle is gone):
-        // dragging the box MOVES the point itself. A plain tap still just selects (onClick).
-        if (featureId !== this.selectedId) this.select(featureId);
+        // dragging the box MOVES the point itself — WITHOUT selecting (only a plain tap selects, via
+        // onClick). So grabbing a marker to reposition it never pops its picker/card open.
         this.dragTarget = { kind: "translate", featureId, lastPx: this.adapter.project(ev.lngLat) ?? [0, 0] };
       } else {
         this.dragTarget = { kind: "callout", featureId, labelId: String(hit.props["labelId"] ?? "l"), grab: this.calloutGrab(featureId, ev.lngLat) };
@@ -3219,8 +3235,18 @@ export class SigwxDraw {
     this.calloutFraction = opts.callouts?.minZoneFraction ?? profile.callouts?.minZoneFraction ?? 0.15;
     if (profile.glyphs) registerExtensions({ glyphs: profile.glyphs });
     for (const spec of profile.objects ?? []) {
-      this.registry.register(defFromDescriptor(resolveObjectSpec(spec, mergeDescriptor)));
+      this.registry.register(defFromDescriptor(resolveObjectSpec(spec)));
     }
+  }
+
+  /** (Re)assign + register THIS profile's symbol atlas (turbulence MOD/SEV, icing ICE_*, CB
+   *  coverage); the host's `symbolSprite` overrides win. The generic adapter does NOT auto-register
+   *  sprites, so this runs on the initial `ready()` AND on every `setProfile`. The catalog is
+   *  ADDITIVE across switches (a previously-loaded profile's sprites stay), so a chart's codes are
+   *  always resolvable. A chart without these phenomena ships no sprites at all (none in the lib). */
+  private async registerProfileSprites(profile: SigwxProfile): Promise<void> {
+    Object.assign(this.spriteCatalog, profile.sprites ?? {}, this.opts.symbolSprite ?? {});
+    if (Object.keys(this.spriteCatalog).length) await this.adapter.registerSymbols(this.spriteCatalog);
   }
 
   /**
@@ -3272,6 +3298,7 @@ export class SigwxDraw {
 
   setProfile(profile: SigwxProfile): void {
     this.applyProfile(profile, this.opts);
+    void this.registerProfileSprites(profile); // register the new chart's symbols (additive)
     // Drop orphans (a type the new profile removed) — else the renderer can't decorate them.
     const orphanIds = [...this.doc.entries()]
       .filter(([, f]) => !this.registry.has(f.properties.phenomenon))
@@ -3429,133 +3456,4 @@ function toAnnReq(featureId: string, feat: RenderFeature): AnnReq {
     ...(p.textBackground !== undefined ? { textBackground: p.textBackground } : {}),
     textBorder: p.textBorder ?? "#111",
   };
-}
-
-/** A ring's UNIQUE vertices (drops the closing duplicate). */
-function openRing(ring: Position[]): Position[] {
-  return ring.length > 1 && samePoint(ring[0]!, ring[ring.length - 1]!) ? ring.slice(0, -1) : ring;
-}
-
-/** Mean of a ring's unique vertices — the default arrow-tip target of an area. */
-function ringMean(ring: Position[]): [number, number] {
-  const u = openRing(ring);
-  let x = 0;
-  let y = 0;
-  for (const p of u) {
-    x += p[0]!;
-    y += p[1]!;
-  }
-  return u.length ? [x / u.length, y / u.length] : [0, 0];
-}
-
-/** On-screen significance of an area vs the view: its LARGEST ring's bbox diagonal over the
- *  view span (both in degrees — a pure ratio, so no pixel API needed). Drives the call-out
- *  declutter threshold. */
-function zoneSpanRatio(geom: Geometry, viewSpan: number): number {
-  const ring = coordsOf(geom); // MultiPolygon → the largest ring (the box-anchor area)
-  if (ring.length < 3 || !viewSpan) return 1;
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const p of ring) {
-    if (p[0]! < minX) minX = p[0]!;
-    if (p[0]! > maxX) maxX = p[0]!;
-    if (p[1]! < minY) minY = p[1]!;
-    if (p[1]! > maxY) maxY = p[1]!;
-  }
-  return Math.hypot(maxX - minX, maxY - minY) / viewSpan;
-}
-
-/** Which AREA of a (Multi)Polygon a lon/lat refers to: the ring it falls INSIDE, else the
- *  one with the nearest boundary — resolves an edge/fill/dblclick hit to an area index. */
-function nearestArea(geom: Geometry, at: Position): number {
-  const rings = outerRings(geom);
-  let best = 0;
-  let bestD = Infinity;
-  rings.forEach((ring, a) => {
-    if (ring.length < 2) return;
-    if (ring.length >= 3 && pointInRing([at[0]!, at[1]!], ring)) {
-      if (bestD > 0) {
-        bestD = 0;
-        best = a;
-      }
-      return;
-    }
-    const k = frameK(ring);
-    const planar = ring.map((c) => toPlanar(c, k));
-    const cur = toPlanar([at[0]!, at[1]!], k);
-    for (let i = 0; i < planar.length - 1; i++) {
-      const d = segDist(cur, planar[i]!, planar[i + 1]!);
-      if (d < bestD) {
-        bestD = d;
-        best = a;
-      }
-    }
-  });
-  return best;
-}
-
-/** Every editable RING of a polygonal geometry — outer + HOLES (eraser clear zones),
- *  area by area. The FLAT vertex indexing (vertices()/setVertex/removeVertex/`v${i}`
- *  roles) walks them ALL, so hole vertices edit exactly like outer ones. */
-function flatRings(geom: Geometry): { area: number; poly: Position[][]; ringIndex: number; ring: Position[] }[] {
-  if (geom.type === "Polygon") return geom.coordinates.map((ring, ringIndex) => ({ area: 0, poly: geom.coordinates, ringIndex, ring }));
-  if (geom.type === "MultiPolygon") return geom.coordinates.flatMap((poly, area) => poly.map((ring, ringIndex) => ({ area, poly, ringIndex, ring })));
-  return [];
-}
-
-
-/** Resolve a FLAT vertex index to its ring — outer or hole — plus the local index. */
-function ringOfFlat(geom: Geometry, i: number): { area: number; poly: Position[][]; ringIndex: number; ring: Position[]; local: number } | null {
-  let off = i;
-  for (const fr of flatRings(geom)) {
-    const n = openRing(fr.ring).length;
-    if (off < n) return { ...fr, local: off };
-    off -= n;
-  }
-  return null;
-}
-
-/** Editable vertices, FLAT across areas AND their holes (`v${i}` roles, setVertex/
- *  removeVertex share the same flat indexing). */
-function vertices(geom: Geometry): Position[] {
-  if (geom.type === "LineString") return geom.coordinates;
-  if (geom.type === "Point") return [geom.coordinates];
-  if (geom.type === "Polygon" || geom.type === "MultiPolygon") return flatRings(geom).flatMap((fr) => openRing(fr.ring));
-  return [];
-}
-
-function outline(geom: Geometry): Geometry {
-  if (geom.type === "Polygon" || geom.type === "MultiPolygon") return { type: "MultiLineString", coordinates: flatRings(geom).map((fr) => fr.ring) };
-  return geom;
-}
-
-function setVertex(geom: Geometry, i: number, p: Position): void {
-  if (geom.type === "Point") {
-    geom.coordinates = p;
-  } else if (geom.type === "LineString") {
-    if (geom.coordinates[i]) geom.coordinates[i] = p;
-  } else if (geom.type === "Polygon" || geom.type === "MultiPolygon") {
-    const hit = ringOfFlat(geom, i); // flat index → ring (outer OR hole) + local
-    if (!hit || !hit.ring[hit.local]) return;
-    hit.ring[hit.local] = p;
-    if (hit.local === 0 && hit.ring.length > 1) hit.ring[hit.ring.length - 1] = p;
-  }
-}
-
-function samePoint(a: Position, b: Position): boolean {
-  return a[0] === b[0] && a[1] === b[1];
-}
-
-/** Squared distance from point `p` to segment a–b (planar). */
-function segDist(p: Pt, a: Pt, b: Pt): number {
-  const abx = b[0] - a[0];
-  const aby = b[1] - a[1];
-  const l2 = abx * abx + aby * aby || 1;
-  let t = ((p[0] - a[0]) * abx + (p[1] - a[1]) * aby) / l2;
-  t = Math.max(0, Math.min(1, t));
-  const qx = a[0] + abx * t;
-  const qy = a[1] + aby * t;
-  return (qx - p[0]) ** 2 + (qy - p[1]) ** 2;
 }

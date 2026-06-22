@@ -102,6 +102,16 @@ function stroke(sigwx: SigwxDraw, a: MockAdapter, type: string, pts: [number, nu
   return lastId(sigwx);
 }
 
+/** Click-to-place a point marker: the button ARMS draw mode, then a map click drops it (default at
+ *  the view centre, lat 46 ⇒ NH) and selects it. Returns the new feature's id. */
+function dropMarker(sigwx: SigwxDraw, a: MockAdapter, type: string, lon = 2, lat = 46): string {
+  sigwx.draw(type);
+  a.ev("down", lon, lat);
+  a.ev("up", lon, lat);
+  a.ev("click", lon, lat); // the browser's trailing click after a click-placement (swallowed by didDrag)
+  return lastId(sigwx);
+}
+
 /** Walk a widget tree and collect every picker control node (a layer-stack panel nests its
  *  pickers inside `stack.items[].body`, so a flat `child.items` scan no longer finds them). */
 type PickerNode = { kind?: string; control?: string; name?: string; value?: string; color?: string; mode?: string; options?: { value: string; label?: string; svg?: string; title?: string }[] };
@@ -159,6 +169,122 @@ describe("nudgeClear — a dropped cartouche yields to a fixed obstacle", () => 
     expect(overlap(clear, 40, 40, obstacle)).toBe(0);       // …and is nudged fully clear
     expect(clear).not.toEqual([10, 10]);                    // it actually moved
     expect(nudgeClear([300, 300], 40, 40, [obstacle])).toEqual([300, 300]); // far away ⇒ untouched
+  });
+});
+
+describe("self-anchored labels are fixed obstacles (tropopause / isotherm), like point markers", () => {
+  const cbAt = (cx: number, cy: number, r = 2.2) => ({
+    type: "Feature" as const,
+    properties: { id: "cb1", phenomenon: "cb", metadata: { coverage: "OCNL", baseFL: 250, topFL: 400 } },
+    geometry: { type: "Polygon" as const, coordinates: [[[cx - r, cy - r], [cx + r, cy - r], [cx + r, cy + r], [cx - r, cy + r], [cx - r, cy - r]]] },
+  });
+  it("an auto-placed cartouche routes around a tropopause label dropped on its spot", async () => {
+    const a = new MockAdapter();
+    const s = new SigwxDraw({ adapter: a });
+    await s.ready();
+    const placedAt = (s as unknown as { placedAt: Map<string, [number, number]> }).placedAt;
+    // 1) CB alone — note where its auto call-out lands.
+    s.load({ type: "FeatureCollection", features: [cbAt(2, 46)] });
+    const p1 = placedAt.get("cb1");
+    expect(p1).toBeTruthy();
+    // 2) Drop a tropopause SPOT exactly on that spot ⇒ it's now a fixed no-go zone.
+    s.load({
+      type: "FeatureCollection",
+      features: [
+        cbAt(2, 46),
+        { type: "Feature", properties: { id: "tropo1", phenomenon: "tropopause", metadata: { fl: 380, kind: "fl" } }, geometry: { type: "Point", coordinates: p1! } },
+      ],
+    });
+    const p2 = placedAt.get("cb1");
+    expect(p2).not.toEqual(p1); // the cartouche moved to clear the tropopause label
+  });
+});
+
+describe("isotherm — the temperature is an inline tap-to-cycle picker IN the label (no external control)", () => {
+  it("a selected line isotherm carries the temp picker IN its card; the decorated box is suppressed; cycling edits temp", async () => {
+    const a = new MockAdapter();
+    const profile = (await import("../src/profiles/temsi-euroc.json")).default as unknown as SigwxProfile;
+    const s = new SigwxDraw({ adapter: a, profile });
+    await s.ready();
+    s.load({ type: "FeatureCollection", features: [{ type: "Feature", properties: { id: "iso", phenomenon: "zeroIsotherm", metadata: { temp: "−20", fl: 100 } }, geometry: { type: "LineString", coordinates: [[0, 46], [5, 46]] } }] });
+    s.select("iso");
+    // The label became a CARD (widget) anchored on the line, carrying the temp as an INLINE picker —
+    // not the old external satellite picker.
+    const card = a.widget("iso");
+    expect(card).toBeDefined();
+    const temp = collectPickers(card).find((p) => p.name === "temp")!;
+    expect(temp.control).toBe("picker");
+    expect(temp.value).toBe("−20");
+    expect(temp.options?.map((o) => o.value)).toEqual(["0", "−10", "−20"]);
+    // The decorated label box is suppressed under the card — no text-box for the feature.
+    const tb = (a.overlays.get("text-boxes")?.features ?? []).filter((f) => (f.properties as Record<string, unknown>)?.["featureId"] === "iso");
+    expect(tb).toHaveLength(0);
+    // Tapping the picker (cycle) edits the temperature.
+    a.editWidget("iso", "0", "temp");
+    expect(lastMeta(s)["temp"]).toBe("0");
+  });
+});
+
+describe("WMO symbol markers place as a BARE icon (no frame / name / coord), edited by their picker", () => {
+  it("the button ARMS a draw mode; a click drops the bare icon AT the click, selected with ONLY its picker", async () => {
+    const a = new MockAdapter();
+    const profile = (await import("../src/profiles/temsi-euroc.json")).default as unknown as SigwxProfile;
+    const s = new SigwxDraw({ adapter: a, profile });
+    await s.ready();
+    s.draw("wmo-precipitation"); // arms the tool — nothing placed yet (NOT dropped at the centre)
+    expect(s.save().features).toHaveLength(0);
+    a.ev("down", 3, 47);
+    a.ev("up", 3, 47); // click where you want it ⇒ placed THERE, selected (edit mode)
+    const id = lastId(s);
+    const feat = s.save().features.find((f) => (f.properties as Record<string, unknown>)?.["id"] === id)!;
+    expect(feat.geometry.type).toBe("Point");
+    expect((feat.geometry as { coordinates: number[] }).coordinates).toEqual([3, 47]); // at the click, NOT the view centre
+    const w = a.widget(id)!;
+    expect(w).toBeDefined();
+    expect(w.bg).toBeUndefined(); // no frame
+    expect(w.border).toBeUndefined();
+    expect(w.deletable).toBeFalsy(); // no ✕ — the Delete key removes it (no name input to swallow it)
+    // the card carries ONLY the symbol picker — no name <input>, no coord readout
+    const kinds = w.child.items.map((it) => ("control" in it ? (it as { control?: string }).control : (it as { kind?: string }).kind));
+    expect(kinds).toEqual(["picker"]);
+    expect(collectPickers(w)[0]?.name).toBe("symbol");
+    // `open` ⇒ the picker requests auto-open (`autofocus`): the adapter opens its menu on each select.
+    expect((w.child.items[0] as { autofocus?: boolean }).autofocus).toBe(true);
+  });
+
+  it("picking a symbol DESELECTS the marker (quick-pick: pick & done)", async () => {
+    const a = new MockAdapter();
+    const profile = (await import("../src/profiles/temsi-euroc.json")).default as unknown as SigwxProfile;
+    const s = new SigwxDraw({ adapter: a, profile });
+    await s.ready();
+    const selId = () => (s as unknown as { selectedId: string | null }).selectedId;
+    s.draw("wmo-precipitation");
+    a.ev("down", 3, 47); a.ev("up", 3, 47); a.ev("click", 3, 47); // placed + selected
+    const id = lastId(s);
+    expect(selId()).toBe(id);
+    a.editWidget(id, "snow", "symbol"); // pick a symbol in the (flower) picker
+    expect(lastMeta(s)["symbol"]).toBe("snow"); // applied…
+    expect(selId()).toBeNull(); // …and deselected
+  });
+
+  it("DRAGGING a marker MOVES it without selecting; only a TAP selects (a drag never pops the picker)", async () => {
+    const a = new MockAdapter();
+    const profile = (await import("../src/profiles/temsi-euroc.json")).default as unknown as SigwxProfile;
+    const s = new SigwxDraw({ adapter: a, profile });
+    await s.ready();
+    const selId = () => (s as unknown as { selectedId: string | null }).selectedId;
+    s.load({ type: "FeatureCollection", features: [{ type: "Feature", properties: { id: "m", phenomenon: "wmo-precipitation", metadata: { symbol: "rain" } }, geometry: { type: "Point", coordinates: [2, 46] } }] });
+    s.select(null);
+    // A marker's UNSELECTED hit surfaces as a text-boxes Point (interpret.ts) ⇒ onDown arms a translate.
+    const hit = { overlay: "text-boxes", props: { featureId: "m" } } as PointerEvent["hit"];
+    a.ev("down", 2, 46, hit);
+    a.ev("move", 4, 44);
+    a.ev("up", 4, 44);
+    expect(selId()).toBeNull(); // dragged ⇒ NOT selected
+    const coords = (s.save().features.find((f) => (f.properties as Record<string, unknown>)?.["id"] === "m")!.geometry as { coordinates: number[] }).coordinates;
+    expect(coords).not.toEqual([2, 46]); // …but it MOVED
+    a.ev("down", 4, 44, hit); a.ev("up", 4, 44); a.ev("click", 4, 44, hit); // a plain TAP selects
+    expect(selId()).toBe("m");
   });
 });
 
@@ -623,16 +749,26 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
   let adapter: MockAdapter;
   let sigwx: SigwxDraw;
 
+  // The recolourable severity sprites now ship in the PROFILE (the build inlines its `svgs/`
+  // refs into the dist profile); a unit test runs on the SOURCE profiles (refs, not inlined),
+  // so it injects the resolved glyphs through the host `symbolSprite` API — the supported path.
+  const SYMBOL_SPRITES = {
+    MOD: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M5 20 H13 L16 12 L19 20 H27" fill="none" stroke="currentColor"/></svg>',
+    SEV: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M5 22 H13 L16 14 L19 22 H27" fill="none" stroke="currentColor"/></svg>',
+    ICE_MOD: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M9 5 V16 Q9 19 11 19 H21 Q23 19 23 16 V5" fill="none" stroke="currentColor"/></svg>',
+    ICE_SEV: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M9 5 V16 Q9 19 11 19 H21 Q23 19 23 16 V5" fill="none" stroke="currentColor"/></svg>',
+  };
+
   beforeEach(async () => {
     adapter = new MockAdapter();
-    sigwx = new SigwxDraw({ adapter });
+    sigwx = new SigwxDraw({ adapter, symbolSprite: SYMBOL_SPRITES });
     await sigwx.ready();
   });
 
   const item = (w: MarkerWidget, kind: string) => w.child.items.find((i) => "kind" in i && i.kind === kind) as { kind: string; editable?: boolean } | undefined;
 
   it("dropping a volcano emits a SELECTED, editable widget — and NO overlay features", () => {
-    const id = sigwx.draw("volcano"); // drop mode → created + selected, returns the id
+    const id = dropMarker(sigwx, adapter, "volcano"); // drop mode → created + selected, returns the id
     const w = adapter.widget(id);
     expect(w).toBeDefined();
     expect(item(w!, "glyph")).toBeDefined();
@@ -642,7 +778,7 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
   });
 
   it("typing the name (onWidgetEdit) writes metadata.name and frames the card with a coord", () => {
-    const id = sigwx.draw("volcano");
+    const id = dropMarker(sigwx, adapter, "volcano");
     adapter.editWidget(id, "Etna");
     expect(lastMeta(sigwx)["name"]).toBe("Etna");
     const w = adapter.widget(id)!;
@@ -651,7 +787,7 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
   });
 
   it("clicking a widget card selects its feature (the `widget` hit carries the id)", () => {
-    const id = sigwx.draw("volcano");
+    const id = dropMarker(sigwx, adapter, "volcano");
     sigwx.select(null);
     expect(item(adapter.widget(id)!, "text")).toBeUndefined(); // deselected + unnamed ⇒ no text
     adapter.clickWidget(id);
@@ -659,7 +795,7 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
   });
 
   it("an UNSELECTED, UNNAMED volcano is glyph-only (no frame, no coord)", () => {
-    const id = sigwx.draw("volcano");
+    const id = dropMarker(sigwx, adapter, "volcano");
     sigwx.select(null);
     const w = adapter.widget(id)!;
     expect(w.border).toBeUndefined();
@@ -668,7 +804,7 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
   });
 
   it("a tropical cyclone is BARE: name 'NN', NO frame, NO coord; NH glyph not mirrored at +lat", () => {
-    const id = sigwx.draw("tropicalCyclone"); // dropped at centre (lat 46 → NH)
+    const id = dropMarker(sigwx, adapter, "tropicalCyclone"); // dropped at centre (lat 46 → NH)
     expect(lastMeta(sigwx)["name"]).toBe("NN");
     const w = adapter.widget(id)!;
     expect(w.border).toBeUndefined();             // no frame
@@ -678,7 +814,7 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
   });
 
   it("a SELECTED marker carries a delete button; onWidgetDelete removes the feature", () => {
-    const id = sigwx.draw("volcano");
+    const id = dropMarker(sigwx, adapter, "volcano");
     expect(adapter.widget(id)!.deletable).toBe(true);   // selected ⇒ ✕ (the input swallows Delete)
     sigwx.select(null);
     expect(adapter.widget(id)!.deletable).toBe(false);  // unselected ⇒ no ✕
@@ -707,7 +843,7 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
     sigwx.select(null);
     expect(adapter.widget(id)?.static).toBe(true); // unselected ⇒ the editable card is replaced by a static sprite
     expect(adapter.widget(`${id}#draw`)).toBeUndefined(); // …and the draw badge exists ONLY while selected
-    const vid = sigwx.draw("volcano"); // markers no longer carry edge buttons
+    const vid = dropMarker(sigwx, adapter, "volcano"); // markers no longer carry edge buttons
     expect(adapter.widget(vid)!.buttons).toBeUndefined();
   });
 
@@ -1097,8 +1233,8 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
 });
 
 describe("profile v2 — the single ingestion unit (objects / glyphs / grouped tools)", () => {
-  /** A self-contained LL-ish profile: a patched stock CB, a fully INLINE marker
-   *  descriptor whose glyph ships in the profile's own `glyphs` section, and a
+  /** A self-contained LL-ish profile: a stock CB referenced by NAME, a fully INLINE
+   *  marker descriptor whose glyph ships in the profile's own `glyphs` section, and a
    *  declarative grouped toolbar. Pure JSON end to end. */
   const FOG_SVG = '<svg viewBox="0 0 24 24"><g stroke="currentColor" fill="none"><path d="M3 9 H21 M3 13 H17 M3 17 H21"/></g></svg>';
   const profile = {
@@ -1106,7 +1242,7 @@ describe("profile v2 — the single ingestion unit (objects / glyphs / grouped t
     vertical: { min: 0, max: 150, unit: "fl" as const },
     glyphs: { fog: FOG_SVG },
     objects: [
-      { extends: "cb", style: { edge: { color: "#0a0a0a" } } },
+      "cb",
       {
         schemaVersion: 1 as const,
         type: "fog",
@@ -1143,11 +1279,11 @@ describe("profile v2 — the single ingestion unit (objects / glyphs / grouped t
     const glyph = w.child.items[0] as { kind: string; svg?: string };
     expect(glyph.kind).toBe("glyph");
     expect(glyph.svg).toContain("M3 9 H21");
-    // The PATCHED stock CB wears the new edge ink (deep-merge, patch wins).
+    // The stock CB (referenced by NAME) wears its shipped edge ink, as-is.
     s.select(null);
     const cbId = stroke(s, a, "cb", POLY);
     const edge = (a.overlays.get("edge")?.features ?? []).find((e) => e.properties?.["featureId"] === cbId);
-    expect(edge?.properties?.["stroke"]).toBe("#0a0a0a");
+    expect(edge?.properties?.["stroke"]).toBe("#d1242f");
     // `save()` tags the profile id.
     expect((s.save() as { profile?: string }).profile).toBe("test-ll");
   });
@@ -1159,8 +1295,8 @@ describe("profile v2 — the single ingestion unit (objects / glyphs / grouped t
     const id = stroke(s, a, "cb", POLY);
     // CB's flBeyond is ["xxx","xxx"]: one off-chart notch (±5) past each vertical bound.
     // (Base first: the stock CB keeps its HL métier defaults — base 250 — and the
-    // base ≤ top pairing would pin a dragged top onto it. A REAL LL profile patches
-    // the defaults via `extends`; this test only checks the vertical clamp chain.)
+    // base ≤ top pairing would pin a dragged top onto it. A REAL LL profile ships its
+    // own inline CB with LL defaults; this test only checks the vertical clamp chain.)
     a.dragGauge(id, "baseFL", -99999); // way below the LL floor → the XXX notch under it
     expect(lastMeta(s)["baseFL"]).toBe(-5);
     a.dragGauge(id, "topFL", 99999); // way past the ceiling → the XXX notch above it

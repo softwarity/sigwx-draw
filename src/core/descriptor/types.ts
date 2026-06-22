@@ -122,9 +122,11 @@ export type DescriptorField =
 
 export interface GestureSpec {
   primitive: "point" | "polyline" | "polygon";
-  /** `lasso` = freehand stroke; `drop` = default geometry at the centre; `click-path` =
-   *  click-laid vertices; `lasso-or-spot` = freehand, a too-short stroke commits a POINT. */
-  draw?: "lasso" | "drop" | "click-path" | "lasso-or-spot";
+  /** `lasso` = freehand stroke; `drop` = default geometry at the centre (placed at once); `click` =
+   *  the tool ARMS, then a single map click drops a POINT where you click (a WMO symbol — point on
+   *  the map, not at the centre); `click-path` = click-laid vertices; `lasso-or-spot` = freehand, a
+   *  too-short stroke commits a POINT. */
+  draw?: "lasso" | "drop" | "click" | "click-path" | "lasso-or-spot";
   smooth?: boolean;
   /** The path has a direction (arrow at the downstream end). */
   directional?: boolean;
@@ -220,6 +222,12 @@ export interface PickerItemSpec {
    *  `flower` (6–10), `grid` (>10) — each degrades to the next past its threshold.
    *  Omitted ⇒ adapter default (carousel with auto-degradation). */
   mode?: "carousel" | "flower" | "grid";
+  /** Quick-pick. `open: true` makes a "stamp" picker (the WMO symbol):
+   *  (1) OPEN its menu (flower/grid) as soon as the card appears — emitted as the widget node's
+   *      `autofocus` (the adapter opens a picker on autofocus, as it focuses an input);
+   *  (2) DESELECT the feature once an option is picked — pick the symbol and you're done
+   *      (`PhenomenonDef.closeOnPick`, handled by the controller's onWidgetEdit). */
+  open?: boolean;
 }
 /** @deprecated renamed to {@link PickerItemSpec} (the `carousel` control is now `picker`). */
 export type CarouselItemSpec = PickerItemSpec;
@@ -273,6 +281,14 @@ export interface CardSpec {
   framed?: boolean | "when-named";
   /** Card pinning on the anchor (markers: volcano pins its base dot). */
   origin?: "center" | "bottom";
+  /** Card item layout: `"v"` column (default) | `"h"` row (e.g. the isotherm's inline `temp` picker
+   *  alongside the FL, on one line). */
+  dir?: "v" | "h";
+  /** This card is the inline editor for a LINE-or-spot phenomenon's render LABEL: WHILE SELECTED it
+   *  overlays the label on the LINE too (anchored at the label position, riding `labelT`), not just
+   *  the Point spot. Default `false` ⇒ the card is the spot's own representation (Point only — the
+   *  tropopause `kind` shape). The decorated label box is suppressed under the card when shown. */
+  onLine?: boolean;
   /** Inner padding preset of a FRAMED panel (adapter presets: small=[3,5] /
    *  medium=[6,8] / large=[10,13] px). Default `"small"`. */
   pad?: "small" | "medium" | "large";
@@ -309,6 +325,9 @@ export interface RepeatSpec {
   min: number;
   /** Maximum layer count (the `+` hides at this ceiling). */
   max: number;
+  /** Per-layer accent palette (band/handle/panel-frame colours), cycled by layer index.
+   *  Omitted ⇒ the lib's default palette. */
+  layerColors?: string[];
 }
 
 /** A zone-level composite (the non-convective cloud's icing / turbulence). Its data lives at
@@ -375,12 +394,10 @@ export interface PhenomenonDescriptor {
 
 // ── Profile composition (§2b) ─────────────────────────────────────────────────
 
-/** One entry of a profile's `objects`: a stock type name, a stock reference +
- *  deep-merge patch, or a full inline descriptor. */
-export type ObjectSpec =
-  | string
-  | ({ extends: string } & Record<string, unknown>)
-  | PhenomenonDescriptor;
+/** One entry of a profile's `objects`: a stock type name or a full inline
+ *  descriptor. There is no cross-profile inheritance — a derived chart is a
+ *  duplicated, self-contained profile file. */
+export type ObjectSpec = string | PhenomenonDescriptor;
 
 /** A toolbar entry: a phenomenon type, or a named GROUP. A group's `items` may themselves
  *  be groups → NESTED submenus (toolbar → submenu → sub-submenu, any depth). */

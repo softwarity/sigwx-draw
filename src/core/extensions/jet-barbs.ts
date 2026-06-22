@@ -59,6 +59,8 @@ export function jetBarbs(input: DecorationInput, params: Record<string, unknown>
   const listField = typeof params["listField"] === "string" ? params["listField"] : "points";
   const floor = num(params["floor"], 80); // jets below the depiction floor are not drawn
   const depthAt = num(params["depthAt"], 120); // vertical extent shows from here (fig 9)
+  const changeBarStep = num(params["changeBarStep"], 20); // KT speed step that draws a `||` (WAFC fig 11)
+  const extentSeed = num(params["extentSeed"], 40); // FL half-window seeded around the wind point until set
   // Chart FL clamp for the extent seeds (profile-resolved; WAFS fallback map-free).
   const flMin = num(input.flightLevel?.min, 250);
   const flMax = num(input.flightLevel?.max, 600);
@@ -155,7 +157,7 @@ export function jetBarbs(input: DecorationInput, params: Record<string, unknown>
     const pv = i > 0 ? pts[i - 1]! : null;
     const nx = i < pts.length - 1 ? pts[i + 1]! : null;
     if (!pv || !nx) return false; // need both neighbours; ends/last → feathers
-    if (Math.abs(p.speed - pv.speed) !== 20) return false; // exactly ±20 KT
+    if (Math.abs(p.speed - pv.speed) !== changeBarStep) return false; // exactly ±changeBarStep KT
     const noReversal = pv.speed > p.speed ? nx.speed <= p.speed : nx.speed >= p.speed;
     return noReversal && num(p.fl) === num(pv.fl);
   };
@@ -209,9 +211,9 @@ export function jetBarbs(input: DecorationInput, params: Record<string, unknown>
     const anchor = add(st.p, scale(perpLeft(flow), -sideSign * featherLen * 0.6));
     const lines = [fl(p.fl)];
     if (withExtent && p.speed >= depthAt) {
-      // Show the vertical extent ≥ depthAt; default to fl ± 40 until the gauge sets it.
-      const top = p.top != null ? p.top : Math.min(flMax, num(p.fl) + 40);
-      const base = p.base != null ? p.base : Math.max(flMin, num(p.fl) - 40);
+      // Show the vertical extent ≥ depthAt; default to fl ± extentSeed until the gauge sets it.
+      const top = p.top != null ? p.top : Math.min(flMax, num(p.fl) + extentSeed);
+      const base = p.base != null ? p.base : Math.max(flMin, num(p.fl) - extentSeed);
       lines.push(`${flNum(Math.min(top, base))}/${flNum(Math.max(top, base))}`); // lower/upper
     }
     let ang = (Math.atan2(-flow[1], flow[0]) * 180) / Math.PI;

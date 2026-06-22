@@ -690,7 +690,7 @@
       "label": "Volcanic eruption",
       "gesture": {
         "primitive": "point",
-        "draw": "drop"
+        "draw": "click"
       },
       "fields": [
         {
@@ -730,7 +730,7 @@
       "icon": "atlas:tc-nh",
       "gesture": {
         "primitive": "point",
-        "draw": "drop"
+        "draw": "click"
       },
       "fields": [
         {
@@ -770,7 +770,7 @@
       "label": "Radioactive spot",
       "gesture": {
         "primitive": "point",
-        "draw": "drop"
+        "draw": "click"
       },
       "fields": [
         {
@@ -829,5 +829,13 @@
     "tropopause": "buttons/tropopause.svg",
     "turbulence": "buttons/turbulence.svg",
     "volcano": "buttons/volcano.svg"
+  },
+  "sprites": {
+    "MOD": "wmo/turbulence/turb-mod.svg",
+    "SEV": "wmo/turbulence/turb-sev.svg",
+    "ICE_MOD": "wmo/icing/ice-mod.svg",
+    "ICE_SEV": "wmo/icing/ice-sev.svg",
+    "OCNL": "wmo/cb/cb-ocnl.svg",
+    "FRQ": "wmo/cb/cb-frq.svg"
   }
 }

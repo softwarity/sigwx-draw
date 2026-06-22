@@ -53,6 +53,7 @@ export {
 } from "./phenomenon.js";
 
 export * from "./decorate/index.js";
+export * from "./fl/layers.js";
 export * from "./descriptor/index.js";
 
 export { BUILTIN_PHENOMENA, defaultRegistry, jetStream, cb, icing, turbulence, tropopause, volcano, tropicalCyclone, radioactive } from "./registry.js";

@@ -2,9 +2,10 @@
  * Stock-descriptor barrel. Everything here is DERIVED from the profile JSONs (the single
  * source of truth — see `stock.ts`); the named `*_DESCRIPTOR` exports are kept only as
  * API-stable aliases that POINT AT the JSON objects (no second copy). A profile references
- * these by name in its `objects` (`"cb"`, `"frontCold"`), patches them (`{ "extends": "cb",
- * … }`), or ships its own inline. Custom rendering that can't be expressed in JSON is a
- * NAMED extension (`jet-barbs`, `front-symbols`) — never data in TypeScript.
+ * these by name in its `objects` (`"cb"`, `"frontCold"`) or ships its own inline descriptor —
+ * there is no cross-profile inheritance (a derived chart is a duplicated, self-contained file).
+ * Custom rendering that can't be expressed in JSON is a NAMED extension (`jet-barbs`,
+ * `front-symbols`) — never data in TypeScript.
  */
 import type { PhenomenonDescriptor } from "../descriptor/types.js";
 import { BUILTIN_DESCRIPTORS } from "./stock.js";
@@ -29,17 +30,12 @@ export const FRONT_DESCRIPTORS: PhenomenonDescriptor[] = [
   FRONT_COLD_DESCRIPTOR, FRONT_WARM_DESCRIPTOR, FRONT_OCCLUDED_DESCRIPTOR, FRONT_STATIONARY_DESCRIPTOR,
 ];
 
-/** Resolve one profile `objects` entry to a full descriptor (stock / patch / inline). */
-export function resolveObjectSpec(
-  spec: string | ({ extends: string } & Record<string, unknown>) | PhenomenonDescriptor,
-  merge: (base: PhenomenonDescriptor, patch: Record<string, unknown>) => PhenomenonDescriptor,
-): PhenomenonDescriptor {
-  const stock = (name: string): PhenomenonDescriptor => {
-    const d = BUILTIN_DESCRIPTORS[name];
-    if (!d) throw new Error(`Unknown stock descriptor "${name}". Available: ${Object.keys(BUILTIN_DESCRIPTORS).sort().join(", ")}`);
-    return d;
-  };
-  if (typeof spec === "string") return stock(spec);
-  if ("extends" in spec && typeof spec.extends === "string") return merge(stock(spec.extends), spec);
-  return spec as PhenomenonDescriptor;
+/** Resolve one profile `objects` entry to a full descriptor: a stock type NAME → the
+ *  shipped descriptor, else a full inline descriptor (used as-is). No `extends`/patch —
+ *  profiles are self-contained, inheritance is file duplication. */
+export function resolveObjectSpec(spec: string | PhenomenonDescriptor): PhenomenonDescriptor {
+  if (typeof spec !== "string") return spec;
+  const d = BUILTIN_DESCRIPTORS[spec];
+  if (!d) throw new Error(`Unknown stock descriptor "${spec}". Available: ${Object.keys(BUILTIN_DESCRIPTORS).sort().join(", ")}`);
+  return d;
 }

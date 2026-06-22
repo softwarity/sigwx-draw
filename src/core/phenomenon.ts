@@ -282,6 +282,9 @@ export interface PhenomenonDef {
    *  ids suffixed `featureId#part`; every widget event strips the suffix back to the
    *  feature). Return `null` to emit nothing for the current state (e.g. unselected). */
   widget?: (input: WidgetInput) => MarkerWidget | MarkerWidget[] | null;
+  /** Picker fields flagged `open` (quick-pick): editing one DESELECTS the feature — the WMO symbol
+   *  stamp (pick the symbol and you're done). The controller deselects in `onWidgetEdit`. */
+  closeOnPick?: ReadonlySet<string>;
   /** Default per-phenomenon style (host can override via the aggregate style). */
   style: PhenomenonStyle;
   /** Optional one-line human summary (label/tooltip). */

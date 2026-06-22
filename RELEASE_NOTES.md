@@ -2,6 +2,66 @@
 
 ## NEXT RELEASE
 
+- **WMO symbol markers place as a BARE icon, by POINTING.** (precipitation / visibility / others.)
+  Two changes: (1) the symbol drops as a plain on-map icon — **no frame, no name, no coordinates** —
+  selected in edit mode, its symbol changed by the picker (tap to cycle), and deleted with the
+  **Delete** key like every other object (no ✕ — no name `<input>` left to swallow the keystroke);
+  (2) **point markers are placed by a click, not dropped at the view centre** — a new gesture
+  `draw:"click"` ARMS the tool, then the next map click drops the point WHERE you click. This applies
+  to ALL point markers (WMO + volcano / TC / radioactive / pressure-centre, across all profiles), so
+  the meteorologist points where the marker goes instead of dropping at centre and dragging.
+  Two more interaction fixes for the "stamp" feel: **dragging a marker MOVES it without selecting**
+  (only a plain tap selects — so grabbing one to reposition never pops its picker), and **picking a
+  symbol DESELECTS** the marker (`picker.open` ⇒ quick-pick: pick & done). The same `open` flag also
+  asks the adapter to OPEN the picker menu on each selection (the flower) — that part lands once the
+  adapter handles `autofocus` on a picker (spec sent to François); the rest is live now.
+
+- **Isotherm temperature is now an INLINE tap-to-cycle picker, in the label.** The 0 °C-isotherm's
+  temperature was edited from a control OUTSIDE the label (a satellite picker); it now lives IN the
+  label box like every other picker (WMO symbols, the tropopause `kind`): selected, tap the `−20°` to
+  cycle `0° → −10° → −20°`. The external temp picker is gone; the FL still rides its gauge below.
+  Works whether the isotherm is drawn as a contour (line) or a spot. Fully data-driven — a new
+  `card` (`onLine` + `dir:"h"`) on the descriptor + a small framework extension so an inline-picker
+  card can overlay a LINE label (ride `labelT`, suppress the decorated box under it), not just a
+  point spot. No adapter change (the adapter already renders picker-cards / horizontal rows / sprites).
+
+- **Self-anchored labels are no-go zones for the cartouches.** A tropopause label — spot (boxed FL)
+  OR contour (FL on the line) — and the other self-anchored labels (0 °C isotherm, a front's
+  movement-arrow text) are now FIXED obstacles, exactly like the point markers (volcano / TC): an
+  auto-placed call-out routes around them instead of covering them. The label box IS the object, so
+  it never moves; the cartouches yield to it. (Computed from the label anchor + its box size BEFORE
+  the placement pass — independent of the read-only sprite rendering, which is unchanged. Rotated jet
+  break-point labels are excluded — they ride their line, not a fixed box.)
+
+- **Architecture audit — layering tightened (adapter / core / profile).** Five decoupling fixes,
+  no behaviour change on screen:
+  - **Cross-profile `extends` inheritance removed.** A profile's `objects` is now a stock type
+    NAME or a full inline descriptor — there is no `extends` + deep-merge patch (the `mergeDescriptor`
+    machinery is gone). A derived chart is a duplicated, self-contained profile file (the intended
+    model: an integrator ships only the one profile it needs). No profile used `extends`.
+  - **Symbol sprites externalized out of the lib.** The recolourable severity glyphs (turbulence
+    MOD/SEV, icing ICE_*, CB-coverage OCNL/FRQ) were hard-coded as inline SVG in `src/map/symbols.ts`
+    and loaded UNCONDITIONALLY into every chart. They now live in the `svgs/` bank and are referenced
+    per profile in a new **`sprites`** section (`"MOD": "wmo/turbulence/turb-mod.svg"`), which the
+    build inlines into the dist profile (with `xmlns`) and `SigwxDraw` registers per profile. A chart
+    ships ONLY the symbols it draws; the lib bakes none. ⚠️ The public `DEFAULT_SPRITES` export is
+    removed (sprites come from the profile, or the host's `symbolSprite` override).
+  - **Front colours are profile-driven.** The pip + base-line ink of the single-hue fronts
+    (cold/warm/occluded) now reads `style.color` / `style.edge.color` (the descriptor already
+    declared it; the TS `FRONT_INK` table silently overrode it). `FRONT_INK` is now only the
+    fallback. Stationary keeps its two-hue (red/blue) convention. `front-symbols`-only.
+  - **Multi-layer FL-editor palette is overridable per profile** via `repeat.layerColors`
+    (the per-layer band/handle/frame accents); the lib palette is the fallback.
+  - **Jet-stream business constants are parameters**: the change-bar step (`changeBarStep`, the
+    WAFC fig-11 ±20 KT rule) and the FL extent seed (`extentSeed`, ±40) are now `jet-barbs`
+    decoration params (defaults unchanged), no longer magic numbers.
+  - **~150 lines of pure logic moved OUT of the controller** into `core/` (iso-behaviour, no API
+    change): the ring/vertex **flat outer+hole indexing** (the eraser/holes invariant) →
+    `core/decorate/rings.ts`; `segDist`/`zoneSpanRatio`/`nearestArea` → `core/decorate/geo.ts`; the
+    **multi-layer FL band math** (slice/centre/around/adjacent partitioning) → `core/fl/layers.ts`.
+    These were untestable in isolation before; they now have dedicated unit tests. `sigwx-draw.ts`
+    drops 3561 → 3414 lines. New `TESTING.md` gives a one-screen map of the whole suite (now 164 tests).
+
 - **Fix: point-marker glyphs no longer vanish when unselected** (volcano / tropical cyclone /
   radioactive / pressure centre — every profile). When unselected, a marker renders as a read-only
   sprite, rasterized by loading its glyph SVG as a `data:image/svg+xml` image — which is parsed as
