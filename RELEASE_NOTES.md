@@ -13,8 +13,11 @@
   Two more interaction fixes for the "stamp" feel: **dragging a marker MOVES it without selecting**
   (only a plain tap selects — so grabbing one to reposition never pops its picker), and **picking a
   symbol DESELECTS** the marker (`picker.open` ⇒ quick-pick: pick & done). The same `open` flag also
-  asks the adapter to OPEN the picker menu on each selection (the flower) — that part lands once the
-  adapter handles `autofocus` on a picker (spec sent to François); the rest is live now.
+  OPENS the picker menu (the flower) on each selection (adapter handles `autofocus` on a picker). In
+  the flower, the CENTRE (trigger) stays in the symbol's NATURAL ink — a true, legible preview of the
+  placed symbol — while only the PETALS take the control accent (`menuColor`); selection is signalled
+  by the open flower, not by tinting the centre. Full flow, all live: arm → click to place → flower
+  opens → pick → symbol set + deselect.
 
 - **Isotherm temperature is now an INLINE tap-to-cycle picker, in the label.** The 0 °C-isotherm's
   temperature was edited from a control OUTSIDE the label (a satellite picker); it now lives IN the

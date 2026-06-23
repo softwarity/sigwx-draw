@@ -1026,7 +1026,11 @@ function compileMarkerWidget(d: PhenomenonDescriptor): (input: WidgetInput) => M
           // `size` also constrains the picker TRIGGER glyph while selected (the adapter maps it to
           // the control font-size, which sizes the glyph) — so selected matches the collapsed marker.
           // `open` ⇒ `autofocus`: the adapter opens the picker menu as soon as the card appears.
-          items.push({ kind: "text", value, control: "picker", ...(pick.mode ? { mode: pick.mode } : {}), name: pick.field, options, ...(it.size ? { size: it.size } : {}), ...(pick.open ? { autofocus: true } : {}), ...(chrome?.handle?.fill ? { color: chrome.handle.fill } : {}) });
+          // A quick-pick (`open`) picker: the trigger glyph stays in the NATURAL ink (a true preview of
+          // the placed symbol) while the MENU (petals/grid) takes the control accent via `menuColor` —
+          // the open flower already signals selection, so the centre isn't tinted. A normal picker
+          // tints the trigger itself with `color`.
+          items.push({ kind: "text", value, control: "picker", ...(pick.mode ? { mode: pick.mode } : {}), name: pick.field, options, ...(it.size ? { size: it.size } : {}), ...(pick.open ? { autofocus: true, ...(chrome?.handle?.fill ? { menuColor: chrome.handle.fill } : {}) } : (chrome?.handle?.fill ? { color: chrome.handle.fill } : {})) });
         } else {
           // Collapsed (not selected): the chosen symbol's glyph; or, for a TEXT picker, its
           // (template-evaluated) label — so a shaped FL box (tropopause) stays visible unselected.

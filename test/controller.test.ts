@@ -249,7 +249,12 @@ describe("WMO symbol markers place as a BARE icon (no frame / name / coord), edi
     expect(kinds).toEqual(["picker"]);
     expect(collectPickers(w)[0]?.name).toBe("symbol");
     // `open` ⇒ the picker requests auto-open (`autofocus`): the adapter opens its menu on each select.
-    expect((w.child.items[0] as { autofocus?: boolean }).autofocus).toBe(true);
+    const picker = w.child.items[0] as { autofocus?: boolean; color?: string; menuColor?: string };
+    expect(picker.autofocus).toBe(true);
+    // The trigger glyph keeps the NATURAL ink (no `color` — a true preview); only the MENU (petals)
+    // takes the control accent, via `menuColor`.
+    expect(picker.color).toBeUndefined();
+    expect(picker.menuColor).toBe(DEFAULT_STYLE.control.handle.fill);
   });
 
   it("picking a symbol DESELECTS the marker (quick-pick: pick & done)", async () => {
