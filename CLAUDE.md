@@ -41,7 +41,7 @@ cd demo && npx tsc -p tsconfig.app.json --noEmit   # Angular demo type-check
 
 ⚠️⚠️ **GOLDEN RULE: JSON is the source, TS holds ONLY extensions.** No business data (descriptor,
 glyph, catalog) lives in TS — it lives in `.json` profiles. TS may only contain: the engine, the
-**named render decorators** (`extensions/jet-barbs.ts`, `extensions/front-symbols.ts` — drawing the
+**named render decorators** (`src/core/extensions/jet-barbs.ts`, `…/front-symbols.ts` — drawing the
 JSON can't carry), and **dataless** runtime builders (they READ the base from JSON). Before creating
 a phenomenon `.ts`: **STOP**, it's a JSON profile.
 
@@ -118,8 +118,9 @@ a phenomenon `.ts`: **STOP**, it's a JSON profile.
   (MultiPolygon = multi-area); hole vertices editable (flat indexing `flatRings`/`ringOfFlat`);
   scallop/tick orientation by normalized CCW winding (concavity-proof); flip-scallop REMOVED;
   `clampInArea` = arrowhead mid-corridor outside holes.
-- **Declutter**: render gate (zone-extent / view-span ratio, threshold 0.15, hysteresis ±10%,
-  selection disables); `declutter:"late"` (jet arrowhead survives half the threshold).
+- **Declutter**: render gate (zone-extent / view-span ratio, threshold 0.05 — LOW so a framed sector
+  keeps its drawn areas, hysteresis ±10%, selection disables); `declutter:"late"` (jet arrowhead
+  survives half the threshold).
 - **Multi-area**: `+` (h-edges) → `appendTo` consumed at commit; `selectedAreas` (shift-click); box
   never follows a partial drag; per-area deletion. **N arrows = N areas** (a surplus arrow = unexpected
   MultiPolygon). Anti-micro-polygon guard: lasso < 24 screen px = cancelled.
@@ -133,7 +134,8 @@ Declarative framework + JSON profile = **SHIPPED** (steps 1-5 done): `defFromDes
 `new SigwxDraw({profile})` and the lib does the rest). Absolute rule: **names, never code, in JSON.**
 
 **Next**: TEMSI objects — always JSON, a `.ts` extension ONLY if a render can't be expressed in JSON.
-Multi-layer specs = OpenProject WP #171-173.
+Multi-layer cloud editor (multi-band FL gauge) = SHIPPED (OpenProject WP #171-173). Known gap: on-map
+render of "above surface" fronts (`frontXAloft` — buttons OK, render KO).
 
 ## Domain knowledge (hard-won, NOT in code; ICAO Annex 3 Model SN, confirmed by met agent)
 
@@ -150,13 +152,18 @@ Multi-layer specs = OpenProject WP #171-173.
   render (`liveOptions` in `interpret.ts`), value coerced if invalid; controller **resets** the
   dependent when `type` changes (`onWidgetEdit`). Adapter sees only resolved options.
   `EnumField.optionsBy` is in the compiled schema.
-- **Multi-layer (todo)**: param `layers=N` → a `list` field of layers + editor = ADAPTER "accordion"
-  control. Nesting already supported (`WidgetBox ∈ WidgetNode`); a fully-expanded stack is lib-only,
-  only per-line selection + `−` need the adapter. List routing already there (jet `points.N.field`).
+- **Multi-layer (SHIPPED)**: param `layers=N` → a `list` field of layers, edited as the active layer's
+  flat card + a side multi-band FL gauge (one band per layer); `repeat`/`listField` route
+  add/remove/select. Nesting via `WidgetBox ∈ WidgetNode`; list routing `points.N.field`. (Built on the
+  existing list + gauge, NOT a new adapter "accordion".)
 
 ## References
 
-- `../WIDGET-GAUGE-DIAL-SPEC.md`, `../ZOOM-VISIBILITY-SPEC.md` — adapter specs.
-- `sigwx-refs/` — WAFC reference PDFs (full guide §4 = phenomena roadmap; read via `pdftotext`).
-- Pending glyphs: `glyph-volcano.svg` / `glyph-radioactive.svg` placeholders (TC validated = "6+9
-  overlaid"); definitive eraser icon TBD (the `−` is provisional).
+- **Adapter specs are EPHEMERAL**: I write `../<TOPIC>-SPEC.md`, `pbcopy` + print it; François
+  implements then DELETES it. So NEVER link a spec file here (the link rots) — track pending adapter
+  work as PROSE. Pending now: (1) blur/dim AROUND a chart-area frame (`highlightArea` +
+  `blurOutside`/`dimOutside`); (2) sticky `viewArea` — re-frame the area on fullscreen / container
+  resize instead of zooming to fill.
+- WAFC reference PDFs (the full guide §4 = phenomena roadmap) — read via `pdftotext`; under
+  `~/Workspaces/Documents/Weather/sigwx/`.
+- Eraser icon still provisional (the `−`); definitive TBD.

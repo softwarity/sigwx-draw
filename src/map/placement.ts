@@ -145,15 +145,52 @@ function lightningPath(a: [number, number], b: [number, number], proj: Projector
   return out;
 }
 
+/** Inflate a rect by `p` px on every side — the anti-collision breathing-room (a small badge then
+ *  keeps a margin from any card instead of touching it). `p = 0` ⇒ unchanged. */
+function inflate(r: Rect, p: number): Rect {
+  return p ? { x: r.x - p, y: r.y - p, w: r.w + 2 * p, h: r.h + 2 * p } : r;
+}
+/** Clamp a box CENTRE so its `w`×`h` rect stays fully inside `frame` (centre it when it's larger). */
+function clampBoxInside(c: [number, number], w: number, h: number, frame: Rect): [number, number] {
+  const loX = frame.x + w / 2, hiX = frame.x + frame.w - w / 2;
+  const loY = frame.y + h / 2, hiY = frame.y + frame.h - h / 2;
+  return [loX > hiX ? frame.x + frame.w / 2 : Math.max(loX, Math.min(hiX, c[0])),
+          loY > hiY ? frame.y + frame.h / 2 : Math.max(loY, Math.min(hiY, c[1]))];
+}
+/** Clamp a POINT inside `frame` — keeps a leader tip from leaving the chart area. */
+function clampPtInside(p: [number, number], frame: Rect): [number, number] {
+  return [Math.max(frame.x, Math.min(frame.x + frame.w, p[0])), Math.max(frame.y, Math.min(frame.y + frame.h, p[1]))];
+}
+/** Half-size (px) of the keep-clear guard around a protected leader tip (no OTHER box may cover it). */
+const TIP_GUARD = 11;
+
 /** `obstacles` = FIXED rects (screen px) that auto-placed call-outs must AVOID but which are never
  *  themselves placed/moved — e.g. point markers (volcano/TC/radioactive) that own their spot.
  *  `activeFid` = the call-out being ACTIVELY dragged: it holds its pin (follows the cursor) and is
  *  placed FIRST, so every OTHER call-out — even a previously-pinned one — yields/flees it. */
-export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<string, Pin>, obstacles: Rect[] = [], activeFid?: string): Placed {
+export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<string, Pin>, obstacles: Rect[] = [], activeFid?: string, frame?: Rect, pad = 0): Placed {
   const boxes: RenderFeature[] = [];
   const leaders: RenderFeature[] = [];
   const symbols: RenderFeature[] = [];
-  const placedRects: Rect[] = [...obstacles]; // seed with the fixed obstacles so boxes route around them
+  // Fixed obstacles are seeded INFLATED so boxes keep a `pad` margin off them (small badges included).
+  const placedRects: Rect[] = obstacles.map((o) => inflate(o, pad));
+
+  // Project + (frame-)clamp every leader tip ONCE: reused to (a) PROTECT each tip — a padded guard rect
+  // every OTHER feature's box must clear — and (b) draw the leader to the (clamped) tip.
+  const tipPx = new Map<string, [number, number][]>();
+  const guards: { r: Rect; fid: string }[] = [];
+  for (const req of reqs) {
+    const arrows = req.arrowAnchors?.length ? req.arrowAnchors : [req.arrowAnchor ?? req.anchor];
+    const pts: [number, number][] = [];
+    for (const a of arrows) {
+      let px = proj.project(a);
+      if (!px) continue;
+      if (frame) px = clampPtInside(px, frame);
+      pts.push(px);
+      guards.push({ r: inflate({ x: px[0] - TIP_GUARD, y: px[1] - TIP_GUARD, w: 2 * TIP_GUARD, h: 2 * TIP_GUARD }, pad), fid: req.featureId });
+    }
+    tipPx.set(key(req), pts);
+  }
 
   // PRIORITY order so lower-priority boxes yield: the actively-dragged call-out first (it owns the
   // cursor), then the other pinned ones, then the auto-placed. A pin is otherwise just a PREFERENCE.
@@ -163,48 +200,52 @@ export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<stri
   for (const req of ordered) {
     const anchorPx = proj.project(req.anchor);
     if (!anchorPx) continue;
-    // Box places from `anchor` (centroid, stable); the leader(s)/arrow(s) aim at the arrow
-    // anchors — ONE per area for a multi-area phenomenon (CB MultiPolygon), all from this box.
-    const arrows = req.arrowAnchors?.length ? req.arrowAnchors : [req.arrowAnchor ?? req.anchor];
+    // Box places from `anchor` (centroid, stable); the leader(s)/arrow(s) aim at the precomputed
+    // (frame-clamped) tips — ONE per area for a multi-area phenomenon (CB MultiPolygon).
     const { w, h } = estimateBox(req.content, req.textSize);
     const k = key(req);
+    const myTips = tipPx.get(k) ?? [];
     const pin = pins.get(k);
     const isActive = activeFid != null && req.featureId === activeFid;
-    // A pinned box keeps its spot ONLY if free (or if it's the actively-dragged one); else it YIELDS
-    // (searches a new slot like an auto box). This is what lets a dragged card push pinned cards away.
-    const pinFree = pin != null && placedRects.every((r) => overlapArea({ x: anchorPx[0] + pin.dx - w / 2, y: anchorPx[1] + pin.dy - h / 2, w, h }, r) === 0);
+    // What THIS box must clear: every placed rect + every OTHER feature's protected tip guard (its OWN
+    // tips are exempt — a card may sit over its own arrow tip). Candidates are clamped INSIDE the frame.
+    const avoid = guards.length ? [...placedRects, ...guards.filter((g) => g.fid !== req.featureId).map((g) => g.r)] : placedRects;
+    const clampC = (c: [number, number]): [number, number] => (frame ? clampBoxInside(c, w, h, frame) : c);
+    const ovAt = (c: [number, number]): number => { const r: Rect = { x: c[0] - w / 2, y: c[1] - h / 2, w, h }; return avoid.reduce((s, o) => s + overlapArea(r, o), 0); };
+
+    // A pinned box keeps its spot ONLY if (frame-clamped and) free — or if it's the actively-dragged
+    // one; else it YIELDS (searches a new slot). This lets a dragged card push pinned cards away.
+    const pinC = pin ? clampC([anchorPx[0] + pin.dx, anchorPx[1] + pin.dy]) : null;
+    const pinFree = pinC != null && ovAt(pinC) === 0;
 
     let cx = 0;
     let cy = 0;
-    if (pin && (isActive || pinFree)) {
-      cx = anchorPx[0] + pin.dx;
-      cy = anchorPx[1] + pin.dy;
+    if (pinC && (isActive || pinFree)) {
+      [cx, cy] = pinC;
     } else {
-      // Push the box out beside the anchor (visible leader), escalating the gap until a slot is FREE
-      // of every already-placed box AND obstacle. If too crowded for any free slot, fall back to the
-      // LEAST-overlapping candidate so boxes spread out instead of stacking on each other / on a marker.
+      // Push the box out beside the anchor (visible leader), escalating the gap until a slot is FREE of
+      // every obstacle. Each candidate is clamped INSIDE the frame first. If none is free, fall back to
+      // the LEAST-overlapping (still in-frame) candidate so boxes spread out instead of stacking.
       let best: [number, number] | null = null;
-      let least: [number, number] = [anchorPx[0] + GAPS[0]! + w / 2, anchorPx[1]];
+      let least: [number, number] = clampC([anchorPx[0] + GAPS[0]! + w / 2, anchorPx[1]]);
       let leastOv = Infinity;
       outer: for (const gap of GAPS) {
         for (const [ux, uy] of DIRS) {
           const halfAlong = Math.abs(ux) * (w / 2) + Math.abs(uy) * (h / 2);
           const d = (req.avoidRadius ?? 0) + gap + halfAlong;
-          const c: [number, number] = [anchorPx[0] + ux * d, anchorPx[1] + uy * d];
-          const rect: Rect = { x: c[0] - w / 2, y: c[1] - h / 2, w, h };
-          const ov = placedRects.reduce((s, r) => s + overlapArea(rect, r), 0);
+          const c = clampC([anchorPx[0] + ux * d, anchorPx[1] + uy * d]);
+          const ov = ovAt(c);
           if (ov === 0) { best = c; break outer; }
           if (ov < leastOv) { leastOv = ov; least = c; }
         }
       }
       [cx, cy] = best ?? least;
-      // A pinned card that had to YIELD updates its pin to the new spot so it PERSISTS (no snap-back
-      // when the active card moves away) ⇒ the result is independent of creation/drag order.
+      // A pinned card that had to YIELD updates its pin so it PERSISTS (order-independent result).
       if (pin && !isActive) pins.set(k, { dx: cx - anchorPx[0], dy: cy - anchorPx[1] });
     }
 
     const rect: Rect = { x: cx - w / 2, y: cy - h / 2, w, h };
-    placedRects.push(rect);
+    placedRects.push(inflate(rect, pad)); // padded so later boxes keep their distance
     const centerLL = proj.unproject([cx, cy]);
     if (!centerLL) continue;
 
@@ -254,16 +295,17 @@ export function placeAnnotations(reqs: AnnReq[], proj: Projector, pins: Map<stri
     // The call-out's occupied zone = the box PLUS the glyph band above it (only when the glyph
     // sits ABOVE). Hide a leader + arrow whose arrow anchor falls under that zone.
     const occupied: Rect = topGlyph ? { x: rect.x, y: rect.y - 22, w: rect.w, h: rect.h + 22 } : rect;
-    for (const arrowLL of arrows) {
-      const arrowPx = proj.project(arrowLL) ?? anchorPx;
+    for (const arrowPx of myTips) {
+      const arrowLL = proj.unproject(arrowPx);
+      if (!arrowLL) continue;
       const leaderLen = Math.hypot(arrowPx[0] - calloutPx[0], arrowPx[1] - calloutPx[1]) || 1;
       const ux = (arrowPx[0] - calloutPx[0]) / leaderLen;
       const uy = (arrowPx[1] - calloutPx[1]) / leaderLen;
       // Base gap (px), plus the glyph's vertical extent when the leader heads UP toward it
       // (the symbol sits above the box, so only an upward leader runs through it).
-      const pad = topGlyph ? 8 + 18 * Math.max(0, -uy) : 6;
-      if (req.leader && !contains(occupied, arrowPx[0], arrowPx[1]) && leaderLen >= pad + LEADER_STUB) {
-        const startPx: [number, number] = [calloutPx[0] + ux * pad, calloutPx[1] + uy * pad];
+      const leadPad = topGlyph ? 8 + 18 * Math.max(0, -uy) : 6;
+      if (req.leader && !contains(occupied, arrowPx[0], arrowPx[1]) && leaderLen >= leadPad + LEADER_STUB) {
+        const startPx: [number, number] = [calloutPx[0] + ux * leadPad, calloutPx[1] + uy * leadPad];
         const startLL = proj.unproject(startPx) ?? centerLL;
         leaders.push({
           type: "Feature",

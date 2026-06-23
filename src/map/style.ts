@@ -5,7 +5,15 @@
  * {@link import('../core/phenomenon.js').PhenomenonDef} and are overridden per
  * type via the `phenomena` option (`{ jetStream: { style } }`).
  */
+import type { HighlightStyle } from "@softwarity/draw-adapter";
 import type { LineStyle, TooltipStyle } from "../core/index.js";
+
+/** The fixed chart-area "cartouche": the BOLD perimeter frame + the minimum MARGIN (px) kept between
+ *  the area boundary and the viewport edge when it's framed (so the limit never sits against the screen). */
+export interface AreaStyle {
+  frame: HighlightStyle;
+  padding: number;
+}
 
 /** A point handle — fill + stroke (the stroke doubles as a halo for map legibility). */
 export interface HandleStyle {
@@ -38,6 +46,8 @@ export interface SigwxStyle {
   };
   /** Floating hover tooltip. */
   tooltip: TooltipStyle;
+  /** The fixed chart-area frame + framing margin (`setArea`). */
+  area: AreaStyle;
 }
 
 export interface SigwxStyleInput {
@@ -49,6 +59,7 @@ export interface SigwxStyleInput {
     text?: Partial<ControlTextStyle>;
   };
   tooltip?: Partial<TooltipStyle>;
+  area?: { frame?: Partial<HighlightStyle>; padding?: number };
 }
 
 export const DEFAULT_STYLE: SigwxStyle = {
@@ -68,6 +79,11 @@ export const DEFAULT_STYLE: SigwxStyle = {
     borderRadius: "4px",
     maxWidth: "260px",
   },
+  // The chart-area cartouche: a bold dark perimeter, a 40 px framing margin, and a soft veil that
+  // DIMS everything OUTSIDE the area (spotlight on the chart). `dimOutside` is a cheap GL complement
+  // fill (follows pan/zoom for free) — preferred over the heavier `blurOutside`. Tune colour/opacity
+  // (or swap for a dark veil) here, or per host via `style.area.frame`.
+  area: { frame: { color: "#1f2328", width: 3, dimOutside: "rgba(255,255,255,0.5)" }, padding: 40 },
 };
 
 export function mergeStyle(base: SigwxStyle, input?: SigwxStyleInput): SigwxStyle {
@@ -82,5 +98,6 @@ export function mergeStyle(base: SigwxStyle, input?: SigwxStyleInput): SigwxStyl
       text: { ...base.control.text, ...input.control?.text },
     },
     tooltip: { ...base.tooltip, ...input.tooltip },
+    area: { frame: { ...base.area.frame, ...input.area?.frame }, padding: input.area?.padding ?? base.area.padding },
   };
 }

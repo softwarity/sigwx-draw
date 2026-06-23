@@ -48,6 +48,9 @@ export interface RenderProps {
   /** Declutter staging: `"late"` chrome (a jet's arrowhead — it carries the DIRECTION)
    *  survives down to HALF the hide threshold, outliving the barbs/labels. */
   declutter?: "late";
+  /** A `decoration` feature flagged as an anti-collision OBSTACLE (the jet's barbs + arrowhead) so
+   *  auto-placed call-outs route around it (a gabarit estimate — its projected bounding box). */
+  obstacle?: boolean;
   // edge / decoration (line)
   stroke?: string;
   strokeWidth?: number;

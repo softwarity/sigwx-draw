@@ -93,15 +93,17 @@ export function jetBarbs(input: DecorationInput, params: Record<string, unknown>
   // Smoothed jet axis (bold).
   out.push(lineFeature(dense, { layer: "edge", stroke: style.arrow?.color ?? style.color, strokeWidth: style.arrow?.width ?? 3 }));
 
-  // Arrow at the downstream end (start when reversed).
-  const arrowSize = Math.max(0.035, total * 0.035);
+  // Arrow at the downstream end (start when reversed). A constant ≈16 px SCREEN glyph (like the barbs'
+  // `featherLen`), capped to a fraction of the line so it scales down on a short jet and never outgrows
+  // it. The old `total * 0.035` scaled with the jet's LENGTH → a long jet grew a giant arrowhead.
+  const arrowSize = Math.min(px * 16, total * 0.3);
   if (showArrow) {
     const n = planar.length;
     const tip = reversed ? planar[0]! : planar[n - 1]!;
     const dir = reversed ? sub(planar[0]!, planar[1]!) : sub(planar[n - 1]!, planar[n - 2]!);
     // `declutter:"late"`: the arrowhead carries the jet's DIRECTION — zoomed out it outlives
     // the barbs/labels (hides only at half the declutter threshold).
-    out.push(arrowheadFeature(tip, dir, k, arrowSize, { layer: "decoration", stroke, strokeWidth: 1, fillColor: stroke, declutter: "late" }));
+    out.push(arrowheadFeature(tip, dir, k, arrowSize, { layer: "decoration", stroke, strokeWidth: 1, fillColor: stroke, declutter: "late", obstacle: true }));
   }
   // Leave room for the arrowhead at the downstream tip so the end barb doesn't overlap it.
   const endMargin = showArrow ? arrowSize * 1.8 : 0;
@@ -185,7 +187,7 @@ export function jetBarbs(input: DecorationInput, params: Record<string, unknown>
         endMargin,
         side: featherSide(lat),
         flowSign: reversed ? -1 : 1,
-        props: { layer: "decoration", stroke, fillColor: stroke },
+        props: { layer: "decoration", stroke, fillColor: stroke, obstacle: true },
       }),
     );
   });
@@ -208,7 +210,6 @@ export function jetBarbs(input: DecorationInput, params: Record<string, unknown>
     const st = pointAtFraction(planar, centerArc / total);
     const flow = scale(st.dir, flowSign);
     const sideSign = featherSide(toLonLat(st.p, k)[1]);
-    const anchor = add(st.p, scale(perpLeft(flow), -sideSign * featherLen * 0.6));
     const lines = [fl(p.fl)];
     if (withExtent && p.speed >= depthAt) {
       // Show the vertical extent ≥ depthAt; default to fl ± extentSeed until the gauge sets it.
@@ -216,6 +217,12 @@ export function jetBarbs(input: DecorationInput, params: Record<string, unknown>
       const base = p.base != null ? p.base : Math.max(flMin, num(p.fl) - extentSeed);
       lines.push(`${flNum(Math.min(top, base))}/${flNum(Math.max(top, base))}`); // lower/upper
     }
+    // Push the label clear of the FEATHER reach (featherLen) AND its own (fixed screen-size) half-height
+    // + a gap, on its side. The label can land on the feather side (it flips with hemisphere), so it must
+    // clear both the line AND the barbs — never just the line. The label terms are screen px (× px) so
+    // they don't shrink on zoom-out (when featherLen does) — no creeping onto the line/barbs at any zoom.
+    const labelHalfPx = lines.length * tbp.textSize * 0.65;
+    const anchor = add(st.p, scale(perpLeft(flow), -sideSign * (featherLen + (labelHalfPx + 5) * px)));
     let ang = (Math.atan2(-flow[1], flow[0]) * 180) / Math.PI;
     if (ang > 90) ang -= 180;
     else if (ang < -90) ang += 180;

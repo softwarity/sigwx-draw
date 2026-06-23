@@ -7,7 +7,7 @@
     "unit": "fl"
   },
   "callouts": {
-    "minZoneFraction": 0.15
+    "minZoneFraction": 0.05
   },
   "areas": [
     { "id": "A",  "name": "Eastern Pacific & Americas",          "extent": [-137.4, -54, -12.6, 67],    "projection": { "kind": "mercator" }, "verified": true },

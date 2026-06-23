@@ -2,6 +2,39 @@
 
 ## NEXT RELEASE
 
+- **Jet streams: barbs + FL labels are anti-collision obstacles; arrowhead no longer balloons.** The
+  jet's wind **barbs and (rotated) FL labels** now join the obstacle set, so auto-placed call-outs
+  route around them (a gabarit estimate — the projected bounding box, not an exact hug). The FL label
+  is now offset clear of BOTH the line and the feather reach (`featherLen` + the label's own
+  screen-size half-height), on whichever side it lands — so it never overlaps the line or the barbs, at
+  any zoom or hemisphere (its old offset shrank with the jet while the fixed-size text didn't, and only
+  cleared the line, not the barbs on the feather side). And the downstream
+  **arrowhead is now a constant screen-size glyph** (like the barbs), capped to a fraction of the line
+  — a very long jet no longer grows a giant arrow (it was sized ∝ the jet's geographic length).
+
+- **Decluttering is gentler — a framed sector no longer hides its drawn areas.** The chrome-declutter
+  threshold dropped from `0.15` → `0.05` of the view span: when a chart sector is framed (the view is
+  the whole chart), small drawn areas keep their call-outs/labels instead of vanishing. Still
+  configurable via `callouts.minZoneFraction`.
+
+- **Call-outs stay INSIDE the chart area; leader tips are protected; obstacles get breathing room.**
+  When a chart area is set, auto-placed call-out boxes AND their leader/arrow tips are kept **inside
+  the frame** (the drawn geometry may still overflow it freely — only the text is bounded). Each
+  leader tip becomes a **protected no-go point**: no OTHER element may cover it (a card may still sit
+  over its OWN tip). And every obstacle — marker, label/badge, placed card, tip — is inflated by a
+  small **padding** so a card never sits flush against a small element (e.g. a tropopause badge).
+  Point markers are exempt (their card rides their point); satellite controls (FL gauge / dial) aren't
+  bounded yet.
+
+- **Chart-area "cartouche" — bold frame, framing margin, and an outside spotlight.** `setArea` now
+  draws the fixed chart area with a **bold dark perimeter** (vs the thin grey default), keeps a
+  **minimum margin** so the boundary never hugs the screen edge (`viewArea` padding, default 40 px),
+  and **dims everything OUTSIDE the area** (`dimOutside` — a cheap GL complement fill that follows
+  pan/zoom, a soft white veil by default) so the chart stands out. All three are configurable via the
+  new **`style.area = { frame: HighlightStyle, padding: number }`** (the veil is `frame.dimOutside`;
+  swap to the heavier `frame.blurOutside` for a true blur). _(Pending adapter: the framing isn't yet
+  re-applied on fullscreen / container resize — spec handed over.)_
+
 - **WMO symbol markers place as a BARE icon, by POINTING.** (precipitation / visibility / others.)
   Two changes: (1) the symbol drops as a plain on-map icon — **no frame, no name, no coordinates** —
   selected in edit mode, its symbol changed by the picker (tap to cycle), and deleted with the

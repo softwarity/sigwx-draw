@@ -1120,13 +1120,13 @@ describe("marker phenomena (TC / volcano / radioactive — inline-editable widge
     const of = (layer: string) => (adapter.overlays.get(layer)?.features ?? []).filter((x) => x.properties?.["featureId"] === id);
     const before = { dec: of("decoration").length, tb: of("text-boxes").length }; // selected ⇒ chrome shows
     expect(before.dec).toBeGreaterThan(0); // the gate test is not vacuous (barbs/arrowhead exist)
-    adapter.getViewSpan = () => 60; // zoom OUT: ratio 6.1/60 ≈ 0.10 < 0.15 (but > half = 0.075)
+    adapter.getViewSpan = () => 180; // zoom OUT: ratio 6.1/180 ≈ 0.034 < 0.05 (but > half = 0.025)
     sigwx.select(null); // deselect (re-renders) → the chrome declutters
     expect(of("edge").length).toBeGreaterThan(0); // the axis still marks the jet
     expect(of("decoration")).toHaveLength(1); // barbs gone… but the ARROWHEAD survives (direction)
     expect(of("decoration")[0]!.properties?.["declutter"]).toBe("late");
     expect(of("text-boxes")).toHaveLength(0); // FL label gone
-    adapter.getViewSpan = () => 150; // further out: ratio ≈ 0.04 < 0.075 → the arrowhead goes too
+    adapter.getViewSpan = () => 300; // further out: ratio ≈ 0.020 < 0.025 → the arrowhead goes too
     sigwx.select(id); // (re-render) selection overrides the declutter, whatever the zoom
     expect(of("decoration")).toHaveLength(before.dec);
     sigwx.select(null);

@@ -267,11 +267,11 @@ export interface SigwxDrawOptions {
   phenomena?: PhenomenaConfig;
   /** Extra turbulence symbols/types, added to the default MOD/SEV catalogue. */
   turbulenceTypes?: TurbulenceType[];
-  /** Chrome decluttering. `minZoneFraction` (default 0.15): an UNSELECTED feature whose
-   *  on-screen extent is smaller than this fraction of the view hides its CHROME —
-   *  call-out box + leader + arrow + glyph, FL labels, and a jet's barbs/arrowhead.
-   *  The shape itself (outline/fill) still marks it; zooming toward it (or selecting
-   *  it) brings everything back. `0` ⇒ never hide. */
+  /** Chrome decluttering. `minZoneFraction` (default 0.05): an UNSELECTED feature whose on-screen
+   *  extent (bbox diagonal) is smaller than this fraction of the view span hides its CHROME —
+   *  call-out box + leader + arrow + glyph, FL labels, and a jet's barbs/arrowhead. Kept LOW so a
+   *  framed sector (the view spans the whole chart) doesn't hide every drawn area. The shape itself
+   *  (outline/fill) still marks it; zooming in (or selecting it) brings everything back. `0` ⇒ never hide. */
   callouts?: { minZoneFraction?: number };
   /** Chart-type preset (palette + catalogues + bounds) — see {@link SigwxProfile}. */
   profile?: SigwxProfile;
@@ -295,6 +295,10 @@ const SNAPSHOT_HIDE = ["selection", "handles", "controls"];
  *  POINT instead of a line (`pointWhenShort`) — ≈ 1.5× the "FLxxx" label box, so a contour
  *  must be visibly longer than its own label to count as a line (tropopause spot vs contour). */
 const POINT_MAX_PX = 60;
+
+/** Anti-collision breathing-room (px): every obstacle (marker, label/badge, placed call-out, protected
+ *  leader tip) is inflated by this so a card never sits flush against a small element. */
+const CALLOUT_PAD = 8;
 
 /** The platform "command" modifier for the eraser: ⌘ on macOS, Ctrl elsewhere. macOS reserves
  *  Ctrl+click for the secondary (context-menu) click, so using Ctrl there is unreliable — we use
@@ -384,7 +388,7 @@ export class SigwxDraw {
   private lastAnnReqs: AnnReq[] = [];
   /** Self-anchored chart LABELS (tropopause spot+contour, isotherm, front-motion text) snapshotted
    *  each render as fixed obstacles — auto-placed cartouches route around them (see `labelObstacleRects`). */
-  private lastLabelAnchors: { anchor: { lon: number; lat: number }; content: string; textSize: number }[] = [];
+  private lastLabelAnchors: { anchor: { lon: number; lat: number }; content: string; textSize: number; rotation: number }[] = [];
   /** Merged sprite catalogue (defaults + host overrides + turbulence extensions) — the
    *  widget builders resolve their glyph carousel options from it. */
   private readonly spriteCatalog: SymbolSprites = {};
@@ -404,8 +408,12 @@ export class SigwxDraw {
   private profileAreas: ChartArea[] | undefined;
   /** The area `setArea` last applied (null = none / cleared). */
   private activeAreaId: string | null = null;
-  /** Call-out declutter threshold (fraction of the view span; 0 = never hide). */
-  private calloutFraction = 0.15;
+  /** The resolved active area (extent + projection) — feeds the cartouche frame bound that keeps
+   *  call-out boxes + leader tips INSIDE the chart area (point markers are exempt). */
+  private activeArea: ChartArea | null = null;
+  /** Call-out declutter threshold (zone bbox-diagonal as a fraction of the view span; 0 = never hide).
+   *  Low (0.05) so a framed sector — where the view is the whole chart — doesn't hide drawn areas. */
+  private calloutFraction = 0.05;
   /** Last visibility per feature (the ±10% hysteresis needs the previous state). */
   private readonly calloutShown = new Map<string, boolean>();
   private idSeq = 0;
@@ -1767,7 +1775,10 @@ export class SigwxDraw {
     // Self-anchored labels (tropopause spot+contour, isotherm, front-motion) are fixed no-go zones
     // for the cartouches too — snapshot them from this render's direct text-boxes BEFORE placing.
     this.cacheLabelObstacles(buckets["text-boxes"]!);
-    const placed = placeAnnotations(annReqs, this.adapter, this.pins, [...this.markerObstacleRects(), ...this.labelObstacleRects()], activeFid);
+    // Bound to the chart-area frame (boxes + leader tips stay inside; tips become protected no-go
+    // points) and inflate every obstacle by CALLOUT_PAD px so a card never sits flush against a small
+    // badge/marker. No active area ⇒ frame is undefined ⇒ only the padding applies.
+    const placed = placeAnnotations(annReqs, this.adapter, this.pins, [...this.markerObstacleRects(), ...this.labelObstacleRects(), ...this.decorationObstacleRects(buckets["decoration"]!)], activeFid, this.frameRectPx(), CALLOUT_PAD);
     buckets["leaders"]!.push(...placed.leaders);
     // placed.symbols are pushed AFTER the widgets are known — a replaced call-out's glyph
     // lives in its card (the severity carousel), not on the canvas.
@@ -2471,33 +2482,57 @@ export class SigwxDraw {
     return out;
   }
 
-  /** Snapshot this render's self-anchored label boxes (Point, un-rotated, feature-owned: tropopause
-   *  spot+contour, isotherm, front-motion text) as the obstacle set {@link labelObstacleRects}
-   *  reprojects. Rotated labels (jet break-point text) are skipped — they ride their line, not a fixed
-   *  box. Called BEFORE the placement pass, so auto-cartouches route around these labels. */
+  /** Snapshot this render's self-anchored label boxes (Point, feature-owned: tropopause spot+contour,
+   *  isotherm, front-motion text, AND the jet's rotated break-point FL labels) as the obstacle set
+   *  {@link labelObstacleRects} reprojects. Rotated labels are kept too — their footprint is a GABARIT
+   *  estimate (rotated AABB), not exact. Called BEFORE the placement pass so cartouches route around them. */
   private cacheLabelObstacles(textBoxes: Feature[]): void {
     this.lastLabelAnchors = [];
     for (const box of textBoxes) {
       const p = box.properties ?? {};
-      if (typeof p["featureId"] !== "string" || box.geometry.type !== "Point" || p["rotation"] !== undefined) continue;
+      if (typeof p["featureId"] !== "string" || box.geometry.type !== "Point") continue;
       this.lastLabelAnchors.push({
         anchor: { lon: box.geometry.coordinates[0]!, lat: box.geometry.coordinates[1]! },
         content: String(p["text"] ?? p["content"] ?? ""),
         textSize: Number(p["textSize"]) || 13,
+        rotation: typeof p["rotation"] === "number" ? p["rotation"] : 0,
       });
     }
   }
 
   /** The cached self-anchored labels as fixed obstacle rects (screen px) — like point markers, a
-   *  cartouche must never cover them. The label box IS the object (it never auto-places), so it's a
-   *  no-go zone, not a placed cartouche. Reprojected fresh so it follows pan/zoom. */
+   *  cartouche must never cover them. A rotated label uses its rotated AABB (a gabarit estimate — the
+   *  obstacle need not hug the glyph). Reprojected fresh so it follows pan/zoom. */
   private labelObstacleRects(): Rect[] {
     const out: Rect[] = [];
     for (const l of this.lastLabelAnchors) {
       const px = this.adapter.project(l.anchor);
       if (!px) continue;
-      const { w, h } = estimateBox(l.content, l.textSize);
+      let { w, h } = estimateBox(l.content, l.textSize);
+      if (l.rotation) {
+        const a = (l.rotation * Math.PI) / 180, c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a));
+        [w, h] = [w * c + h * s, w * s + h * c];
+      }
       out.push({ x: px[0] - w / 2, y: px[1] - h / 2, w, h });
+    }
+    return out;
+  }
+
+  /** Decoration features flagged `obstacle:true` (the jet's barbs + arrowhead) as AABB rects — auto
+   *  call-outs route around them like markers/labels. Gabarit estimate (the projected bounding box). */
+  private decorationObstacleRects(decos: Feature[]): Rect[] {
+    const out: Rect[] = [];
+    for (const f of decos) {
+      if (!(f.properties as Record<string, unknown> | null)?.["obstacle"]) continue;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      const visit = (c: unknown): void => {
+        if (Array.isArray(c) && typeof c[0] === "number") {
+          const px = this.adapter.project({ lon: c[0] as number, lat: c[1] as number });
+          if (px) { minX = Math.min(minX, px[0]); minY = Math.min(minY, px[1]); maxX = Math.max(maxX, px[0]); maxY = Math.max(maxY, px[1]); }
+        } else if (Array.isArray(c)) for (const x of c) visit(x);
+      };
+      visit((f.geometry as { coordinates?: unknown }).coordinates);
+      if (Number.isFinite(minX)) out.push({ x: minX, y: minY, w: maxX - minX, h: maxY - minY });
     }
     return out;
   }
@@ -3232,7 +3267,7 @@ export class SigwxDraw {
     this.registry = opts.registry ?? (profile.objects?.length ? new PhenomenonRegistry() : defaultRegistry());
     for (const k of Object.keys(this.phenomena)) delete this.phenomena[k];
     Object.assign(this.phenomena, profile.phenomena, opts.phenomena);
-    this.calloutFraction = opts.callouts?.minZoneFraction ?? profile.callouts?.minZoneFraction ?? 0.15;
+    this.calloutFraction = opts.callouts?.minZoneFraction ?? profile.callouts?.minZoneFraction ?? 0.05;
     if (profile.glyphs) registerExtensions({ glyphs: profile.glyphs });
     for (const spec of profile.objects ?? []) {
       this.registry.register(defFromDescriptor(resolveObjectSpec(spec)));
@@ -3285,6 +3320,7 @@ export class SigwxDraw {
     const resolved: ChartArea | null =
       area == null ? null : typeof area === "string" ? this.profileAreas?.find((x) => x.id === area) ?? null : area;
     this.activeAreaId = resolved?.id ?? null;
+    this.activeArea = resolved;
     if (!resolved) {
       this.adapter.setProjection("mercator");
       this.adapter.highlightArea(null);
@@ -3292,8 +3328,27 @@ export class SigwxDraw {
     }
     const p = resolved.projection;
     this.adapter.setProjection(p.kind === "mercator" ? "mercator" : { kind: "proj4", code: p.code, def: p.def });
-    this.adapter.viewArea(resolved.extent);
-    this.adapter.highlightArea(resolved.extent);
+    // Frame the area with a MARGIN (so its limit never hugs the screen edge) + a BOLD perimeter — both
+    // configurable via `style.area` (`{ frame, padding }`).
+    this.adapter.viewArea(resolved.extent, { padding: this.style.area.padding });
+    this.adapter.highlightArea(resolved.extent, this.style.area.frame);
+  }
+
+  /** The active chart-area frame as a SCREEN rect (px AABB of its projected extent) — the bound that
+   *  keeps call-out boxes + leader tips inside the cartouche. `undefined` when no area is set. Exact
+   *  for Mercator (incl. antimeridian-crossing once framed); a bounding box for rotated/stereographic. */
+  private frameRectPx(): Rect | undefined {
+    const ext = this.activeArea?.extent;
+    if (!ext) return undefined;
+    const [w, s, e, n] = ext;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [lon, lat] of [[w, n], [e, n], [e, s], [w, s]] as [number, number][]) {
+      const p = this.adapter.project({ lon, lat });
+      if (!p) continue;
+      minX = Math.min(minX, p[0]); minY = Math.min(minY, p[1]);
+      maxX = Math.max(maxX, p[0]); maxY = Math.max(maxY, p[1]);
+    }
+    return Number.isFinite(minX) ? { x: minX, y: minY, w: maxX - minX, h: maxY - minY } : undefined;
   }
 
   setProfile(profile: SigwxProfile): void {

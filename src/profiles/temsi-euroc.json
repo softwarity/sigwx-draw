@@ -7,7 +7,7 @@
     "unit": "fl"
   },
   "callouts": {
-    "minZoneFraction": 0.15
+    "minZoneFraction": 0.05
   },
   "objects": [
     {
